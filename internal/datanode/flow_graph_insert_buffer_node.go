@@ -20,13 +20,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
-	"sync"
-
 	"github.com/golang/protobuf/proto"
 	"github.com/opentracing/opentracing-go"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
+	"reflect"
+	"sync"
 
 	"github.com/milvus-io/milvus/internal/log"
 	"github.com/milvus-io/milvus/internal/metrics"
@@ -158,6 +157,7 @@ func (ibNode *insertBufferNode) Close() {
 
 func (ibNode *insertBufferNode) Operate(in []Msg) []Msg {
 	// log.Debug("InsertBufferNode Operating")
+	//start := time.Now()
 
 	if len(in) != 1 {
 		log.Error("Invalid operate message input in insertBufferNode", zap.Int("input length", len(in)))
@@ -298,7 +298,7 @@ func (ibNode *insertBufferNode) Operate(in []Msg) []Msg {
 		for _, segToFlush := range seg2Upload {
 			// If full, auto flush
 			if bd, ok := ibNode.insertBuffer.Load(segToFlush); ok && bd.(*BufferData).effectiveCap() <= 0 {
-				log.Info("Auto flush",
+				log.Info("issue 16984 Auto flush",
 					zap.Int64("segment id", segToFlush),
 					zap.String("vchannel name", ibNode.channelName),
 				)
@@ -319,7 +319,7 @@ func (ibNode *insertBufferNode) Operate(in []Msg) []Msg {
 		select {
 		case fmsg := <-ibNode.flushChan:
 
-			log.Info("receiving flush message",
+			log.Info("issue 16984 receiving flush message",
 				zap.Int64("segmentID", fmsg.segmentID),
 				zap.Int64("collectionID", fmsg.collectionID),
 				zap.String("v-channel name", ibNode.channelName),
@@ -400,6 +400,8 @@ func (ibNode *insertBufferNode) Operate(in []Msg) []Msg {
 		sp.Finish()
 	}
 
+	//duration := time.Since(start).String()
+	//log.Debug("issue 16984 InsertBufferNode Operating", zap.String("duration", duration))
 	// send delete msg to DeleteNode
 	return []Msg{&res}
 }

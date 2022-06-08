@@ -123,6 +123,8 @@ type QueryNode struct {
 	ShardClusterService *ShardClusterService
 	//shard query service, handles shard-level query & search
 	queryShardService *queryShardService
+
+	dataCoord types.DataCoord
 }
 
 // NewQueryNode will return a QueryNode with abnormal state.
@@ -132,6 +134,7 @@ func NewQueryNode(ctx context.Context, factory dependency.Factory) *QueryNode {
 		queryNodeLoopCtx:    ctx1,
 		queryNodeLoopCancel: cancel,
 		factory:             factory,
+		dataCoord:           nil,
 	}
 
 	node.tSafeReplica = newTSafeReplica()
@@ -316,6 +319,17 @@ func (node *QueryNode) UpdateStateCode(code internalpb.StateCode) {
 // SetEtcdClient assigns parameter client to its member etcdCli
 func (node *QueryNode) SetEtcdClient(client *clientv3.Client) {
 	node.etcdCli = client
+}
+
+// SetDataCoord sets data coord's grpc client, error is returned if repeatedly set.
+func (node *QueryNode) SetDataCoord(ds types.DataCoord) error {
+	switch {
+	case ds == nil, node.dataCoord != nil:
+		return errors.New("Nil parameter or repeatly set")
+	default:
+		node.dataCoord = ds
+		return nil
+	}
 }
 
 func (node *QueryNode) watchChangeInfo() {

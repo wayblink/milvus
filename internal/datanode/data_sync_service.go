@@ -26,6 +26,7 @@ import (
 	"github.com/milvus-io/milvus/internal/log"
 	"github.com/milvus-io/milvus/internal/metrics"
 	"github.com/milvus-io/milvus/internal/mq/msgstream"
+	"github.com/milvus-io/milvus/internal/proto/commonpb"
 	"github.com/milvus-io/milvus/internal/proto/datapb"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/types"
@@ -142,6 +143,22 @@ func (dsService *dataSyncService) close() {
 	dsService.flushManager.close()
 }
 
+func (dsService *dataSyncService) getSegmentInfos(segmentIds []int64) ([]*datapb.SegmentInfo, error) {
+	infoResp, err := dsService.dataCoord.GetSegmentInfo(dsService.ctx, &datapb.GetSegmentInfoRequest{
+		Base: &commonpb.MsgBase{
+			MsgType:   commonpb.MsgType_SegmentInfo,
+			MsgID:     0,
+			Timestamp: 0,
+			SourceID:  Params.ProxyCfg.GetNodeID(),
+		},
+		SegmentIDs: segmentIds,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return infoResp.Infos, nil
+}
+
 // initNodes inits a TimetickedFlowGraph
 func (dsService *dataSyncService) initNodes(vchanInfo *datapb.VchannelInfo) error {
 	dsService.fg = flowgraph.NewTimeTickedFlowGraph(dsService.ctx)
@@ -149,8 +166,13 @@ func (dsService *dataSyncService) initNodes(vchanInfo *datapb.VchannelInfo) erro
 	dsService.flushManager = NewRendezvousFlushManager(dsService.idAllocator, dsService.chunkManager, dsService.replica,
 		flushNotifyFunc(dsService), dropVirtualChannelFunc(dsService))
 
+	var err error
 	// recover segment checkpoints
-	for _, us := range vchanInfo.GetUnflushedSegments() {
+	unflushedSegmentInfos, err := dsService.getSegmentInfos(vchanInfo.GetUnflushedSegments())
+	if err != nil {
+		return err
+	}
+	for _, us := range unflushedSegmentInfos {
 		if us.CollectionID != dsService.collectionID ||
 			us.GetInsertChannel() != vchanInfo.ChannelName {
 			log.Warn("Collection ID or ChannelName not compact",
@@ -180,7 +202,11 @@ func (dsService *dataSyncService) initNodes(vchanInfo *datapb.VchannelInfo) erro
 		}
 	}
 
-	for _, fs := range vchanInfo.GetFlushedSegments() {
+	flushedSegmentInfos, err := dsService.getSegmentInfos(vchanInfo.GetFlushedSegments())
+	if err != nil {
+		return err
+	}
+	for _, fs := range flushedSegmentInfos {
 		if fs.CollectionID != dsService.collectionID ||
 			fs.GetInsertChannel() != vchanInfo.ChannelName {
 			log.Warn("Collection ID or ChannelName not compact",
@@ -213,14 +239,18 @@ func (dsService *dataSyncService) initNodes(vchanInfo *datapb.VchannelInfo) erro
 		parallelConfig: newParallelConfig(),
 	}
 
-	var err error
 	var dmStreamNode Node
 	dmStreamNode, err = newDmInputNode(dsService.ctx, vchanInfo.GetSeekPosition(), c)
 	if err != nil {
 		return err
 	}
 
-	var ddNode Node = newDDNode(dsService.ctx, dsService.collectionID, vchanInfo, dsService.msFactory, dsService.compactor)
+	droppedSegmentInfos, err := dsService.getSegmentInfos(vchanInfo.GetDroppedSegments())
+	if err != nil {
+		return err
+	}
+	var ddNode Node = newDDNode(dsService.ctx, dsService.collectionID, vchanInfo,
+		flushedSegmentInfos, unflushedSegmentInfos, droppedSegmentInfos, dsService.msFactory, dsService.compactor)
 	var insertBufferNode Node
 	insertBufferNode, err = newInsertBufferNode(
 		dsService.ctx,

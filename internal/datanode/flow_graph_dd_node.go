@@ -277,16 +277,17 @@ func (ddn *ddNode) Close() {
 }
 
 func newDDNode(ctx context.Context, collID UniqueID, vchanInfo *datapb.VchannelInfo,
+	flushedSegments []*datapb.SegmentInfo, unflushedSegments []*datapb.SegmentInfo, droppedSegments []*datapb.SegmentInfo,
 	msFactory msgstream.Factory, compactor *compactionExecutor) *ddNode {
 	baseNode := BaseNode{}
 	baseNode.SetMaxQueueLength(Params.DataNodeCfg.FlowGraphMaxQueueLength)
 	baseNode.SetMaxParallelism(Params.DataNodeCfg.FlowGraphMaxParallelism)
 
 	fs := make([]*datapb.SegmentInfo, 0, len(vchanInfo.GetFlushedSegments()))
-	fs = append(fs, vchanInfo.GetFlushedSegments()...)
+	fs = append(fs, flushedSegments...)
 	log.Info("ddNode add flushed segment",
 		zap.Int64("collectionID", vchanInfo.GetCollectionID()),
-		zap.Int("No. Segment", len(vchanInfo.GetFlushedSegments())),
+		zap.Int("No. Segment", len(flushedSegments)),
 	)
 
 	deltaStream, err := msFactory.NewMsgStream(ctx)
@@ -317,7 +318,7 @@ func newDDNode(ctx context.Context, collID UniqueID, vchanInfo *datapb.VchannelI
 		BaseNode:           baseNode,
 		collectionID:       collID,
 		flushedSegments:    fs,
-		droppedSegments:    vchanInfo.GetDroppedSegments(),
+		droppedSegments:    droppedSegments,
 		vchannelName:       vchanInfo.ChannelName,
 		deltaMsgStream:     deltaMsgStream,
 		compactionExecutor: compactor,
@@ -325,13 +326,13 @@ func newDDNode(ctx context.Context, collID UniqueID, vchanInfo *datapb.VchannelI
 
 	dd.dropMode.Store(false)
 
-	for _, us := range vchanInfo.GetUnflushedSegments() {
+	for _, us := range unflushedSegments {
 		dd.segID2SegInfo.Store(us.GetID(), us)
 	}
 
 	log.Info("ddNode add unflushed segment",
 		zap.Int64("collectionID", collID),
-		zap.Int("No. Segment", len(vchanInfo.GetUnflushedSegments())),
+		zap.Int("No. Segment", len(unflushedSegments)),
 	)
 
 	return dd

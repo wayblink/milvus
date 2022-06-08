@@ -81,10 +81,13 @@ func TestFlowGraph_DDNode_newDDNode(te *testing.T) {
 				context.Background(),
 				test.inCollID,
 				&datapb.VchannelInfo{
-					FlushedSegments:   fi,
-					UnflushedSegments: []*datapb.SegmentInfo{di},
+					FlushedSegments:   test.inFlushedSegs,
+					UnflushedSegments: []int64{di.ID},
 					ChannelName:       "by-dev-rootcoord-dml-test",
 				},
+				fi,
+				[]*datapb.SegmentInfo{di},
+				[]*datapb.SegmentInfo{},
 				mmf,
 				newCompactionExecutor(),
 			)

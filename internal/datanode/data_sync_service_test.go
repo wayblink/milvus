@@ -64,12 +64,20 @@ func getVchanInfo(info *testInfo) *datapb.VchannelInfo {
 		ufs = []*datapb.SegmentInfo{}
 	}
 
+	var ufsIds []int64
+	var fsIds []int64
+	for _, segmentInfo := range ufs {
+		ufsIds = append(ufsIds, segmentInfo.ID)
+	}
+	for _, segmentInfo := range fs {
+		fsIds = append(fsIds, segmentInfo.ID)
+	}
 	vi := &datapb.VchannelInfo{
 		CollectionID:      info.collID,
 		ChannelName:       info.chanName,
 		SeekPosition:      &internalpb.MsgPosition{},
-		UnflushedSegments: ufs,
-		FlushedSegments:   fs,
+		UnflushedSegments: ufsIds,
+		FlushedSegments:   fsIds,
 	}
 	return vi
 }
@@ -221,12 +229,19 @@ func TestDataSyncService_Start(t *testing.T) {
 		NumOfRows:     0,
 		DmlPosition:   &internalpb.MsgPosition{},
 	}}
-
+	var ufsIds []int64
+	var fsIds []int64
+	for _, segmentInfo := range ufs {
+		ufsIds = append(ufsIds, segmentInfo.ID)
+	}
+	for _, segmentInfo := range fs {
+		fsIds = append(fsIds, segmentInfo.ID)
+	}
 	vchan := &datapb.VchannelInfo{
 		CollectionID:      collMeta.ID,
 		ChannelName:       insertChannelName,
-		UnflushedSegments: ufs,
-		FlushedSegments:   fs,
+		UnflushedSegments: ufsIds,
+		FlushedSegments:   fsIds,
 	}
 
 	signalCh := make(chan string, 100)

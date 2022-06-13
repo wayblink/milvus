@@ -31,7 +31,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
 
-	dcc "github.com/milvus-io/milvus/internal/distributed/datacoord/client"
 	"github.com/milvus-io/milvus/internal/log"
 	"github.com/milvus-io/milvus/internal/proto/commonpb"
 	"github.com/milvus-io/milvus/internal/proto/internalpb"
@@ -66,8 +65,6 @@ type Server struct {
 	etcdCli *clientv3.Client
 
 	closer io.Closer
-
-	newDataCoordClient func(string, *clientv3.Client) (types.DataCoord, error)
 }
 
 // NewServer create a new QueryNode grpc server.
@@ -79,16 +76,12 @@ func NewServer(ctx context.Context, factory dependency.Factory) (*Server, error)
 		cancel:      cancel,
 		querynode:   qn.NewQueryNode(ctx, factory),
 		grpcErrChan: make(chan error),
-		newDataCoordClient: func(etcdMetaRoot string, client *clientv3.Client) (types.DataCoord, error) {
-			return dcc.NewClient(ctx1, etcdMetaRoot, client)
-		},
 	}
 	return s, nil
 }
 
 // init initializes QueryNode's grpc service.
 func (s *Server) init() error {
-	ctx := context.Background()
 	Params.InitOnce(typeutil.QueryNodeRole)
 
 	if !funcutil.CheckPortAvailable(Params.Port) {
@@ -120,33 +113,6 @@ func (s *Server) init() error {
 	err = <-s.grpcErrChan
 	if err != nil {
 		return err
-	}
-
-	// --- DataCoord Client ---
-	if s.newDataCoordClient != nil {
-		log.Debug("QueryNode Init data coord client ...")
-		dataCoordClient, err := s.newDataCoordClient(qn.Params.EtcdCfg.MetaRootPath, s.etcdCli)
-		if err != nil {
-			log.Debug("QueryNode newDataCoordClient failed", zap.Error(err))
-			panic(err)
-		}
-		if err = dataCoordClient.Init(); err != nil {
-			log.Debug("QueryNode newDataCoord failed", zap.Error(err))
-			panic(err)
-		}
-		if err = dataCoordClient.Start(); err != nil {
-			log.Debug("QueryNode dataCoordClient Start failed", zap.Error(err))
-			panic(err)
-		}
-		err = funcutil.WaitForComponentInitOrHealthy(ctx, dataCoordClient, "DataCoord", 1000000, time.Millisecond*200)
-		if err != nil {
-			log.Debug("QueryNode wait dataCoordClient ready failed", zap.Error(err))
-			panic(err)
-		}
-		log.Debug("QueryNode dataCoord is ready")
-		if err = s.SetDataCoordInterface(dataCoordClient); err != nil {
-			panic(err)
-		}
 	}
 
 	s.querynode.UpdateStateCode(internalpb.StateCode_Initializing)
@@ -268,10 +234,6 @@ func (s *Server) Stop() error {
 // SetEtcdClient sets the etcd client for QueryNode component.
 func (s *Server) SetEtcdClient(etcdCli *clientv3.Client) {
 	s.querynode.SetEtcdClient(etcdCli)
-}
-
-func (s *Server) SetDataCoordInterface(ds types.DataCoord) error {
-	return s.querynode.SetDataCoord(ds)
 }
 
 // GetTimeTickChannel gets the time tick channel of QueryNode.

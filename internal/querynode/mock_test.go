@@ -45,7 +45,6 @@ import (
 	"github.com/milvus-io/milvus/internal/proto/querypb"
 	"github.com/milvus-io/milvus/internal/proto/schemapb"
 	"github.com/milvus-io/milvus/internal/storage"
-	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util"
 	"github.com/milvus-io/milvus/internal/util/etcd"
 	"github.com/milvus-io/milvus/internal/util/funcutil"
@@ -1703,8 +1702,6 @@ func genSimpleQueryNodeWithMQFactory(ctx context.Context, fac dependency.Factory
 		node.metaReplica, node.tSafeReplica,
 		node.ShardClusterService, node.factory, node.scheduler)
 
-	node.SetDataCoord(&DataCoordFactory{})
-
 	node.UpdateStateCode(internalpb.StateCode_Healthy)
 
 	return node, nil
@@ -1854,81 +1851,6 @@ func (mm *mockMsgStreamFactory) NewCacheStorageChunkManager(ctx context.Context)
 }
 func (mm *mockMsgStreamFactory) NewVectorStorageChunkManager(ctx context.Context) (storage.ChunkManager, error) {
 	return nil, nil
-}
-
-type DataCoordFactory struct {
-	types.DataCoord
-
-	SaveBinlogPathError  bool
-	SaveBinlogPathStatus commonpb.ErrorCode
-
-	CompleteCompactionError      bool
-	CompleteCompactionNotSuccess bool
-
-	DropVirtualChannelError  bool
-	DropVirtualChannelStatus commonpb.ErrorCode
-}
-
-func (ds *DataCoordFactory) AssignSegmentID(ctx context.Context, req *datapb.AssignSegmentIDRequest) (*datapb.AssignSegmentIDResponse, error) {
-	return &datapb.AssignSegmentIDResponse{
-		Status: &commonpb.Status{
-			ErrorCode: commonpb.ErrorCode_Success,
-		},
-		SegIDAssignments: []*datapb.SegmentIDAssignment{
-			{
-				SegID: 666,
-			},
-		},
-	}, nil
-}
-
-func (ds *DataCoordFactory) CompleteCompaction(ctx context.Context, req *datapb.CompactionResult) (*commonpb.Status, error) {
-	if ds.CompleteCompactionError {
-		return nil, errors.New("Error")
-	}
-	if ds.CompleteCompactionNotSuccess {
-		return &commonpb.Status{ErrorCode: commonpb.ErrorCode_UnexpectedError}, nil
-	}
-
-	return &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success}, nil
-}
-
-func (ds *DataCoordFactory) SaveBinlogPaths(ctx context.Context, req *datapb.SaveBinlogPathsRequest) (*commonpb.Status, error) {
-	if ds.SaveBinlogPathError {
-		return nil, errors.New("Error")
-	}
-	return &commonpb.Status{ErrorCode: ds.SaveBinlogPathStatus}, nil
-}
-
-func (ds *DataCoordFactory) DropVirtualChannel(ctx context.Context, req *datapb.DropVirtualChannelRequest) (*datapb.DropVirtualChannelResponse, error) {
-	if ds.DropVirtualChannelError {
-		return nil, errors.New("error")
-	}
-	return &datapb.DropVirtualChannelResponse{
-		Status: &commonpb.Status{
-			ErrorCode: ds.DropVirtualChannelStatus,
-		},
-	}, nil
-}
-
-func (ds *DataCoordFactory) UpdateSegmentStatistics(ctx context.Context, req *datapb.UpdateSegmentStatisticsRequest) (*commonpb.Status, error) {
-	return &commonpb.Status{
-		ErrorCode: commonpb.ErrorCode_Success,
-	}, nil
-}
-
-func (ds *DataCoordFactory) AddSegment(ctx context.Context, req *datapb.AddSegmentRequest) (*commonpb.Status, error) {
-	return &commonpb.Status{
-		ErrorCode: commonpb.ErrorCode_Success,
-	}, nil
-}
-
-func (ds *DataCoordFactory) GetSegmentInfo(ctx context.Context, req *datapb.GetSegmentInfoRequest) (*datapb.GetSegmentInfoResponse, error) {
-	return &datapb.GetSegmentInfoResponse{
-		Status: &commonpb.Status{
-			ErrorCode: commonpb.ErrorCode_Success,
-		},
-	}, nil
 }
 
 type readAtFunc func(path string, offset int64, length int64) ([]byte, error)

@@ -19,7 +19,6 @@ package grpcquerynode
 import (
 	"context"
 	"errors"
-	"fmt"
 	"testing"
 
 	"github.com/milvus-io/milvus/internal/types"
@@ -135,10 +134,6 @@ func (m *MockQueryNode) SetIndexCoord(index types.IndexCoord) error {
 	return m.err
 }
 
-func (m *MockQueryNode) SetDataCoord(dc types.DataCoord) error {
-	return m.err
-}
-
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 type MockRootCoord struct {
 	types.RootCoord
@@ -212,36 +207,6 @@ func (m *MockIndexCoord) GetComponentStates(ctx context.Context) (*internalpb.Co
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-type mockDataCoord struct {
-	types.DataCoord
-}
-
-func (m *mockDataCoord) Init() error {
-	return nil
-}
-func (m *mockDataCoord) Start() error {
-	return nil
-}
-func (m *mockDataCoord) GetComponentStates(ctx context.Context) (*internalpb.ComponentStates, error) {
-	return &internalpb.ComponentStates{
-		State: &internalpb.ComponentInfo{
-			StateCode: internalpb.StateCode_Healthy,
-		},
-		Status: &commonpb.Status{
-			ErrorCode: commonpb.ErrorCode_Success,
-		},
-		SubcomponentStates: []*internalpb.ComponentInfo{
-			{
-				StateCode: internalpb.StateCode_Healthy,
-			},
-		},
-	}, nil
-}
-func (m *mockDataCoord) Stop() error {
-	return fmt.Errorf("stop error")
-}
-
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 func Test_NewServer(t *testing.T) {
 	ctx := context.Background()
 	server, err := NewServer(ctx, nil)
@@ -257,10 +222,6 @@ func Test_NewServer(t *testing.T) {
 		metricResp: &milvuspb.GetMetricsResponse{Status: &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success}},
 	}
 	server.querynode = mqn
-
-	server.newDataCoordClient = func(string, *clientv3.Client) (types.DataCoord, error) {
-		return &mockDataCoord{}, nil
-	}
 
 	t.Run("Run", func(t *testing.T) {
 		err = server.Run()
@@ -370,10 +331,6 @@ func Test_Run(t *testing.T) {
 	assert.Nil(t, err)
 	assert.NotNil(t, server)
 
-	server.newDataCoordClient = func(string, *clientv3.Client) (types.DataCoord, error) {
-		return &mockDataCoord{}, nil
-	}
-
 	server.querynode = &MockQueryNode{startErr: errors.New("Failed")}
 	err = server.Run()
 	assert.Error(t, err)
@@ -383,7 +340,6 @@ func Test_Run(t *testing.T) {
 	assert.Error(t, err)
 
 	server.querynode = &MockQueryNode{stopErr: errors.New("Failed")}
-
 	err = server.Stop()
 	assert.Error(t, err)
 }

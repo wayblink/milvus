@@ -114,20 +114,18 @@ type releasePartitionsTask struct {
 	node *QueryNode
 }
 
-func (w *watchDmChannelsTask) getSegmentInfos(segmentIds []int64) ([]*datapb.SegmentInfo, error) {
-	infoResp, err := w.node.dataCoord.GetSegmentInfo(w.ctx, &datapb.GetSegmentInfoRequest{
-		Base: &commonpb.MsgBase{
-			MsgType:   commonpb.MsgType_SegmentInfo,
-			MsgID:     0,
-			Timestamp: 0,
-			SourceID:  Params.ProxyCfg.GetNodeID(),
-		},
-		SegmentIDs: segmentIds,
-	})
-	if err != nil {
-		return nil, err
+func getSegmentInfos(segmentIds []int64, segmentDict map[int64]*datapb.SegmentInfo) ([]*datapb.SegmentInfo, error) {
+	res := make([]*datapb.SegmentInfo, len(segmentIds))
+	for index, id := range segmentIds {
+		if val, ok := segmentDict[id]; ok {
+			res[index] = val
+		} else {
+			log.Error("It is expected all segmentId should exist in the segment info map, but it doesn't",
+				zap.Int64("lost_segment_id", id))
+			return res, nil
+		}
 	}
-	return infoResp.Infos, nil
+	return res, nil
 }
 
 // watchDmChannelsTask
@@ -189,7 +187,7 @@ func (w *watchDmChannelsTask) Execute(ctx context.Context) (err error) {
 	unFlushedSegments := make([]*queryPb.SegmentLoadInfo, 0)
 	unFlushedSegmentIDs := make([]UniqueID, 0)
 	for _, info := range w.req.Infos {
-		unflushedSegmentInfos, err := w.getSegmentInfos(info.UnflushedSegments)
+		unflushedSegmentInfos, err := getSegmentInfos(info.UnflushedSegments, w.req.SegmentInfos)
 		if err != nil {
 			return err
 		}
@@ -281,7 +279,7 @@ func (w *watchDmChannelsTask) Execute(ctx context.Context) (err error) {
 	// unFlushed segments before check point should be filtered out.
 	unFlushedCheckPointInfos := make([]*datapb.SegmentInfo, 0)
 	for _, info := range w.req.Infos {
-		unflushedSegmentInfos, err := w.getSegmentInfos(info.UnflushedSegments)
+		unflushedSegmentInfos, err := getSegmentInfos(info.UnflushedSegments, w.req.SegmentInfos)
 		if err != nil {
 			return err
 		}
@@ -301,7 +299,7 @@ func (w *watchDmChannelsTask) Execute(ctx context.Context) (err error) {
 	// flushed segments with later check point than seekPosition should be filtered out.
 	flushedCheckPointInfos := make([]*datapb.SegmentInfo, 0)
 	for _, info := range w.req.Infos {
-		flushedSegmentInfos, err := w.getSegmentInfos(info.FlushedSegments)
+		flushedSegmentInfos, err := getSegmentInfos(info.FlushedSegments, w.req.SegmentInfos)
 		if err != nil {
 			return err
 		}
@@ -325,7 +323,7 @@ func (w *watchDmChannelsTask) Execute(ctx context.Context) (err error) {
 	// dropped segments with later check point than seekPosition should be filtered out.
 	droppedCheckPointInfos := make([]*datapb.SegmentInfo, 0)
 	for _, info := range w.req.Infos {
-		droppedSegmentInfos, err := w.getSegmentInfos(info.DroppedSegments)
+		droppedSegmentInfos, err := getSegmentInfos(info.DroppedSegments, w.req.SegmentInfos)
 		if err != nil {
 			return err
 		}

@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/milvus-io/milvus/internal/types"
 	"sort"
 	"sync"
 	"time"
@@ -301,10 +302,11 @@ func (bt *baseTask) elapseSpan() time.Duration {
 type loadCollectionTask struct {
 	*baseTask
 	*querypb.LoadCollectionRequest
-	broker  *globalMetaBroker
-	cluster Cluster
-	meta    Meta
-	once    sync.Once
+	broker    *globalMetaBroker
+	cluster   Cluster
+	meta      Meta
+	datacoord types.DataCoord
+	once      sync.Once
 }
 
 func (lct *loadCollectionTask) msgBase() *commonpb.MsgBase {
@@ -498,12 +500,18 @@ func (lct *loadCollectionTask) execute(ctx context.Context) error {
 		for _, info := range mergedDmChannel {
 			msgBase := proto.Clone(lct.Base).(*commonpb.MsgBase)
 			msgBase.MsgType = commonpb.MsgType_WatchDmChannels
+			segmentInfos, err := getVChannelRelatedSegmentInfos(ctx, lct.datacoord, info)
+			if err != nil {
+				lct.setResultInfo(err)
+				return err
+			}
 			watchRequest := &querypb.WatchDmChannelsRequest{
 				Base:         msgBase,
 				CollectionID: collectionID,
 				//PartitionIDs: toLoadPartitionIDs,
-				Infos:  []*datapb.VchannelInfo{info},
-				Schema: lct.Schema,
+				Infos:        []*datapb.VchannelInfo{info},
+				Schema:       lct.Schema,
+				SegmentInfos: segmentInfos,
 				LoadMeta: &querypb.LoadMetaInfo{
 					LoadType:     querypb.LoadType_LoadCollection,
 					CollectionID: collectionID,
@@ -744,11 +752,12 @@ func (rct *releaseCollectionTask) rollBack(ctx context.Context) []task {
 type loadPartitionTask struct {
 	*baseTask
 	*querypb.LoadPartitionsRequest
-	broker  *globalMetaBroker
-	cluster Cluster
-	meta    Meta
-	addCol  bool
-	once    sync.Once
+	broker    *globalMetaBroker
+	cluster   Cluster
+	meta      Meta
+	datacoord types.DataCoord
+	addCol    bool
+	once      sync.Once
 }
 
 func (lpt *loadPartitionTask) msgBase() *commonpb.MsgBase {
@@ -928,12 +937,18 @@ func (lpt *loadPartitionTask) execute(ctx context.Context) error {
 		for _, info := range mergedDmChannel {
 			msgBase := proto.Clone(lpt.Base).(*commonpb.MsgBase)
 			msgBase.MsgType = commonpb.MsgType_WatchDmChannels
+			segmentInfos, err := getVChannelRelatedSegmentInfos(ctx, lpt.datacoord, info)
+			if err != nil {
+				lpt.setResultInfo(err)
+				return err
+			}
 			watchRequest := &querypb.WatchDmChannelsRequest{
 				Base:         msgBase,
 				CollectionID: collectionID,
 				PartitionIDs: partitionIDs,
 				Infos:        []*datapb.VchannelInfo{info},
 				Schema:       lpt.Schema,
+				SegmentInfos: segmentInfos,
 				LoadMeta: &querypb.LoadMetaInfo{
 					LoadType:     querypb.LoadType_LoadPartition,
 					CollectionID: collectionID,
@@ -1459,7 +1474,7 @@ func (wdt *watchDmChannelTask) reschedule(ctx context.Context) ([]task, error) {
 			PartitionIDs: wdt.PartitionIDs,
 			Infos:        []*datapb.VchannelInfo{info},
 			Schema:       wdt.Schema,
-			ExcludeInfos: wdt.ExcludeInfos,
+			SegmentInfos: wdt.SegmentInfos,
 			LoadMeta: &querypb.LoadMetaInfo{
 				LoadType:     wdt.GetLoadMeta().GetLoadType(),
 				CollectionID: collectionID,
@@ -1761,6 +1776,7 @@ type loadBalanceTask struct {
 	cluster   Cluster
 	meta      Meta
 	replicaID int64
+	datacoord types.DataCoord
 }
 
 func (lbt *loadBalanceTask) msgBase() *commonpb.MsgBase {
@@ -1999,11 +2015,17 @@ func (lbt *loadBalanceTask) processNodeDownLoadBalance(ctx context.Context) erro
 				if _, ok := dmChannels[channelName]; ok {
 					msgBase := proto.Clone(lbt.Base).(*commonpb.MsgBase)
 					msgBase.MsgType = commonpb.MsgType_WatchDmChannels
+					channelSegmentInfos, err := getVChannelRelatedSegmentInfos(ctx, lbt.datacoord, vChannelInfo)
+					if err != nil {
+						lbt.setResultInfo(err)
+						return err
+					}
 					watchRequest := &querypb.WatchDmChannelsRequest{
 						Base:         msgBase,
 						CollectionID: collectionID,
 						Infos:        []*datapb.VchannelInfo{vChannelInfo},
 						Schema:       schema,
+						SegmentInfos: channelSegmentInfos,
 						LoadMeta: &querypb.LoadMetaInfo{
 							LoadType:     collectionInfo.LoadType,
 							CollectionID: collectionID,
@@ -2528,4 +2550,27 @@ func mergeDmChannelInfo(infos []*datapb.VchannelInfo) map[string]*datapb.Vchanne
 	}
 
 	return minPositions
+}
+
+func getVChannelRelatedSegmentInfos(ctx context.Context, dc types.DataCoord, vChannel *datapb.VchannelInfo) (map[int64]*datapb.SegmentInfo, error) {
+	segmentIds := make([]int64, 0)
+	segmentIds = append(append(append(segmentIds, vChannel.FlushedSegments...), vChannel.UnflushedSegments...), vChannel.DroppedSegments...)
+	infoResp, err := dc.GetSegmentInfo(ctx, &datapb.GetSegmentInfoRequest{
+		Base: &commonpb.MsgBase{
+			MsgType:   commonpb.MsgType_SegmentInfo,
+			MsgID:     0,
+			Timestamp: 0,
+			SourceID:  Params.ProxyCfg.GetNodeID(),
+		},
+		SegmentIDs: segmentIds,
+	})
+	if err != nil {
+		log.Error("Get Vchannel related SegmentInfos failed", zap.Any("segment_ids", segmentIds), zap.Error(err))
+		return nil, err
+	}
+	segmentDict := make(map[int64]*datapb.SegmentInfo)
+	for _, info := range infoResp.Infos {
+		segmentDict[info.ID] = info
+	}
+	return segmentDict, nil
 }

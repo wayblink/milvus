@@ -1233,15 +1233,6 @@ type QueryNodeComponent interface {
 
 	// SetEtcdClient set etcd client for QueryNode
 	SetEtcdClient(etcdClient *clientv3.Client)
-
-	// SetDataCoord set DataCoord for QueryNode
-	// `dataCoord` is a client of data coordinator.
-	//
-	// Return a generic error in status:
-	//     If the dataCoord is nil or the dataCoord has been set before.
-	// Return nil in status:
-	//     The dataCoord is not nil.
-	SetDataCoord(dataCoord DataCoord) error
 }
 
 // QueryCoord is the interface `querycoord` package implements

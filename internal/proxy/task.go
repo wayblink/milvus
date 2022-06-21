@@ -2494,6 +2494,7 @@ func (ft *flushTask) Execute(ctx context.Context) error {
 			DbID:         0,
 			CollectionID: collID,
 		}
+		log.Info("Send flush Request", zap.String("collection_name", collName), zap.Int64("collection_id", collID))
 		resp, err := ft.dataCoord.Flush(ctx, flushReq)
 		if err != nil {
 			return fmt.Errorf("failed to call flush to data coordinator: %s", err.Error())

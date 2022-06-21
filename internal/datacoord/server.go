@@ -137,6 +137,8 @@ type Server struct {
 	rootCoordClientCreator rootCoordCreatorFunc
 
 	segReferManager *SegmentReferenceManager
+
+	flushSegmentCollId map[string]int64
 }
 
 // ServerHelper datacoord server injection helper
@@ -201,6 +203,7 @@ func CreateServer(ctx context.Context, factory dependency.Factory, opts ...Optio
 		helper:                 defaultServerHelper(),
 
 		metricsCacheManager: metricsinfo.NewMetricsCacheManager(),
+		flushSegmentCollId:  make(map[string]int64),
 	}
 
 	for _, opt := range opts {

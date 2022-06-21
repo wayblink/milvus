@@ -26,6 +26,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/gogo/protobuf/sortkeys"
 	"github.com/milvus-io/milvus/internal/common"
 	"github.com/milvus-io/milvus/internal/log"
 	"github.com/milvus-io/milvus/internal/proto/commonpb"
@@ -95,6 +96,12 @@ func (s *Server) Flush(ctx context.Context, req *datapb.FlushRequest) (*datapb.F
 	resp.DbID = req.GetDbID()
 	resp.CollectionID = req.GetCollectionID()
 	resp.SegmentIDs = sealedSegments
+	sortkeys.Int64s(sealedSegments)
+	segemntIdsStr := ""
+	for i := range sealedSegments {
+		segemntIdsStr = segemntIdsStr + "," + string(sealedSegments[i])
+	}
+	s.flushSegmentCollId[segemntIdsStr] = req.GetCollectionID()
 	return resp, nil
 }
 
@@ -993,7 +1000,16 @@ func (s *Server) WatchChannels(ctx context.Context, req *datapb.WatchChannelsReq
 
 // GetFlushState gets the flush state of multiple segments
 func (s *Server) GetFlushState(ctx context.Context, req *milvuspb.GetFlushStateRequest) (*milvuspb.GetFlushStateResponse, error) {
-	log.Info("DataCoord receive get flush state request", zap.Int64s("segmentIDs", req.GetSegmentIDs()), zap.Int("len", len(req.GetSegmentIDs())))
+	sealedSegments := req.GetSegmentIDs()
+	sortkeys.Int64s(sealedSegments)
+	segemntIdsStr := ""
+	for i := range sealedSegments {
+		segemntIdsStr = segemntIdsStr + "," + string(sealedSegments[i])
+	}
+	log.Info("DataCoord receive get flush state request",
+		zap.Int64s("segmentIDs", req.GetSegmentIDs()),
+		zap.Int("len", len(req.GetSegmentIDs())),
+		zap.Int64("collection_id", s.flushSegmentCollId[segemntIdsStr]))
 
 	resp := &milvuspb.GetFlushStateResponse{Status: &commonpb.Status{ErrorCode: commonpb.ErrorCode_UnexpectedError}}
 	if s.isClosed() {
@@ -1020,6 +1036,7 @@ func (s *Server) GetFlushState(ctx context.Context, req *milvuspb.GetFlushStateR
 		resp.Flushed = false
 	} else {
 		log.Info("[flush state] all segment is flushed", zap.Int64s("segment ids", req.GetSegmentIDs()))
+		delete(s.flushSegmentCollId, segemntIdsStr)
 		resp.Flushed = true
 	}
 

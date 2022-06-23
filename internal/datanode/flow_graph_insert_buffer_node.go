@@ -400,9 +400,6 @@ func (ibNode *insertBufferNode) Operate(in []Msg) []Msg {
 		sp.Finish()
 	}
 
-	//duration := time.Since(start).String()
-	//log.Debug("issue 16984 InsertBufferNode Operating", zap.String("duration", duration))
-	// send delete msg to DeleteNode
 	return []Msg{&res}
 }
 

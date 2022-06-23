@@ -2684,7 +2684,11 @@ func (node *Proxy) Query(ctx context.Context, request *milvuspb.QueryRequest) (*
 		zap.String("role", typeutil.ProxyRole),
 		zap.String("db", request.DbName),
 		zap.String("collection", request.CollectionName),
-		zap.Any("partitions", request.PartitionNames))
+		zap.Strings("partitions", request.PartitionNames),
+		zap.String("expr", request.Expr),
+		zap.Strings("OutputFields", request.OutputFields),
+		zap.Uint64("travel_timestamp", request.TravelTimestamp),
+		zap.Uint64("guarantee_timestamp", request.GuaranteeTimestamp))
 
 	if err := node.sched.dqQueue.Enqueue(qt); err != nil {
 		log.Warn(
@@ -2712,12 +2716,10 @@ func (node *Proxy) Query(ctx context.Context, request *milvuspb.QueryRequest) (*
 		rpcEnqueued(method),
 		zap.String("traceID", traceID),
 		zap.String("role", typeutil.ProxyRole),
-		zap.Int64("MsgID", qt.ID()),
-		zap.Uint64("BeginTs", qt.BeginTs()),
-		zap.Uint64("EndTs", qt.EndTs()),
+		zap.Int64("msgID", qt.ID()),
 		zap.String("db", request.DbName),
 		zap.String("collection", request.CollectionName),
-		zap.Any("partitions", request.PartitionNames))
+		zap.Strings("partitions", request.PartitionNames))
 
 	if err := qt.WaitToFinish(); err != nil {
 		log.Warn(
@@ -2725,9 +2727,7 @@ func (node *Proxy) Query(ctx context.Context, request *milvuspb.QueryRequest) (*
 			zap.Error(err),
 			zap.String("traceID", traceID),
 			zap.String("role", typeutil.ProxyRole),
-			zap.Int64("MsgID", qt.ID()),
-			zap.Uint64("BeginTs", qt.BeginTs()),
-			zap.Uint64("EndTs", qt.EndTs()),
+			zap.Int64("msgID", qt.ID()),
 			zap.String("db", request.DbName),
 			zap.String("collection", request.CollectionName),
 			zap.Any("partitions", request.PartitionNames))
@@ -2749,9 +2749,7 @@ func (node *Proxy) Query(ctx context.Context, request *milvuspb.QueryRequest) (*
 		rpcDone(method),
 		zap.String("traceID", traceID),
 		zap.String("role", typeutil.ProxyRole),
-		zap.Int64("MsgID", qt.ID()),
-		zap.Uint64("BeginTs", qt.BeginTs()),
-		zap.Uint64("EndTs", qt.EndTs()),
+		zap.Int64("msgID", qt.ID()),
 		zap.String("db", request.DbName),
 		zap.String("collection", request.CollectionName),
 		zap.Any("partitions", request.PartitionNames))

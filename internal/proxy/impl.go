@@ -2596,6 +2596,8 @@ func (node *Proxy) Flush(ctx context.Context, request *milvuspb.FlushRequest) (*
 
 	log.Debug(
 		rpcEnqueued(method),
+		zap.String("mark", "issue 16984"),
+		zap.Uint64("duration", ft.EndTs()-ft.BeginTs()),
 		zap.String("traceID", traceID),
 		zap.String("role", typeutil.ProxyRole),
 		zap.Int64("MsgID", ft.ID()),
@@ -2607,6 +2609,8 @@ func (node *Proxy) Flush(ctx context.Context, request *milvuspb.FlushRequest) (*
 	if err := ft.WaitToFinish(); err != nil {
 		log.Warn(
 			rpcFailedToWaitToFinish(method),
+			zap.String("mark", "issue 16984"),
+			zap.Uint64("duration", ft.EndTs()-ft.BeginTs()),
 			zap.Error(err),
 			zap.String("traceID", traceID),
 			zap.String("role", typeutil.ProxyRole),
@@ -2625,6 +2629,8 @@ func (node *Proxy) Flush(ctx context.Context, request *milvuspb.FlushRequest) (*
 
 	log.Debug(
 		rpcDone(method),
+		zap.String("mark", "issue 16984"),
+		zap.Uint64("duration", ft.EndTs()-ft.BeginTs()),
 		zap.String("traceID", traceID),
 		zap.String("role", typeutil.ProxyRole),
 		zap.Int64("MsgID", ft.ID()),

@@ -44,17 +44,19 @@ const (
 
 type meta struct {
 	sync.RWMutex
-	client      kv.TxnKV                            // client of a reliable kv service, i.e. etcd client
-	collections map[UniqueID]*datapb.CollectionInfo // collection id to collection info
-	segments    *SegmentsInfo                       // segment id to segment info
+	client                  kv.TxnKV                            // client of a reliable kv service, i.e. etcd client
+	collections             map[UniqueID]*datapb.CollectionInfo // collection id to collection info
+	segments                *SegmentsInfo                       // segment id to segment info
+	segmentStateUpdateTimes map[UniqueID]time.Time
 }
 
 // NewMeta creates meta from provided `kv.TxnKV`
 func newMeta(kv kv.TxnKV) (*meta, error) {
 	mt := &meta{
-		client:      kv,
-		collections: make(map[UniqueID]*datapb.CollectionInfo),
-		segments:    NewSegmentsInfo(),
+		client:                  kv,
+		collections:             make(map[UniqueID]*datapb.CollectionInfo),
+		segments:                NewSegmentsInfo(),
+		segmentStateUpdateTimes: make(map[UniqueID]time.Time),
 	}
 	err := mt.reloadFromKV()
 	if err != nil {
@@ -228,7 +230,16 @@ func (m *meta) SetState(segmentID UniqueID, state commonpb.SegmentState) error {
 		return nil
 	}
 	oldState := curSegInfo.GetState()
+	oldStateTime, has := m.segmentStateUpdateTimes[segmentID]
+	var interval time.Duration
+	if has {
+		interval = time.Since(oldStateTime)
+	} else {
+		interval = 0
+	}
 	m.segments.SetState(segmentID, state)
+	newStateTime := time.Now()
+	m.segmentStateUpdateTimes[segmentID] = newStateTime
 	curSegInfo = m.segments.GetSegment(segmentID)
 	if curSegInfo != nil && isSegmentHealthy(curSegInfo) {
 		err := m.saveSegmentInfo(curSegInfo)
@@ -241,6 +252,11 @@ func (m *meta) SetState(segmentID UniqueID, state commonpb.SegmentState) error {
 			} else if oldState == commonpb.SegmentState_Flushed {
 				metrics.DataCoordNumStoredRows.WithLabelValues().Sub(float64(curSegInfo.GetNumOfRows()))
 			}
+			log.Info("issue 16984 segment state update",
+				zap.Int64("segment_id", segmentID),
+				zap.String("old_state", oldState.String()),
+				zap.String("new_state", state.String()),
+				zap.String("interval", interval.String()))
 		}
 		return err
 	}

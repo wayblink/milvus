@@ -19,12 +19,11 @@ package datanode
 import (
 	"context"
 	"fmt"
+	"github.com/opentracing/opentracing-go"
+	"go.uber.org/zap"
 	"math"
 	"reflect"
 	"sync"
-
-	"github.com/opentracing/opentracing-go"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus/internal/common"
 	"github.com/milvus-io/milvus/internal/log"
@@ -106,7 +105,7 @@ func (dn *deleteNode) Close() {
 }
 
 func (dn *deleteNode) bufferDeleteMsg(msg *msgstream.DeleteMsg, tr TimeRange) error {
-	log.Debug("bufferDeleteMsg", zap.Any("primary keys", msg.PrimaryKeys), zap.String("vChannelName", dn.channelName))
+	//log.Debug("bufferDeleteMsg", zap.Any("primary keys", msg.PrimaryKeys), zap.String("vChannelName", dn.channelName))
 
 	// Update delBuf for merged segments
 	compactedTo2From := dn.replica.listCompactedSegmentIDs()
@@ -188,6 +187,7 @@ func (dn *deleteNode) showDelBuf() {
 // Operate implementing flowgraph.Node, performs delete data process
 func (dn *deleteNode) Operate(in []Msg) []Msg {
 	//log.Debug("deleteNode Operating")
+	//start := time.Now()
 
 	if len(in) != 1 {
 		log.Error("Invalid operate message input in deleteNode", zap.Int("input length", len(in)))
@@ -231,7 +231,7 @@ func (dn *deleteNode) Operate(in []Msg) []Msg {
 
 	// handle flush
 	if len(fgMsg.segmentsToFlush) > 0 {
-		log.Debug("DeleteNode receives flush message",
+		log.Debug("issue 16984 DeleteNode receives flush message",
 			zap.Int64s("segIDs", fgMsg.segmentsToFlush),
 			zap.String("vChannelName", dn.channelName))
 		for _, segmentToFlush := range fgMsg.segmentsToFlush {
@@ -264,6 +264,9 @@ func (dn *deleteNode) Operate(in []Msg) []Msg {
 	for _, sp := range spans {
 		sp.Finish()
 	}
+
+	//duration := time.Since(start).String()
+	//log.Debug("issue 16984 deleteNode Operating", zap.String("duration", duration))
 	return nil
 }
 

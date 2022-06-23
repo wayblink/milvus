@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"sort"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -67,7 +68,8 @@ func (s *Server) GetStatisticsChannel(ctx context.Context) (*milvuspb.StringResp
 // this api only guarantees all the segments requested is sealed
 // these segments will be flushed only after the Flush policy is fulfilled
 func (s *Server) Flush(ctx context.Context, req *datapb.FlushRequest) (*datapb.FlushResponse, error) {
-	log.Info("receive flush request", zap.Int64("dbID", req.GetDbID()), zap.Int64("collectionID", req.GetCollectionID()))
+	log.Info("issue 16984 receive flush request", zap.Int64("dbID", req.GetDbID()), zap.Int64("collectionID", req.GetCollectionID()))
+	start := time.Now()
 	sp, ctx := trace.StartSpanFromContextWithOperationName(ctx, "DataCoord-Flush")
 	defer sp.Finish()
 	resp := &datapb.FlushResponse{
@@ -83,18 +85,29 @@ func (s *Server) Flush(ctx context.Context, req *datapb.FlushRequest) (*datapb.F
 		resp.Status.Reason = serverNotServingErrMsg
 		return resp, nil
 	}
+	start2 := time.Now()
 	sealedSegments, err := s.segmentManager.SealAllSegments(ctx, req.GetCollectionID(), req.GetSegmentIDs())
+	duration2 := time.Since(start2).String()
+	log.Debug("issue 16984 datacoord call segmentManager.SealAllSegments", zap.String("duration", duration2))
 	if err != nil {
 		resp.Status.Reason = fmt.Sprintf("failed to flush %d, %s", req.CollectionID, err)
 		return resp, nil
 	}
-	log.Info("flush response with segments",
+	duration := time.Since(start).String()
+	log.Info("issue 16984 flush response with segments",
+		zap.String("duration", duration),
 		zap.Int64("collectionID", req.GetCollectionID()),
 		zap.Any("segments", sealedSegments))
 	resp.Status.ErrorCode = commonpb.ErrorCode_Success
 	resp.DbID = req.GetDbID()
 	resp.CollectionID = req.GetCollectionID()
 	resp.SegmentIDs = sealedSegments
+	sort.Slice(sealedSegments, func(i, j int) bool { return sealedSegments[i] < sealedSegments[j] })
+	segemntIdsStr := ""
+	for i := range sealedSegments {
+		segemntIdsStr = segemntIdsStr + "," + string(sealedSegments[i])
+	}
+	s.flushSegmentCollId[segemntIdsStr] = req.GetCollectionID()
 	return resp, nil
 }
 
@@ -993,7 +1006,23 @@ func (s *Server) WatchChannels(ctx context.Context, req *datapb.WatchChannelsReq
 
 // GetFlushState gets the flush state of multiple segments
 func (s *Server) GetFlushState(ctx context.Context, req *milvuspb.GetFlushStateRequest) (*milvuspb.GetFlushStateResponse, error) {
-	log.Info("DataCoord receive get flush state request", zap.Int64s("segmentIDs", req.GetSegmentIDs()), zap.Int("len", len(req.GetSegmentIDs())))
+	sealedSegments := req.GetSegmentIDs()
+	sort.Slice(sealedSegments, func(i, j int) bool { return sealedSegments[i] < sealedSegments[j] })
+	segemntIdsStr := ""
+	for i := range sealedSegments {
+		segemntIdsStr = segemntIdsStr + "," + string(sealedSegments[i])
+	}
+
+	sp, ctx := trace.StartSpanFromContextWithOperationName(ctx, "Proxy-Flush")
+	defer sp.Finish()
+	traceID, _, _ := trace.InfoFromSpan(sp)
+	start := time.Now()
+
+	log.Info("DataCoord receive get flush state request",
+		zap.Int64s("segmentIDs", req.GetSegmentIDs()),
+		zap.Int("len", len(req.GetSegmentIDs())),
+		zap.Int64("collection_id", s.flushSegmentCollId[segemntIdsStr]),
+		zap.String("trace_id", traceID))
 
 	resp := &milvuspb.GetFlushStateResponse{Status: &commonpb.Status{ErrorCode: commonpb.ErrorCode_UnexpectedError}}
 	if s.isClosed() {
@@ -1015,11 +1044,21 @@ func (s *Server) GetFlushState(ctx context.Context, req *milvuspb.GetFlushStateR
 		unflushed = append(unflushed, sid)
 	}
 
+	duration := time.Since(start).String()
 	if len(unflushed) != 0 {
-		log.Info("[flush state] unflushed segment ids", zap.Int64s("segmentIDs", unflushed), zap.Int("len", len(unflushed)))
+		log.Info("issue 16984 [flush state] unflushed segment ids",
+			zap.Int64("collection_id", s.flushSegmentCollId[segemntIdsStr]),
+			zap.Int64s("segmentIDs", unflushed), zap.Int("len", len(unflushed)),
+			zap.String("trace_id", traceID),
+			zap.String("duration", duration))
 		resp.Flushed = false
 	} else {
-		log.Info("[flush state] all segment is flushed", zap.Int64s("segment ids", req.GetSegmentIDs()))
+		log.Info("[flush state] all segment is flushed",
+			zap.Int64("collection_id", s.flushSegmentCollId[segemntIdsStr]),
+			zap.Int64s("segment ids", req.GetSegmentIDs()),
+			zap.String("trace_id", traceID),
+			zap.String("duration", duration))
+		delete(s.flushSegmentCollId, segemntIdsStr)
 		resp.Flushed = true
 	}
 

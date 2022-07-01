@@ -58,7 +58,17 @@ func (fm *flowgraphManager) addAndStart(dn *DataNode, vchan *datapb.VchannelInfo
 	dataSyncService, err := newDataSyncService(dn.ctx, make(chan flushMsg, 100), make(chan resendTTMsg, 100), replica,
 		alloc, dn.factory, vchan, dn.clearSignal, dn.dataCoord, dn.segmentCache, dn.chunkManager, dn.compactionExecutor)
 	if err != nil {
-		log.Warn("new data sync service fail", zap.String("vChannelName", vchan.GetChannelName()), zap.Error(err))
+		log.Warn("new data sync service fail",
+			zap.String("vChannelName", vchan.GetChannelName()),
+			zap.Int64("collection_id", vchan.GetCollectionID()),
+			zap.Any("seek_position", vchan.GetSeekPosition().String()),
+			zap.Any("unflushed_segment", vchan.GetUnflushedSegments()),
+			zap.Any("flushed_segment", vchan.GetFlushedSegments()),
+			zap.Any("dropped_segment", vchan.GetDroppedSegments()),
+			zap.Int64s("unflushed_segment_ids", vchan.GetUnflushedSegmentIds()),
+			zap.Int64s("flushed_segment_ids", vchan.GetFlushedSegmentIds()),
+			zap.Int64s("dropped_segment_ids", vchan.GetDroppedSegmentIds()),
+			zap.Error(err))
 		return err
 	}
 	log.Info("successfully created dataSyncService", zap.String("vChannelName", vchan.GetChannelName()))

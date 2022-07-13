@@ -176,7 +176,7 @@ func (s *SegmentsInfo) AddSegmentBinlogs(segmentID UniqueID, field2Binlogs map[U
 	}
 }
 
-// SetIsCompacting sets compactino status for segment
+// SetIsCompacting sets compaction status for segment
 func (s *SegmentsInfo) SetIsCompacting(segmentID UniqueID, isCompacting bool) {
 	if segment, ok := s.segments[segmentID]; ok {
 		s.segments[segmentID] = segment.ShadowClone(SetIsCompacting(isCompacting))

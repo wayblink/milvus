@@ -77,37 +77,37 @@ func newCompactionTrigger(meta *meta, compactionHandler compactionPlanContext, a
 		allocator:         allocator,
 		signals:           make(chan *compactionSignal, 100),
 		compactionHandler: compactionHandler,
+		globalTrigger:     time.NewTicker(Params.DataCoordCfg.GlobalCompactionInterval),
 		segRefer:          segRefer,
 	}
 }
 
 func (t *compactionTrigger) start() {
-	t.quit = make(chan struct{})
-	t.globalTrigger = time.NewTicker(Params.DataCoordCfg.GlobalCompactionInterval)
 	t.wg.Add(2)
-	go func() {
-		defer logutil.LogPanic()
-		defer t.wg.Done()
+	go t.startCompactionSignalHandleLoop()
+	go t.startGlobalCompactionLoop()
+}
 
-		for {
-			select {
-			case <-t.quit:
-				log.Info("compaction trigger quit")
-				return
-			case signal := <-t.signals:
-				switch {
-				case signal.isGlobal:
-					t.handleGlobalSignal(signal)
-				default:
-					t.handleSignal(signal)
-					// shouldn't reset, otherwise a frequent flushed collection will affect other collections
-					// t.globalTrigger.Reset(Params.DataCoordCfg.GlobalCompactionInterval)
-				}
+func (t *compactionTrigger) startCompactionSignalHandleLoop() {
+	t.quit = make(chan struct{})
+	defer logutil.LogPanic()
+	defer t.wg.Done()
+	for {
+		select {
+		case <-t.quit:
+			log.Info("compaction trigger quit")
+			return
+		case signal := <-t.signals:
+			switch {
+			case signal.isGlobal:
+				t.handleGlobalSignal(signal)
+			default:
+				t.handleSignal(signal)
+				// shouldn't reset, otherwise a frequent flushed collection will affect other collections
+				// t.globalTrigger.Reset(Params.DataCoordCfg.GlobalCompactionInterval)
 			}
 		}
-	}()
-
-	go t.startGlobalCompactionLoop()
+	}
 }
 
 func (t *compactionTrigger) startGlobalCompactionLoop() {
@@ -163,9 +163,9 @@ func (t *compactionTrigger) triggerCompaction(compactTime *compactTime) error {
 	return nil
 }
 
-// triggerSingleCompaction triger a compaction bundled with collection-partiiton-channel-segment
+// triggerSingleCompaction trigger a compaction bundled with collection-partition-channel-segment
 func (t *compactionTrigger) triggerSingleCompaction(collectionID, partitionID, segmentID int64, channel string, compactTime *compactTime) error {
-	// If AutoCompaction diabled, flush request will not trigger compaction
+	// If AutoCompaction disabled, flush request will not trigger compaction
 	if !Params.DataCoordCfg.GetEnableAutoCompaction() {
 		return nil
 	}
@@ -210,14 +210,6 @@ func (t *compactionTrigger) allocSignalID() (UniqueID, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return t.allocator.allocID(ctx)
-}
-
-func getPlanIDs(plans []*datapb.CompactionPlan) []int64 {
-	ids := make([]int64, 0, len(plans))
-	for _, p := range plans {
-		ids = append(ids, p.GetPlanID())
-	}
-	return ids
 }
 
 func (t *compactionTrigger) handleGlobalSignal(signal *compactionSignal) {

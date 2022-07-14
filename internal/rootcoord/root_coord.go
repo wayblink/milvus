@@ -1228,8 +1228,9 @@ func (c *Core) Init() error {
 			c.IDAllocator,
 			c.CallImportService,
 			c.getCollectionName,
+			c.CallReleaseSegRefLock,
 		)
-		c.importManager.init(c.ctx)
+		c.importManager.init()
 
 		// init data
 		initError = c.initData()
@@ -1418,14 +1419,14 @@ func (c *Core) Start() error {
 			log.Fatal("RootCoord Start reSendDdMsg failed", zap.Error(err))
 			panic(err)
 		}
-		c.wg.Add(7)
+		c.wg.Add(5)
 		go c.startTimeTickLoop()
 		go c.tsLoop()
 		go c.chanTimeTick.startWatch(&c.wg)
 		go c.checkFlushedSegmentsLoop()
-		go c.importManager.expireOldTasksLoop(&c.wg, c.CallReleaseSegRefLock)
-		go c.importManager.sendOutTasksLoop(&c.wg)
 		go c.recycleDroppedIndex()
+
+		c.importManager.start()
 		Params.RootCoordCfg.CreatedTime = time.Now()
 		Params.RootCoordCfg.UpdatedTime = time.Now()
 	})
@@ -1437,6 +1438,7 @@ func (c *Core) Start() error {
 func (c *Core) Stop() error {
 	c.UpdateStateCode(internalpb.StateCode_Abnormal)
 
+	c.importManager.stop()
 	c.cancel()
 	c.wg.Wait()
 	// wait at most one second to revoke
@@ -2531,17 +2533,11 @@ func (c *Core) ReportImport(ctx context.Context, ir *rootcoordpb.ImportResult) (
 
 	// This method update a busy node to idle node, and send import task to idle node
 	resendTaskFunc := func() {
-		func() {
-			c.importManager.busyNodesLock.Lock()
-			defer c.importManager.busyNodesLock.Unlock()
-			delete(c.importManager.busyNodes, ir.GetDatanodeId())
-			log.Info("DataNode is no longer busy",
-				zap.Int64("dataNode ID", ir.GetDatanodeId()),
-				zap.Int64("task ID", ir.GetTaskId()))
-
-		}()
-		err := c.importManager.sendOutTasks(c.importManager.ctx)
-		if err != nil {
+		c.importManager.removeBusyNode(ir.GetDatanodeId())
+		log.Info("DataNode is no longer busy",
+			zap.Int64("dataNode ID", ir.GetDatanodeId()),
+			zap.Int64("task ID", ir.GetTaskId()))
+		if err := c.importManager.sendOutTasks(c.importManager.ctx); err != nil {
 			log.Error("fail to send out import task to datanodes")
 		}
 	}

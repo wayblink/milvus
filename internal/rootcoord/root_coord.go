@@ -2534,14 +2534,13 @@ func (c *Core) ReportImport(ctx context.Context, ir *rootcoordpb.ImportResult) (
 		func() {
 			c.importManager.busyNodesLock.Lock()
 			defer c.importManager.busyNodesLock.Unlock()
-			delete(c.importManager.busyNodes, ir.GetDatanodeId())
+			c.importManager.removeBusyNode(ir.GetDatanodeId())
 			log.Info("DataNode is no longer busy",
 				zap.Int64("dataNode ID", ir.GetDatanodeId()),
 				zap.Int64("task ID", ir.GetTaskId()))
 
 		}()
-		err := c.importManager.sendOutTasks(c.importManager.ctx)
-		if err != nil {
+		if err := c.importManager.sendOutTasks(c.importManager.ctx); err != nil {
 			log.Error("fail to send out import task to datanodes")
 		}
 	}

@@ -1045,11 +1045,12 @@ func (s *Server) Import(ctx context.Context, itr *datapb.ImportTaskRequest) (*da
 		return resp, nil
 	}
 
-	nodes := s.channelManager.store.GetNodes()
+	nodes := s.sessionManager.getLiveNodeIDs()
 	if len(nodes) == 0 {
 		log.Error("import failed as all DataNodes are offline")
 		return resp, nil
 	}
+	log.Info("available DataNodes are", zap.Int64s("node ID", nodes))
 
 	avaNodes := getDiff(nodes, itr.GetWorkingNodes())
 	if len(avaNodes) > 0 {

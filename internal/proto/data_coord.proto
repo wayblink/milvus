@@ -502,8 +502,6 @@ message ImportTaskInfo {
   repeated string files = 9;                    // A list of files to import.
   int64 create_ts = 10;                         // Timestamp when the import task is created.
   ImportTaskState state = 11;                   // State of the import task.
-  bool data_queryable = 12;                     // A flag indicating whether import data are queryable (i.e. loaded in query nodes)
-  bool data_indexed = 13;                       // A flag indicating whether import data are indexed.
 }
 
 message ImportTaskResponse {

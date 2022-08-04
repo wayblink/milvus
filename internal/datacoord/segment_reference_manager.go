@@ -54,7 +54,7 @@ func NewSegmentReferenceManager(etcdKV kv.BaseKV, onlineIDs []UniqueID) (*Segmen
 	for _, value := range values {
 		segReferLock := &datapb.SegmentReferenceLock{}
 		if err = proto.Unmarshal([]byte(value), segReferLock); err != nil {
-			log.Error("unmarshal segment reference lock failed", zap.Error(err))
+			log.Error("unmarshal segment reference lock failed", zap.Error(err), zap.String("value", value))
 			return nil, err
 		}
 		if _, ok := segReferManager.segmentsLock[segReferLock.TaskID]; !ok {

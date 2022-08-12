@@ -229,6 +229,7 @@ func (t *compactionTrigger) handleGlobalSignal(signal *compactionSignal) {
 			isSegmentHealthy(segment) &&
 			isFlush(segment) &&
 			!segment.isCompacting && // not compacting now
+			!(segment.GetState() == commonpb.SegmentState_Importing) && // not importing segment
 			!t.segRefer.HasSegmentLock(segment.ID) // not reference
 	}) // m is list of chanPartSegments, which is channel-partition organized segments
 	for _, group := range m {
@@ -272,6 +273,11 @@ func (t *compactionTrigger) handleSignal(signal *compactionSignal) {
 	segment := t.meta.GetSegment(signal.segmentID)
 	if segment == nil {
 		log.Warn("segment in compaction signal not found in meta", zap.Int64("segmentID", signal.segmentID))
+		return
+	}
+
+	if segment.GetState() == commonpb.SegmentState_Importing {
+		log.Warn("importing segment is not allowed to compact", zap.Int64("segmentID", signal.segmentID))
 		return
 	}
 

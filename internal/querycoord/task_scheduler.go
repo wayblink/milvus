@@ -768,7 +768,9 @@ func (scheduler *TaskScheduler) waitActivateTaskDone(wg *sync.WaitGroup, t task,
 		if !t.isValid() || !t.isRetryable() {
 			log.Info("waitActivateTaskDone: reSchedule the activate task",
 				zap.Int64("taskID", t.getTaskID()),
-				zap.Int64("triggerTaskID", triggerTask.getTaskID()))
+				zap.Int32("taskType", int32(t.msgType())),
+				zap.Int64("triggerTaskID", triggerTask.getTaskID()),
+				zap.Int32("triggerTaskType", int32(triggerTask.msgType())))
 			reScheduledTasks, err := t.reschedule(scheduler.ctx)
 			if err != nil {
 				log.Error("waitActivateTaskDone: reschedule task error",

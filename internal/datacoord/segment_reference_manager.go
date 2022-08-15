@@ -84,7 +84,7 @@ func generateLocKey(taskID, nodeID UniqueID) string {
 func (srm *SegmentReferenceManager) AddSegmentsLock(taskID int64, segIDs []UniqueID, nodeID UniqueID) error {
 	srm.lock.Lock()
 	defer srm.lock.Unlock()
-	log.Info("add reference lock on segments", zap.Int64s("segIDs", segIDs), zap.Int64("nodeID", nodeID))
+	log.Info("add reference lock on segments", zap.Int64("taskID", taskID), zap.Int64s("segIDs", segIDs), zap.Int64("nodeID", nodeID))
 
 	segReferLock := &datapb.SegmentReferenceLock{
 		TaskID:     taskID,
@@ -145,7 +145,7 @@ func (srm *SegmentReferenceManager) ReleaseSegmentsLock(taskID int64, nodeID Uni
 	if len(srm.segmentsLock[taskID]) == 0 {
 		delete(srm.segmentsLock, taskID)
 	}
-	log.Info("release reference lock by taskID successfully", zap.Int64("taskID", taskID), zap.Int64("nodeID", nodeID))
+	log.Info("release reference lock by taskID successfully", zap.Int64("taskID", taskID), zap.Int64("nodeID", nodeID), zap.Int64s("segmentIds", srm.segmentsLock[taskID][nodeID].SegmentIDs))
 	return nil
 }
 

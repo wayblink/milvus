@@ -112,6 +112,11 @@ type RootCoordMock struct {
 	lastTsMtx sync.Mutex
 }
 
+func (coord *RootCoordMock) CheckSegmentIndexReady(ctx context.Context, req *internalpb.CheckSegmentIndexReadyRequest) (*commonpb.Status, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (coord *RootCoordMock) GetImportFailedSegmentIDs(ctx context.Context, req *internalpb.GetImportFailedSegmentIDsRequest) (*internalpb.GetImportFailedSegmentIDsResponse, error) {
 	//TODO implement me
 	panic("implement me")
@@ -1094,6 +1099,7 @@ type DescribeSegmentsFunc func(ctx context.Context, request *rootcoordpb.Describ
 type ImportFunc func(ctx context.Context, req *milvuspb.ImportRequest) (*milvuspb.ImportResponse, error)
 type DropCollectionFunc func(ctx context.Context, request *milvuspb.DropCollectionRequest) (*commonpb.Status, error)
 type GetIndexStateFunc func(ctx context.Context, request *milvuspb.GetIndexStateRequest) (*indexpb.GetIndexStatesResponse, error)
+type CheckSegmentIndexReadyFunc func(ctx context.Context, request *internalpb.CheckSegmentIndexReadyRequest) (*commonpb.Status, error)
 
 type mockRootCoord struct {
 	types.RootCoord
@@ -1105,6 +1111,7 @@ type mockRootCoord struct {
 	ImportFunc
 	DropCollectionFunc
 	GetIndexStateFunc
+	CheckSegmentIndexReadyFunc
 }
 
 func (m *mockRootCoord) DescribeCollection(ctx context.Context, request *milvuspb.DescribeCollectionRequest) (*milvuspb.DescribeCollectionResponse, error) {
@@ -1159,6 +1166,13 @@ func (m *mockRootCoord) DropCollection(ctx context.Context, request *milvuspb.Dr
 func (m *mockRootCoord) GetIndexState(ctx context.Context, request *milvuspb.GetIndexStateRequest) (*indexpb.GetIndexStatesResponse, error) {
 	if m.GetIndexStateFunc != nil {
 		return m.GetIndexStateFunc(ctx, request)
+	}
+	return nil, errors.New("mock")
+}
+
+func (m *mockRootCoord) CheckSegmentIndexReady(ctx context.Context, req *internalpb.CheckSegmentIndexReadyRequest) (*commonpb.Status, error) {
+	if m.CheckSegmentIndexReadyFunc != nil {
+		return m.CheckSegmentIndexReadyFunc(ctx, req)
 	}
 	return nil, errors.New("mock")
 }

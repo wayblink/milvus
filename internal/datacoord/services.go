@@ -30,6 +30,7 @@ import (
 	"github.com/milvus-io/milvus/internal/log"
 	"github.com/milvus-io/milvus/internal/proto/datapb"
 	"github.com/milvus-io/milvus/internal/proto/internalpb"
+	"github.com/milvus-io/milvus/internal/proto/milvuspb"
 	"github.com/milvus-io/milvus/internal/util/logutil"
 	"github.com/milvus-io/milvus/internal/util/metricsinfo"
 	"github.com/milvus-io/milvus/internal/util/retry"
@@ -38,7 +39,12 @@ import (
 	"github.com/milvus-io/milvus/internal/util/typeutil"
 	"github.com/samber/lo"
 	"go.uber.org/zap"
+	"go.uber.org/zap"
 )
+
+var ImportFlushedCheckInterval = 5 * time.Second
+var ImportFlushedWaitLimit = 2 * time.Minute
+var reportImportAttempts uint = 20
 
 // checks whether server in Healthy State
 func (s *Server) isClosed() bool {
@@ -439,7 +445,7 @@ func (s *Server) SaveBinlogPaths(ctx context.Context, req *datapb.SaveBinlogPath
 		s.segmentManager.DropSegment(ctx, req.SegmentID)
 		s.flushCh <- req.SegmentID
 
-		if Params.DataCoordCfg.EnableCompaction {
+		if !req.Importing && Params.DataCoordCfg.EnableCompaction {
 			cctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
 			defer cancel()
 
@@ -1094,11 +1100,12 @@ func (s *Server) Import(ctx context.Context, itr *datapb.ImportTaskRequest) (*da
 		return resp, nil
 	}
 
-	nodes := s.channelManager.store.GetNodes()
+	nodes := s.sessionManager.getLiveNodeIDs()
 	if len(nodes) == 0 {
 		log.Error("import failed as all DataNodes are offline")
 		return resp, nil
 	}
+	log.Info("available DataNodes are", zap.Int64s("node ID", nodes))
 
 	avaNodes := getDiff(nodes, itr.GetWorkingNodes())
 	if len(avaNodes) > 0 {
@@ -1215,8 +1222,9 @@ func (s *Server) ReleaseSegmentLock(ctx context.Context, req *datapb.ReleaseSegm
 	return resp, nil
 }
 
-func (s *Server) AddSegment(ctx context.Context, req *datapb.AddSegmentRequest) (*commonpb.Status, error) {
-	log.Info("DataCoord putting segment to the right DataNode",
+// SaveImportSegment saves the segment binlog paths and puts this segment to its belonging DataNode as a flushed segment.
+func (s *Server) SaveImportSegment(ctx context.Context, req *datapb.SaveImportSegmentRequest) (*commonpb.Status, error) {
+	log.Info("DataCoord putting segment to the right DataNode and saving binlog path",
 		zap.Int64("segment ID", req.GetSegmentId()),
 		zap.Int64("collection ID", req.GetCollectionId()),
 		zap.Int64("partition ID", req.GetPartitionId()),
@@ -1228,16 +1236,106 @@ func (s *Server) AddSegment(ctx context.Context, req *datapb.AddSegmentRequest) 
 	}
 	if s.isClosed() {
 		log.Warn("failed to add segment for closed server")
+		errResp.ErrorCode = commonpb.ErrorCode_DataCoordNA
 		errResp.Reason = msgDataCoordIsUnhealthy(Params.DataCoordCfg.GetNodeID())
 		return errResp, nil
 	}
+	// Look for the DataNode that watches the channel.
 	ok, nodeID := s.channelManager.getNodeIDByChannelName(req.GetChannelName())
 	if !ok {
 		log.Error("no DataNode found for channel", zap.String("channel name", req.GetChannelName()))
 		errResp.Reason = fmt.Sprint("no DataNode found for channel ", req.GetChannelName())
 		return errResp, nil
 	}
-	s.cluster.AddSegment(s.ctx, nodeID, req)
+	// Start saving bin log paths.
+	rsp, err := s.SaveBinlogPaths(context.Background(), req.GetSaveBinlogPathReq())
+	if err := VerifyResponse(rsp, err); err != nil {
+		log.Error("failed to SaveBinlogPaths", zap.Error(err))
+		return &commonpb.Status{
+			ErrorCode: commonpb.ErrorCode_UnexpectedError,
+		}, nil
+	}
+	// Call DataNode to add the new segment to its own flow graph.
+	cli, err := s.sessionManager.getClient(ctx, nodeID)
+	if err != nil {
+		log.Error("failed to get DataNode client for SaveImportSegment",
+			zap.Int64("DataNode ID", nodeID),
+			zap.Error(err))
+		return &commonpb.Status{
+			ErrorCode: commonpb.ErrorCode_UnexpectedError,
+		}, nil
+	}
+	resp, err := cli.AddImportSegment(ctx,
+		&datapb.AddImportSegmentRequest{
+			Base: &commonpb.MsgBase{
+				SourceID:  Params.DataNodeCfg.GetNodeID(),
+				Timestamp: req.GetBase().GetTimestamp(),
+			},
+			SegmentId:     req.GetSegmentId(),
+			ChannelName:   req.GetChannelName(),
+			CollectionId:  req.GetCollectionId(),
+			PartitionId:   req.GetPartitionId(),
+			RowNum:        req.GetRowNum(),
+			StatsLog:      req.GetSaveBinlogPathReq().GetField2StatslogPaths(),
+			DmlPositionId: req.GetDmlPositionId(),
+		})
+	if err := VerifyResponse(resp, err); err != nil {
+		log.Error("failed to add segment", zap.Int64("DataNode ID", nodeID), zap.Error(err))
+		return &commonpb.Status{
+			ErrorCode: commonpb.ErrorCode_UnexpectedError,
+		}, nil
+	}
+	log.Info("succeed to add segment", zap.Int64("DataNode ID", nodeID), zap.Any("add segment req", req))
+	return &commonpb.Status{
+		ErrorCode: commonpb.ErrorCode_Success,
+	}, nil
+}
+
+func (s *Server) CompleteBulkLoad(ctx context.Context, req *datapb.CompleteBulkLoadRequest) (*commonpb.Status, error) {
+	log.Info("received CompleteBulkLoad request", zap.Int64("task ID", req.GetTaskId()))
+	// Check index status.
+	checkIndexStatus, err := s.rootCoordClient.CheckSegmentIndexReady(ctx, &internalpb.CheckSegmentIndexReadyRequest{
+		TaskID: req.GetTaskId(),
+		ColID:  req.GetCollectionId(),
+		SegIDs: req.GetSegmentIds(),
+	})
+	if err != nil {
+		log.Warn(fmt.Sprintf("failed to wait for all index build to complete %s, but continue anyway", err.Error()))
+	}
+	if checkIndexStatus.GetErrorCode() != commonpb.ErrorCode_Success {
+		log.Warn(fmt.Sprintf("failed to wait for all index build to complete %s, but continue anyway", checkIndexStatus.Reason))
+	}
+
+	// Update import task state to `ImportState_ImportCompleted`.
+	// Retry on errors.
+	err = retry.Do(s.ctx, func() error {
+		status, err := s.rootCoordClient.ReportImport(ctx, &rootcoordpb.ImportResult{
+			TaskId: req.GetTaskId(),
+			State:  commonpb.ImportState_ImportCompleted,
+		})
+		return VerifyResponse(status, err)
+	}, retry.Attempts(reportImportAttempts))
+	if err != nil {
+		log.Error("failed to report import, we are not able to update the import task state",
+			zap.Int64("task ID", req.GetTaskId()),
+			zap.Error(err))
+	}
+	// Remove the `isImport` states of these segments, no matter index building check succeeded, timed up or failed.
+	s.UnsetIsImportingState(ctx, &datapb.UnsetIsImportingStateRequest{
+		SegmentIds: req.GetSegmentIds(),
+	})
+
+	return &commonpb.Status{
+		ErrorCode: commonpb.ErrorCode_Success,
+	}, nil
+}
+
+// UnsetIsImportingState unsets the isImporting states of the given segments.
+func (s *Server) UnsetIsImportingState(ctx context.Context, req *datapb.UnsetIsImportingStateRequest) (*commonpb.Status, error) {
+	log.Info("unsetting isImport state of segments", zap.Int64s("segments", req.GetSegmentIds()))
+	for _, segID := range req.GetSegmentIds() {
+		s.meta.SetSegmentIsImporting(segID, false)
+	}
 	return &commonpb.Status{
 		ErrorCode: commonpb.ErrorCode_Success,
 	}, nil

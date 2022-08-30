@@ -94,8 +94,8 @@ type DataNode interface {
 	// It returns a list of segments to be sent.
 	ResendSegmentStats(ctx context.Context, req *datapb.ResendSegmentStatsRequest) (*datapb.ResendSegmentStatsResponse, error)
 
-	// AddSegment puts the given segment to current DataNode's flow graph.
-	AddSegment(ctx context.Context, req *datapb.AddSegmentRequest) (*commonpb.Status, error)
+	// AddImportSegment puts the given import segment to current DataNode's flow graph.
+	AddImportSegment(ctx context.Context, req *datapb.AddImportSegmentRequest) (*commonpb.Status, error)
 }
 
 // DataNodeComponent is used by grpc server of DataNode
@@ -304,9 +304,15 @@ type DataCoord interface {
 	AcquireSegmentLock(ctx context.Context, req *datapb.AcquireSegmentLockRequest) (*commonpb.Status, error)
 	ReleaseSegmentLock(ctx context.Context, req *datapb.ReleaseSegmentLockRequest) (*commonpb.Status, error)
 
-	// AddSegment looks for the right DataNode given channel name, and triggers AddSegment call on that DataNode to
-	// add the segment into this DataNode.
-	AddSegment(ctx context.Context, req *datapb.AddSegmentRequest) (*commonpb.Status, error)
+	// SaveImportSegment saves the import segment binlog paths data and then looks for the right DataNode to add the
+	// segment to that DataNode.
+	SaveImportSegment(ctx context.Context, req *datapb.SaveImportSegmentRequest) (*commonpb.Status, error)
+
+	// CompleteBulkLoad is the DataCoord side work for a complete bulk load operation.
+	CompleteBulkLoad(ctx context.Context, req *datapb.CompleteBulkLoadRequest) (*commonpb.Status, error)
+
+	// UnsetIsImportingState unsets the `isImport` state of the given segments so that they can get compacted normally.
+	UnsetIsImportingState(ctx context.Context, req *datapb.UnsetIsImportingStateRequest) (*commonpb.Status, error)
 }
 
 // DataCoordComponent defines the interface of DataCoord component.
@@ -732,6 +738,10 @@ type RootCoord interface {
 	OperatePrivilege(ctx context.Context, req *milvuspb.OperatePrivilegeRequest) (*commonpb.Status, error)
 	SelectGrant(ctx context.Context, req *milvuspb.SelectGrantRequest) (*milvuspb.SelectGrantResponse, error)
 	ListPolicy(ctx context.Context, in *internalpb.ListPolicyRequest) (*internalpb.ListPolicyResponse, error)
+	// GetImportFailedSegmentIDs get import failed segment IDs
+	GetImportFailedSegmentIDs(ctx context.Context, req *internalpb.GetImportFailedSegmentIDsRequest) (*internalpb.GetImportFailedSegmentIDsResponse, error)
+	// CheckSegmentIndexReady checks if indexes have been successfully built on the given segments.
+	CheckSegmentIndexReady(ctx context.Context, req *internalpb.CheckSegmentIndexReadyRequest) (*commonpb.Status, error)
 }
 
 // RootCoordComponent is used by grpc server of RootCoord

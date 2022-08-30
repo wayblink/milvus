@@ -28,10 +28,12 @@ import (
 	"github.com/milvus-io/milvus/internal/metrics"
 	"github.com/milvus-io/milvus/internal/mq/msgstream"
 	"github.com/milvus-io/milvus/internal/proto/datapb"
+	"github.com/milvus-io/milvus/internal/proto/internalpb"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/concurrency"
 	"github.com/milvus-io/milvus/internal/util/flowgraph"
+	"github.com/milvus-io/milvus/internal/util/funcutil"
 )
 
 // dataSyncService controls a flowgraph for a specific collection
@@ -210,8 +212,16 @@ func (dsService *dataSyncService) initNodes(vchanInfo *datapb.VchannelInfo) erro
 		// avoid closure capture iteration variable
 		segment := us
 		future := dsService.ioPool.Submit(func() (interface{}, error) {
-			if err := dsService.replica.addNormalSegment(segment.GetID(), segment.GetCollectionID(), segment.GetPartitionID(), segment.GetInsertChannel(),
-				segment.GetNumOfRows(), segment.GetStatslogs(), cp, vchanInfo.GetSeekPosition().GetTimestamp()); err != nil {
+			if err := dsService.replica.addSegment(addSegmentReq{
+				segType:      datapb.SegmentType_Normal,
+				segID:        segment.GetID(),
+				collID:       segment.CollectionID,
+				partitionID:  segment.PartitionID,
+				channelName:  segment.GetInsertChannel(),
+				numOfRows:    segment.GetNumOfRows(),
+				statsBinLogs: segment.Statslogs,
+				cp:           cp,
+				recoverTs:    vchanInfo.GetSeekPosition().GetTimestamp()}); err != nil {
 				return nil, err
 			}
 			return nil, nil
@@ -238,8 +248,16 @@ func (dsService *dataSyncService) initNodes(vchanInfo *datapb.VchannelInfo) erro
 		// avoid closure capture iteration variable
 		segment := fs
 		future := dsService.ioPool.Submit(func() (interface{}, error) {
-			if err := dsService.replica.addFlushedSegment(segment.GetID(), segment.GetCollectionID(), segment.GetPartitionID(), segment.GetInsertChannel(),
-				segment.GetNumOfRows(), segment.GetStatslogs(), vchanInfo.GetSeekPosition().GetTimestamp()); err != nil {
+			if err := dsService.replica.addSegment(addSegmentReq{
+				segType:      datapb.SegmentType_Flushed,
+				segID:        segment.GetID(),
+				collID:       segment.CollectionID,
+				partitionID:  segment.PartitionID,
+				channelName:  segment.GetInsertChannel(),
+				numOfRows:    segment.GetNumOfRows(),
+				statsBinLogs: segment.Statslogs,
+				recoverTs:    vchanInfo.GetSeekPosition().GetTimestamp(),
+			}); err != nil {
 				return nil, err
 			}
 			return nil, nil
@@ -371,4 +389,57 @@ func (dsService *dataSyncService) getSegmentInfos(segmentIDs []int64) ([]*datapb
 		return nil, err
 	}
 	return infoResp.Infos, nil
+}
+
+func (dsService *dataSyncService) getDmlChannelPositionByBroadcast(ctx context.Context, channelName string, ts uint64) ([]byte, error) {
+	msgPack := msgstream.MsgPack{}
+	baseMsg := msgstream.BaseMsg{
+		Ctx:            ctx,
+		BeginTimestamp: ts,
+		EndTimestamp:   ts,
+		HashValues:     []uint32{0},
+	}
+	msg := &msgstream.InsertMsg{
+		BaseMsg: baseMsg,
+		InsertRequest: internalpb.InsertRequest{
+			Base: &commonpb.MsgBase{
+				MsgType:   commonpb.MsgType_TimeTick,
+				MsgID:     0,
+				Timestamp: ts,
+				SourceID:  Params.DataNodeCfg.GetNodeID(),
+			},
+		},
+	}
+	msgPack.Msgs = append(msgPack.Msgs, msg)
+
+	pChannelName := funcutil.ToPhysicalChannel(channelName)
+	log.Info("ddNode convert vChannel to pChannel",
+		zap.String("vChannelName", channelName),
+		zap.String("pChannelName", pChannelName),
+	)
+
+	dmlStream, err := dsService.msFactory.NewMsgStream(ctx)
+	if err != nil {
+		return nil, err
+	}
+	dmlStream.SetRepackFunc(msgstream.DefaultRepackFunc)
+	dmlStream.AsProducer([]string{pChannelName})
+	dmlStream.Start()
+	defer dmlStream.Close()
+
+	result := make(map[string][]byte)
+
+	ids, err := dmlStream.BroadcastMark(&msgPack)
+	if err != nil {
+		log.Error("BroadcastMark failed", zap.Error(err), zap.String("channelName", channelName))
+		return nil, err
+	}
+	for cn, idList := range ids {
+		// idList should have length 1, just flat by iteration
+		for _, id := range idList {
+			result[cn] = id.Serialize()
+		}
+	}
+
+	return result[pChannelName], nil
 }

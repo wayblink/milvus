@@ -37,6 +37,7 @@ type SegmentInfo struct {
 	allocations   []*Allocation
 	lastFlushTime time.Time
 	isCompacting  bool
+	isImporting   bool
 	// a cache to avoid calculate twice
 	size            int64
 	lastWrittenTime time.Time
@@ -54,6 +55,17 @@ func NewSegmentInfo(info *datapb.SegmentInfo) *SegmentInfo {
 		lastFlushTime: time.Now().Add(-1 * flushInterval),
 		// A growing segment from recovery can be also considered idle.
 		lastWrittenTime: getZeroTime(),
+	}
+}
+
+// NewImportSegmentInfo works the same as NewSegmentInfo except that isImport is explicitly set to true.
+func NewImportSegmentInfo(info *datapb.SegmentInfo) *SegmentInfo {
+	return &SegmentInfo{
+		SegmentInfo:   info,
+		currRows:      0,
+		allocations:   make([]*Allocation, 0, 16),
+		lastFlushTime: time.Now().Add(-1 * flushInterval),
+		isImporting:   true,
 	}
 }
 
@@ -106,6 +118,14 @@ func (s *SegmentsInfo) SetRowCount(segmentID UniqueID, rowCount int64) {
 func (s *SegmentsInfo) SetState(segmentID UniqueID, state commonpb.SegmentState) {
 	if segment, ok := s.segments[segmentID]; ok {
 		s.segments[segmentID] = segment.Clone(SetState(state))
+	}
+}
+
+// SetDroppedAt sets Segment DroppedAt time for SegmentInfo with provided segmentID
+// if SegmentInfo not found, do nothing
+func (s *SegmentsInfo) SetDroppedAt(segmentID UniqueID, time uint64) {
+	if segment, ok := s.segments[segmentID]; ok {
+		s.segments[segmentID] = segment.Clone(SetDroppedAt(time))
 	}
 }
 
@@ -179,10 +199,17 @@ func (s *SegmentsInfo) AddSegmentBinlogs(segmentID UniqueID, field2Binlogs map[U
 	}
 }
 
-// SetIsCompacting sets compactino status for segment
+// SetIsCompacting sets compaction status for segment
 func (s *SegmentsInfo) SetIsCompacting(segmentID UniqueID, isCompacting bool) {
 	if segment, ok := s.segments[segmentID]; ok {
 		s.segments[segmentID] = segment.ShadowClone(SetIsCompacting(isCompacting))
+	}
+}
+
+// SetIsImporting sets the import status for a segment.
+func (s *SegmentsInfo) SetIsImporting(segmentID UniqueID, isImporting bool) {
+	if segment, ok := s.segments[segmentID]; ok {
+		s.segments[segmentID] = segment.ShadowClone(SetIsImporting(isImporting))
 	}
 }
 
@@ -195,6 +222,7 @@ func (s *SegmentInfo) Clone(opts ...SegmentInfoOption) *SegmentInfo {
 		allocations:   s.allocations,
 		lastFlushTime: s.lastFlushTime,
 		isCompacting:  s.isCompacting,
+		isImporting:   s.isImporting,
 		//cannot copy size, since binlog may be changed
 		lastWrittenTime: s.lastWrittenTime,
 	}
@@ -207,12 +235,13 @@ func (s *SegmentInfo) Clone(opts ...SegmentInfoOption) *SegmentInfo {
 // ShadowClone shadow clone the segment and return a new instance
 func (s *SegmentInfo) ShadowClone(opts ...SegmentInfoOption) *SegmentInfo {
 	cloned := &SegmentInfo{
-		SegmentInfo:     s.SegmentInfo,
-		currRows:        s.currRows,
-		allocations:     s.allocations,
-		lastFlushTime:   s.lastFlushTime,
-		isCompacting:    s.isCompacting,
-		size:            s.size,
+		SegmentInfo:   s.SegmentInfo,
+		currRows:      s.currRows,
+		allocations:   s.allocations,
+		lastFlushTime: s.lastFlushTime,
+		isCompacting:  s.isCompacting,
+		isImporting:   s.isImporting,
+		size:          s.size,
 		lastWrittenTime: s.lastWrittenTime,
 	}
 
@@ -243,6 +272,13 @@ func SetExpireTime(expireTs Timestamp) SegmentInfoOption {
 func SetState(state commonpb.SegmentState) SegmentInfoOption {
 	return func(segment *SegmentInfo) {
 		segment.State = state
+	}
+}
+
+// SetDroppedAt is the option to set droppedAt time for segment info
+func SetDroppedAt(time uint64) SegmentInfoOption {
+	return func(segment *SegmentInfo) {
+		segment.DroppedAt = time
 	}
 }
 
@@ -301,6 +337,13 @@ func SetFlushTime(t time.Time) SegmentInfoOption {
 func SetIsCompacting(isCompacting bool) SegmentInfoOption {
 	return func(segment *SegmentInfo) {
 		segment.isCompacting = isCompacting
+	}
+}
+
+// SetIsImporting is the option to set import state for segment info.
+func SetIsImporting(isImporting bool) SegmentInfoOption {
+	return func(segment *SegmentInfo) {
+		segment.isImporting = isImporting
 	}
 }
 

@@ -268,8 +268,10 @@ func NewJSONRowValidator(collectionSchema *schemapb.CollectionSchema, downstream
 		downstream: downstream,
 		rowCounter: 0,
 	}
-	initValidators(collectionSchema, v.validators)
-
+	err := initValidators(collectionSchema, v.validators)
+	if err != nil {
+		log.Error("fail to initialize validator", zap.Error(err))
+	}
 	return v
 }
 
@@ -332,8 +334,10 @@ func NewJSONColumnValidator(schema *schemapb.CollectionSchema, downstream JSONCo
 		downstream: downstream,
 		rowCounter: make(map[string]int64),
 	}
-	initValidators(schema, v.validators)
-
+	err := initValidators(schema, v.validators)
+	if err != nil {
+		log.Error("fail to initialize validator", zap.Error(err))
+	}
 	return v
 }
 
@@ -390,7 +394,7 @@ func (v *JSONColumnValidator) Handle(columns map[storage.FieldID][]interface{}) 
 	return nil
 }
 
-type ImportFlushFunc func(fields map[storage.FieldID]storage.FieldData, shardNum int) error
+type ImportFlushFunc func(fields map[storage.FieldID]storage.FieldData, shardID int) error
 
 // row-based json format consumer class
 type JSONRowConsumer struct {
@@ -501,7 +505,10 @@ func NewJSONRowConsumer(collectionSchema *schemapb.CollectionSchema, idAlloc *al
 		callFlushFunc:    flushFunc,
 	}
 
-	initValidators(collectionSchema, v.validators)
+	err := initValidators(collectionSchema, v.validators)
+	if err != nil {
+		log.Error("fail to initialize validator", zap.Error(err))
+	}
 
 	v.segmentsData = make([]map[storage.FieldID]storage.FieldData, 0, shardNum)
 	for i := 0; i < int(shardNum); i++ {
@@ -682,7 +689,10 @@ func NewJSONColumnConsumer(collectionSchema *schemapb.CollectionSchema, flushFun
 		validators:       make(map[storage.FieldID]*Validator),
 		callFlushFunc:    flushFunc,
 	}
-	initValidators(collectionSchema, v.validators)
+	err := initValidators(collectionSchema, v.validators)
+	if err != nil {
+		log.Error("fail to initialize validator", zap.Error(err))
+	}
 	v.fieldsData = initSegmentData(collectionSchema)
 
 	for i := 0; i < len(collectionSchema.Fields); i++ {

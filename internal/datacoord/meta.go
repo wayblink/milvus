@@ -259,12 +259,15 @@ func (m *meta) UpdateFlushSegmentsInfo(
 	m.Lock()
 	defer m.Unlock()
 
-	log.Info("update flush segments info", zap.Int64("segmentId", segmentID),
+	log.Info("update flush segments info",
+		zap.Int64("segmentId", segmentID),
 		zap.Int("binlog", len(binlogs)),
-		zap.Int("statslog", len(statslogs)),
-		zap.Int("deltalogs", len(deltalogs)),
+		zap.Int("stats log", len(statslogs)),
+		zap.Int("delta logs", len(deltalogs)),
 		zap.Bool("flushed", flushed),
 		zap.Bool("dropped", dropped),
+		zap.Any("check points", checkpoints),
+		zap.Any("start position", startPositions),
 		zap.Bool("importing", importing))
 	segment := m.segments.GetSegment(segmentID)
 	if importing {
@@ -745,6 +748,14 @@ func (m *meta) SetSegmentCompacting(segmentID UniqueID, compacting bool) {
 	defer m.Unlock()
 
 	m.segments.SetIsCompacting(segmentID, compacting)
+}
+
+// SetSegmentIsImporting sets the importing state for a segment.
+func (m *meta) SetSegmentIsImporting(segmentID UniqueID, importing bool) {
+	m.Lock()
+	defer m.Unlock()
+
+	m.segments.SetIsImporting(segmentID, importing)
 }
 
 func (m *meta) CompleteMergeCompaction(compactionLogs []*datapb.CompactionSegmentBinlogs, result *datapb.CompactionResult) error {

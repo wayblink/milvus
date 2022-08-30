@@ -26,31 +26,35 @@ import (
 	"github.com/milvus-io/milvus/internal/util/errorutil"
 
 	"github.com/milvus-io/milvus/internal/util"
+	"time"
 
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
-
+	"github.com/golang/protobuf/proto"
 	"github.com/milvus-io/milvus/internal/common"
 	"github.com/milvus-io/milvus/internal/log"
 	"github.com/milvus-io/milvus/internal/metrics"
 	"github.com/milvus-io/milvus/internal/mq/msgstream"
 
 	"github.com/golang/protobuf/proto"
-	"github.com/milvus-io/milvus/api/commonpb"
-	"github.com/milvus-io/milvus/api/milvuspb"
+	"github.com/milvus-io/milvus/internal/proto/commonpb"
 	"github.com/milvus-io/milvus/internal/proto/datapb"
 	"github.com/milvus-io/milvus/internal/proto/internalpb"
 	"github.com/milvus-io/milvus/internal/proto/proxypb"
 	"github.com/milvus-io/milvus/internal/proto/querypb"
+	"github.com/milvus-io/milvus/internal/util"
 	"github.com/milvus-io/milvus/internal/util/crypto"
 	"github.com/milvus-io/milvus/internal/util/logutil"
 	"github.com/milvus-io/milvus/internal/util/metricsinfo"
 	"github.com/milvus-io/milvus/internal/util/timerecord"
 	"github.com/milvus-io/milvus/internal/util/trace"
 	"github.com/milvus-io/milvus/internal/util/typeutil"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 const moduleName = "Proxy"
+
+var CheckTaskPersistedInterval = 5 * time.Second
+var CheckTaskPersistedWaitLimit = 300 * time.Second
 
 // UpdateStateCode updates the state code of Proxy.
 func (node *Proxy) UpdateStateCode(code internalpb.StateCode) {
@@ -3834,10 +3838,35 @@ func (node *Proxy) Import(ctx context.Context, req *milvuspb.ImportRequest) (*mi
 		resp.Status.Reason = err.Error()
 		return resp, nil
 	}
+	log.Info("import complete, now completing import", zap.Int64s("task IDs", respFromRC.GetTasks()))
+	for _, taskID := range respFromRC.GetTasks() {
+		go node.completeImport(taskID)
+	}
 	return respFromRC, nil
 }
 
-// GetImportState checks import task state from datanode
+func (node *Proxy) completeImport(taskID int64) {
+	// First check if the import task has turned into persisted state. Returns an error status if not after retrying.
+	// This could take a few or tens of seconds.
+	getImportResp, err := node.checkImportTaskPersisted(taskID)
+	if err != nil {
+		log.Error("task not persisted yet after wait limit",
+			zap.Int64("wait limit (seconds)", int64(CheckTaskPersistedWaitLimit.Seconds())),
+			zap.Int64("task ID", taskID),
+			zap.Any("current task state", getImportResp.GetState()))
+		return
+	}
+
+	// Start background process of complete bulk load operation.
+	// Ignoring complete bulk load return status.
+	node.dataCoord.CompleteBulkLoad(node.ctx, &datapb.CompleteBulkLoadRequest{
+		TaskId:       taskID,
+		CollectionId: getImportResp.GetCollectionId(),
+		SegmentIds:   getImportResp.GetSegmentIds(),
+	})
+}
+
+// GetImportState checks import task state from RootCoord.
 func (node *Proxy) GetImportState(ctx context.Context, req *milvuspb.GetImportStateRequest) (*milvuspb.GetImportStateResponse, error) {
 	log.Info("received get import state request", zap.Int64("taskID", req.GetTask()))
 	resp := &milvuspb.GetImportStateResponse{}
@@ -4385,6 +4414,48 @@ func (node *Proxy) RefreshPolicyInfoCache(ctx context.Context, req *proxypb.Refr
 	return &commonpb.Status{
 		ErrorCode: commonpb.ErrorCode_Success,
 	}, nil
+}
+
+// checkImportTaskPersisted starts a loop to periodically check if the import task becomes ImportState_ImportPersisted state.
+// A non-nil error is returned if the import task was not in ImportState_ImportPersisted state.
+func (node *Proxy) checkImportTaskPersisted(taskID int64) (*milvuspb.GetImportStateResponse, error) {
+	ticker := time.NewTicker(CheckTaskPersistedInterval)
+	defer ticker.Stop()
+	expireTicker := time.NewTicker(CheckTaskPersistedWaitLimit)
+	defer expireTicker.Stop()
+	var getImportResp *milvuspb.GetImportStateResponse
+	for {
+		select {
+		case <-node.ctx.Done():
+			log.Info("(in check task persisted loop) context done, exiting CheckSegmentIndexReady loop")
+			return nil, errors.New("proxy node context done")
+		case <-ticker.C:
+			var err error
+			getImportResp, err = node.rootCoord.GetImportState(node.ctx, &milvuspb.GetImportStateRequest{Task: taskID})
+			if err != nil {
+				log.Warn(fmt.Sprintf("an error occurred while completing bulk load %s", err.Error()))
+				return nil, err
+			}
+			if getImportResp.GetStatus().GetErrorCode() != commonpb.ErrorCode_Success {
+				log.Warn(fmt.Sprintf("an error occurred while completing bulk load %s", getImportResp.GetStatus().GetReason()))
+				return nil, errors.New(getImportResp.GetStatus().GetReason())
+			}
+			if getImportResp.GetState() == commonpb.ImportState_ImportPersisted ||
+				getImportResp.GetState() == commonpb.ImportState_ImportCompleted {
+				log.Info("import task persisted or already complete",
+					zap.Int64("task ID", getImportResp.GetId()),
+					zap.Any("task state", getImportResp.GetState()))
+				return getImportResp, nil
+			}
+			log.Debug("checking import task state",
+				zap.Int64("task ID", getImportResp.GetId()),
+				zap.Any("current state", getImportResp.GetState()))
+		case <-expireTicker.C:
+			log.Warn("(in check task persisted loop) task still not persisted",
+				zap.Int64("task ID", taskID))
+			return nil, errors.New("task still not persisted, please try again later")
+		}
+	}
 }
 
 // SetRates limits the rates of requests.

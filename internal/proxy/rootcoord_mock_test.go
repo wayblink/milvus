@@ -111,6 +111,16 @@ type RootCoordMock struct {
 	lastTsMtx sync.Mutex
 }
 
+func (coord *RootCoordMock) CheckSegmentIndexReady(ctx context.Context, req *internalpb.CheckSegmentIndexReadyRequest) (*commonpb.Status, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (coord *RootCoordMock) GetImportFailedSegmentIDs(ctx context.Context, req *internalpb.GetImportFailedSegmentIDsRequest) (*internalpb.GetImportFailedSegmentIDsResponse, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (coord *RootCoordMock) CreateAlias(ctx context.Context, req *milvuspb.CreateAliasRequest) (*commonpb.Status, error) {
 	code := coord.state.Load().(internalpb.StateCode)
 	if code != internalpb.StateCode_Healthy {
@@ -1129,6 +1139,7 @@ type ImportFunc func(ctx context.Context, req *milvuspb.ImportRequest) (*milvusp
 type DropCollectionFunc func(ctx context.Context, request *milvuspb.DropCollectionRequest) (*commonpb.Status, error)
 
 type GetGetCredentialFunc func(ctx context.Context, req *rootcoordpb.GetCredentialRequest) (*rootcoordpb.GetCredentialResponse, error)
+type CheckSegmentIndexReadyFunc func(ctx context.Context, request *internalpb.CheckSegmentIndexReadyRequest) (*commonpb.Status, error)
 
 type mockRootCoord struct {
 	types.RootCoord
@@ -1140,6 +1151,7 @@ type mockRootCoord struct {
 	ImportFunc
 	DropCollectionFunc
 	GetGetCredentialFunc
+	CheckSegmentIndexReadyFunc
 }
 
 func (m *mockRootCoord) GetCredential(ctx context.Context, request *rootcoordpb.GetCredentialRequest) (*rootcoordpb.GetCredentialResponse, error) {
@@ -1187,6 +1199,13 @@ func (m *mockRootCoord) DropCollection(ctx context.Context, request *milvuspb.Dr
 
 func (m *mockRootCoord) ListPolicy(ctx context.Context, in *internalpb.ListPolicyRequest) (*internalpb.ListPolicyResponse, error) {
 	return &internalpb.ListPolicyResponse{}, nil
+}
+
+func (m *mockRootCoord) CheckSegmentIndexReady(ctx context.Context, req *internalpb.CheckSegmentIndexReadyRequest) (*commonpb.Status, error) {
+	if m.CheckSegmentIndexReadyFunc != nil {
+		return m.CheckSegmentIndexReadyFunc(ctx, req)
+	}
+	return nil, errors.New("mock")
 }
 
 func newMockRootCoord() *mockRootCoord {

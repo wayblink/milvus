@@ -133,7 +133,6 @@ type Server struct {
 	dnEventCh <-chan *sessionutil.SessionEvent
 	//icEventCh <-chan *sessionutil.SessionEvent
 	qcEventCh <-chan *sessionutil.SessionEvent
-	rcEventCh <-chan *sessionutil.SessionEvent
 
 	dataNodeCreator        dataNodeCreatorFunc
 	rootCoordClientCreator rootCoordCreatorFunc
@@ -463,16 +462,6 @@ func (s *Server) initServiceDiscovery() error {
 	}
 	s.qcEventCh = s.session.WatchServices(typeutil.QueryCoordRole, qcRevision+1, nil)
 
-	rcSessions, rcRevision, err := s.session.GetSessions(typeutil.RootCoordRole)
-	if err != nil {
-		log.Error("DataCoord get RootCoord session failed", zap.Error(err))
-		return err
-	}
-	for _, session := range rcSessions {
-		serverIDs = append(serverIDs, session.ServerID)
-	}
-	s.rcEventCh = s.session.WatchServices(typeutil.RootCoordRole, rcRevision+1, nil)
-
 	s.segReferManager, err = NewSegmentReferenceManager(s.kvClient, serverIDs)
 	return err
 }
@@ -756,12 +745,6 @@ func (s *Server) watchService(ctx context.Context) {
 				return
 			}
 			s.processSessionEvent(ctx, "QueryCoord", event)
-		case event, ok := <-s.rcEventCh:
-			if !ok {
-				s.stopServiceWatch()
-				return
-			}
-			s.processSessionEvent(ctx, "RootCoord", event)
 		}
 	}
 }

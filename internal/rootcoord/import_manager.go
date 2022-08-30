@@ -33,7 +33,6 @@ import (
 	"github.com/milvus-io/milvus/internal/log"
 	"github.com/milvus-io/milvus/internal/proto/datapb"
 	"github.com/milvus-io/milvus/internal/proto/rootcoordpb"
-	"github.com/milvus-io/milvus/internal/util/retry"
 	"github.com/milvus-io/milvus/internal/util/typeutil"
 	"go.uber.org/zap"
 )
@@ -82,29 +81,32 @@ type importManager struct {
 
 	startOnce sync.Once
 
-	idAllocator       func(count uint32) (typeutil.UniqueID, typeutil.UniqueID, error)
-	callImportService func(ctx context.Context, req *datapb.ImportTaskRequest) *datapb.ImportTaskResponse
-	getCollectionName func(collID, partitionID typeutil.UniqueID) (string, string, error)
+	idAllocator            func(count uint32) (typeutil.UniqueID, typeutil.UniqueID, error)
+	callImportService      func(ctx context.Context, req *datapb.ImportTaskRequest) (*datapb.ImportTaskResponse, error)
+	getCollectionName      func(collID, partitionID typeutil.UniqueID) (string, string, error)
+	callUnsetIsImportState func(taskID int64) error
 }
 
 // newImportManager helper function to create a importManager
 func newImportManager(ctx context.Context, client kv.MetaKv,
 	idAlloc func(count uint32) (typeutil.UniqueID, typeutil.UniqueID, error),
-	importService func(ctx context.Context, req *datapb.ImportTaskRequest) *datapb.ImportTaskResponse,
+	importService func(ctx context.Context, req *datapb.ImportTaskRequest) (*datapb.ImportTaskResponse, error),
+	unsetIsImportState func(taskID int64) error,
 	getCollectionName func(collID, partitionID typeutil.UniqueID) (string, string, error)) *importManager {
 	mgr := &importManager{
-		ctx:               ctx,
-		taskStore:         client,
-		pendingTasks:      make([]*datapb.ImportTaskInfo, 0, MaxPendingCount), // currently task queue max size is 32
-		workingTasks:      make(map[int64]*datapb.ImportTaskInfo),
-		busyNodes:         make(map[int64]bool),
-		pendingLock:       sync.RWMutex{},
-		workingLock:       sync.RWMutex{},
-		busyNodesLock:     sync.RWMutex{},
-		lastReqID:         0,
-		idAllocator:       idAlloc,
-		callImportService: importService,
-		getCollectionName: getCollectionName,
+		ctx:                    ctx,
+		taskStore:              client,
+		pendingTasks:           make([]*datapb.ImportTaskInfo, 0, MaxPendingCount), // currently task queue max size is 32
+		workingTasks:           make(map[int64]*datapb.ImportTaskInfo),
+		busyNodes:              make(map[int64]bool),
+		pendingLock:            sync.RWMutex{},
+		workingLock:            sync.RWMutex{},
+		busyNodesLock:          sync.RWMutex{},
+		lastReqID:              0,
+		idAllocator:            idAlloc,
+		callImportService:      importService,
+		callUnsetIsImportState: unsetIsImportState,
+		getCollectionName:      getCollectionName,
 	}
 	return mgr
 }
@@ -112,9 +114,14 @@ func newImportManager(ctx context.Context, client kv.MetaKv,
 func (m *importManager) init(ctx context.Context) {
 	m.startOnce.Do(func() {
 		// Read tasks from Etcd and save them as pending tasks or working tasks.
-		m.loadFromTaskStore()
+		if err := m.loadFromTaskStore(); err != nil {
+			log.Error("importManager init failed, read tasks from Etcd failed, about to panic")
+			panic(err)
+		}
 		// Send out tasks to dataCoord.
-		m.sendOutTasks(ctx)
+		if err := m.sendOutTasks(ctx); err != nil {
+			log.Error("importManager init failed, send out tasks to dataCoord failed")
+		}
 	})
 }
 
@@ -129,13 +136,19 @@ func (m *importManager) sendOutTasksLoop(wg *sync.WaitGroup) {
 			log.Debug("import manager context done, exit check sendOutTasksLoop")
 			return
 		case <-ticker.C:
-			m.sendOutTasks(m.ctx)
+			if err := m.sendOutTasks(m.ctx); err != nil {
+				log.Error("importManager sendOutTasksLoop fail to send out tasks")
+			}
 		}
 	}
 }
 
-// expireOldTasksLoop starts a loop that checks and expires old tasks every `ImportTaskExpiration` seconds.
-func (m *importManager) expireOldTasksLoop(wg *sync.WaitGroup, releaseLockFunc func(context.Context, int64, []int64) error) {
+// expireOldTasksLoop starts a loop that checks and expires old tasks every `expireOldTasksInterval` seconds.
+// There are two types of tasks to clean up:
+// (1) pending tasks or working tasks that existed for over `ImportTaskExpiration` seconds, these tasks will be
+// removed from memory.
+// (2) any import tasks that has been created over `ImportTaskRetention` seconds ago, these tasks will be removed from Etcd.
+func (m *importManager) expireOldTasksLoop(wg *sync.WaitGroup) {
 	defer wg.Done()
 	ticker := time.NewTicker(time.Duration(expireOldTasksInterval) * time.Millisecond)
 	defer ticker.Stop()
@@ -145,9 +158,8 @@ func (m *importManager) expireOldTasksLoop(wg *sync.WaitGroup, releaseLockFunc f
 			log.Info("(in loop) import manager context done, exit expireOldTasksLoop")
 			return
 		case <-ticker.C:
-			log.Debug("(in loop) starting expiring old tasks...",
-				zap.Duration("cleaning up interval", time.Duration(expireOldTasksInterval)*time.Millisecond))
-			m.expireOldTasks(releaseLockFunc)
+			m.expireOldTasksFromMem()
+			m.expireOldTasksFromEtcd()
 		}
 	}
 }
@@ -161,6 +173,7 @@ func (m *importManager) sendOutTasks(ctx context.Context) error {
 
 	// Trigger Import() action to DataCoord.
 	for len(m.pendingTasks) > 0 {
+		log.Debug("try to send out pending tasks", zap.Int("task_number", len(m.pendingTasks)))
 		task := m.pendingTasks[0]
 		// TODO: Use ImportTaskInfo directly.
 		it := &datapb.ImportTask{
@@ -185,7 +198,7 @@ func (m *importManager) sendOutTasks(ctx context.Context) error {
 		}
 
 		// Send import task to dataCoord, which will then distribute the import task to dataNode.
-		resp := m.callImportService(ctx, &datapb.ImportTaskRequest{
+		resp, err := m.callImportService(ctx, &datapb.ImportTaskRequest{
 			ImportTask:   it,
 			WorkingNodes: busyNodeList,
 		})
@@ -196,6 +209,10 @@ func (m *importManager) sendOutTasks(ctx context.Context) error {
 				zap.String("cause", resp.GetStatus().GetReason()))
 			break
 		}
+		if err != nil {
+			log.Error("import task get error", zap.Error(err))
+			break
+		}
 
 		// Successfully assigned dataNode for the import task. Add task to working task list and update task store.
 		task.DatanodeId = resp.GetDatanodeId()
@@ -204,18 +221,25 @@ func (m *importManager) sendOutTasks(ctx context.Context) error {
 			zap.Int64("dataNode ID", task.GetDatanodeId()))
 		// Add new working dataNode to busyNodes.
 		m.busyNodes[resp.GetDatanodeId()] = true
-
-		func() {
+		err = func() error {
 			m.workingLock.Lock()
 			defer m.workingLock.Unlock()
-
 			log.Debug("import task added as working task", zap.Int64("task ID", it.TaskId))
-			task.State.StateCode = commonpb.ImportState_ImportPending
+			task.State.StateCode = commonpb.ImportState_ImportStarted
+			// first update the import task into meta store and then put it into working tasks
+			if err := m.persistTaskInfo(task); err != nil {
+				log.Error("failed to update import task",
+					zap.Int64("task ID", task.GetId()),
+					zap.Error(err))
+				return err
+			}
 			m.workingTasks[task.GetId()] = task
-			m.updateImportTaskStore(task)
+			return nil
 		}()
-
-		// Erase this task from head of pending list.
+		if err != nil {
+			return err
+		}
+		// Remove this task from head of pending list.
 		m.pendingTasks = append(m.pendingTasks[:0], m.pendingTasks[1:]...)
 	}
 
@@ -254,7 +278,7 @@ func (m *importManager) importJob(ctx context.Context, req *milvuspb.ImportReque
 		zap.String("collection name", req.GetCollectionName()),
 		zap.Int64("collection ID", cID),
 		zap.Int64("partition ID", pID))
-	err := func() (err error) {
+	err := func() error {
 		m.pendingLock.Lock()
 		defer m.pendingLock.Unlock()
 
@@ -268,7 +292,7 @@ func (m *importManager) importJob(ctx context.Context, req *milvuspb.ImportReque
 
 		// task queue size has a limit, return error if import request contains too many data files, and skip entire job
 		if capacity-length < taskCount {
-			err = fmt.Errorf("import task queue max size is %v, currently there are %v tasks is pending. Not able to execute this request with %v tasks", capacity, length, taskCount)
+			err := fmt.Errorf("import task queue max size is %v, currently there are %v tasks is pending. Not able to execute this request with %v tasks", capacity, length, taskCount)
 			log.Error(err.Error())
 			return err
 		}
@@ -302,16 +326,26 @@ func (m *importManager) importJob(ctx context.Context, req *milvuspb.ImportReque
 					State: &datapb.ImportTaskState{
 						StateCode: commonpb.ImportState_ImportPending,
 					},
-					DataQueryable: false,
-					DataIndexed:   false,
 				}
+
+				// Here no need to check error returned by setCollectionPartitionName(),
+				// since here we always return task list to client no matter something missed.
+				// We make the method setCollectionPartitionName() returns error
+				// because we need to make sure coverage all the code branch in unittest case.
+				m.setCollectionPartitionName(cID, pID, newTask)
 				resp.Tasks = append(resp.Tasks, newTask.GetId())
 				taskList[i] = newTask.GetId()
-				log.Info("new task created as pending task", zap.Int64("task ID", newTask.GetId()))
+				log.Info("new task created as pending task",
+					zap.Int64("task ID", newTask.GetId()))
+				if err := m.persistTaskInfo(newTask); err != nil {
+					log.Error("failed to update import task",
+						zap.Int64("task ID", newTask.GetId()),
+						zap.Error(err))
+					return err
+				}
 				m.pendingTasks = append(m.pendingTasks, newTask)
-				m.storeImportTask(newTask)
 			}
-			log.Info("row-based import request processed", zap.Any("taskIDs", taskList))
+			log.Info("row-based import request processed", zap.Any("task IDs", taskList))
 		} else {
 			// TODO: Merge duplicated code :(
 			// for column-based, all files is a task
@@ -331,14 +365,24 @@ func (m *importManager) importJob(ctx context.Context, req *milvuspb.ImportReque
 				State: &datapb.ImportTaskState{
 					StateCode: commonpb.ImportState_ImportPending,
 				},
-				DataQueryable: false,
-				DataIndexed:   false,
 			}
+			// Here no need to check error returned by setCollectionPartitionName(),
+			// since here we always return task list to client no matter something missed.
+			// We make the method setCollectionPartitionName() returns error
+			// because we need to make sure coverage all the code branch in unittest case.
+			m.setCollectionPartitionName(cID, pID, newTask)
 			resp.Tasks = append(resp.Tasks, newTask.GetId())
-			log.Info("new task created as pending task", zap.Int64("task ID", newTask.GetId()))
+			log.Info("new task created as pending task",
+				zap.Int64("task ID", newTask.GetId()))
+			if err := m.persistTaskInfo(newTask); err != nil {
+				log.Error("failed to update import task",
+					zap.Int64("task ID", newTask.GetId()),
+					zap.Error(err))
+				return err
+			}
 			m.pendingTasks = append(m.pendingTasks, newTask)
-			m.storeImportTask(newTask)
-			log.Info("column-based import request processed", zap.Int64("taskID", newTask.GetId()))
+			log.Info("column-based import request processed",
+				zap.Int64("task ID", newTask.GetId()))
 		}
 		return nil
 	}()
@@ -350,30 +394,10 @@ func (m *importManager) importJob(ctx context.Context, req *milvuspb.ImportReque
 			},
 		}
 	}
-	m.sendOutTasks(ctx)
+	if sendOutTasksErr := m.sendOutTasks(ctx); sendOutTasksErr != nil {
+		log.Error("fail to send out tasks", zap.Error(sendOutTasksErr))
+	}
 	return resp
-}
-
-// setTaskDataQueryable sets task's DataQueryable flag to true.
-func (m *importManager) setTaskDataQueryable(taskID int64) {
-	m.workingLock.Lock()
-	defer m.workingLock.Unlock()
-	if v, ok := m.workingTasks[taskID]; ok {
-		v.DataQueryable = true
-	} else {
-		log.Error("task ID not found", zap.Int64("task ID", taskID))
-	}
-}
-
-// setTaskDataIndexed sets task's DataIndexed flag to true.
-func (m *importManager) setTaskDataIndexed(taskID int64) {
-	m.workingLock.Lock()
-	defer m.workingLock.Unlock()
-	if v, ok := m.workingTasks[taskID]; ok {
-		v.DataIndexed = true
-	} else {
-		log.Error("task ID not found", zap.Int64("task ID", taskID))
-	}
 }
 
 // updateTaskState updates the task's state in in-memory working tasks list and in task store, given ImportResult
@@ -396,18 +420,26 @@ func (m *importManager) updateTaskState(ir *rootcoordpb.ImportResult) (*datapb.I
 			return nil, errors.New("trying to update an already failed task " + strconv.FormatInt(ir.GetTaskId(), 10))
 		}
 		found = true
-		v.State.StateCode = ir.GetState()
-		v.State.Segments = ir.GetSegments()
-		v.State.RowCount = ir.GetRowCount()
-		v.State.RowIds = ir.AutoIds
+		// Meta persist should be done before memory objs change.
+		toPersistImportTaskInfo := cloneImportTaskInfo(v)
+		toPersistImportTaskInfo.State.StateCode = ir.GetState()
+		toPersistImportTaskInfo.State.Segments = ir.GetSegments()
+		toPersistImportTaskInfo.State.RowCount = ir.GetRowCount()
+		toPersistImportTaskInfo.State.RowIds = ir.AutoIds
 		for _, kv := range ir.GetInfos() {
 			if kv.GetKey() == FailedReason {
-				v.State.ErrorMessage = kv.GetValue()
+				toPersistImportTaskInfo.State.ErrorMessage = kv.GetValue()
 				break
 			}
 		}
 		// Update task in task store.
-		m.updateImportTaskStore(v)
+		if err := m.persistTaskInfo(toPersistImportTaskInfo); err != nil {
+			log.Error("failed to update import task",
+				zap.Int64("task ID", v.GetId()),
+				zap.Error(err))
+			return nil, err
+		}
+		m.workingTasks[ir.GetTaskId()] = toPersistImportTaskInfo
 	}
 
 	if !found {
@@ -417,36 +449,78 @@ func (m *importManager) updateTaskState(ir *rootcoordpb.ImportResult) (*datapb.I
 	return v, nil
 }
 
-func (m *importManager) getCollectionPartitionName(task *datapb.ImportTaskInfo, resp *milvuspb.GetImportStateResponse) {
-	if m.getCollectionName != nil {
-		colName, partName, err := m.getCollectionName(task.GetCollectionId(), task.GetPartitionId())
-		if err == nil {
-			resp.Infos = append(resp.Infos, &commonpb.KeyValuePair{Key: CollectionName, Value: colName})
-			resp.Infos = append(resp.Infos, &commonpb.KeyValuePair{Key: PartitionName, Value: partName})
-		}
-	}
-}
+// setCompleteImportState set the task state as `ImportState_ImportCompleted`.
+func (m *importManager) setCompleteImportState(taskID int64) error {
+	log.Debug("trying to set import task as ImportState_ImportCompleted", zap.Int64("taskID", taskID))
 
-// appendTaskSegments updates the task's segment lists by adding `segIDs` to it.
-func (m *importManager) appendTaskSegments(taskID int64, segIDs []int64) error {
-	log.Debug("import manager appending task segments",
-		zap.Int64("task ID", taskID),
-		zap.Int64s("segment ID", segIDs))
-
+	found := false
 	var v *datapb.ImportTaskInfo
 	m.workingLock.Lock()
+	defer m.workingLock.Unlock()
 	ok := false
 	if v, ok = m.workingTasks[taskID]; ok {
-		v.State.Segments = append(v.GetState().GetSegments(), segIDs...)
+		// If the task has already been marked failed. Prevent further state updating and return an error.
+		if v.GetState().GetStateCode() == commonpb.ImportState_ImportFailed {
+			return errors.New("trying to complete an already failed task " + strconv.FormatInt(taskID, 10))
+		}
+		found = true
+		// Meta persist should be done before memory objs change.
+		toPersistImportTaskInfo := cloneImportTaskInfo(v)
+		toPersistImportTaskInfo.State.StateCode = commonpb.ImportState_ImportCompleted
 		// Update task in task store.
-		m.updateImportTaskStore(v)
+		if err := m.persistTaskInfo(toPersistImportTaskInfo); err != nil {
+			return err
+		}
+		m.workingTasks[taskID] = toPersistImportTaskInfo
 	}
-	m.workingLock.Unlock()
 
-	if !ok {
-		log.Debug("import manager appending task segments failed", zap.Int64("task ID", taskID))
-		return errors.New("failed to update import task, ID not found: " + strconv.FormatInt(taskID, 10))
+	if !found {
+		return errors.New("failed to complete import task, ID not found: " + strconv.FormatInt(taskID, 10))
 	}
+	return nil
+}
+
+func (m *importManager) setCollectionPartitionName(colID, partID int64, task *datapb.ImportTaskInfo) error {
+	if m.getCollectionName != nil {
+		colName, partName, err := m.getCollectionName(colID, partID)
+		if err == nil {
+			task.CollectionName = colName
+			task.PartitionName = partName
+			return nil
+		} else {
+			log.Error("failed to setCollectionPartitionName",
+				zap.Int64("collection ID", colID),
+				zap.Int64("partition ID", partID),
+				zap.Error(err))
+		}
+	}
+	return errors.New("failed to setCollectionPartitionName for import task")
+}
+
+func (m *importManager) copyTaskInfo(input *datapb.ImportTaskInfo, output *milvuspb.GetImportStateResponse) error {
+	if input == nil || output == nil {
+		log.Error("ImportTaskInfo or ImprtStateResponse object should not be null")
+		return errors.New("ImportTaskInfo or ImprtStateResponse object should not be null")
+	}
+
+	output.Status = &commonpb.Status{
+		ErrorCode: commonpb.ErrorCode_Success,
+	}
+	output.Id = input.GetId()
+	output.CollectionId = input.GetCollectionId()
+	output.State = input.GetState().GetStateCode()
+	output.RowCount = input.GetState().GetRowCount()
+	output.IdList = input.GetState().GetRowIds()
+	output.SegmentIds = input.GetState().GetSegments()
+	output.CreateTs = input.GetCreateTs()
+	output.Infos = append(output.Infos, &commonpb.KeyValuePair{Key: Files, Value: strings.Join(input.GetFiles(), ",")})
+	output.Infos = append(output.Infos, &commonpb.KeyValuePair{Key: CollectionName, Value: input.GetCollectionName()})
+	output.Infos = append(output.Infos, &commonpb.KeyValuePair{Key: PartitionName, Value: input.GetPartitionName()})
+	output.Infos = append(output.Infos, &commonpb.KeyValuePair{
+		Key:   FailedReason,
+		Value: input.GetState().GetErrorMessage(),
+	})
+
 	return nil
 }
 
@@ -464,21 +538,20 @@ func (m *importManager) getTaskState(tID int64) *milvuspb.GetImportStateResponse
 	found := false
 	func() {
 		m.pendingLock.Lock()
-		defer m.pendingLock.Unlock()
 		for _, t := range m.pendingTasks {
 			if tID == t.Id {
-				resp.Status = &commonpb.Status{
-					ErrorCode: commonpb.ErrorCode_Success,
-				}
-				resp.Id = tID
-				resp.State = commonpb.ImportState_ImportPending
-				resp.Infos = append(resp.Infos, &commonpb.KeyValuePair{Key: Files, Value: strings.Join(t.GetFiles(), ",")})
-				resp.DataQueryable = t.GetDataQueryable()
-				resp.DataIndexed = t.GetDataIndexed()
-				m.getCollectionPartitionName(t, resp)
+				m.copyTaskInfo(t, resp)
+
+				// Release lock early to prevent deadlock.
+				m.pendingLock.Unlock()
+
 				found = true
 				break
 			}
+		}
+		if !found {
+			// Release the lock.
+			m.pendingLock.Unlock()
 		}
 	}()
 	if found {
@@ -487,24 +560,15 @@ func (m *importManager) getTaskState(tID int64) *milvuspb.GetImportStateResponse
 
 	func() {
 		m.workingLock.Lock()
-		defer m.workingLock.Unlock()
 		if v, ok := m.workingTasks[tID]; ok {
 			found = true
-			resp.Status = &commonpb.Status{
-				ErrorCode: commonpb.ErrorCode_Success,
-			}
-			resp.Id = tID
-			resp.State = v.GetState().GetStateCode()
-			resp.RowCount = v.GetState().GetRowCount()
-			resp.IdList = v.GetState().GetRowIds()
-			resp.Infos = append(resp.Infos, &commonpb.KeyValuePair{Key: Files, Value: strings.Join(v.GetFiles(), ",")})
-			resp.Infos = append(resp.Infos, &commonpb.KeyValuePair{
-				Key:   FailedReason,
-				Value: v.GetState().GetErrorMessage(),
-			})
-			resp.DataQueryable = v.GetDataQueryable()
-			resp.DataIndexed = v.GetDataIndexed()
-			m.getCollectionPartitionName(v, resp)
+			m.copyTaskInfo(v, resp)
+
+			// Release lock early to prevent deadlock.
+			m.workingLock.Unlock()
+		}
+		if !found {
+			m.workingLock.Unlock()
 		}
 	}()
 	if found {
@@ -545,71 +609,57 @@ func (m *importManager) loadFromTaskStore() error {
 	return nil
 }
 
-// storeImportTask signs a lease and saves import task info into Etcd with this lease.
-func (m *importManager) storeImportTask(task *datapb.ImportTaskInfo) error {
-	log.Debug("saving import task to Etcd", zap.Int64("task ID", task.GetId()))
-	// Sign a lease. Tasks will be stored for at least `ImportTaskRetention` seconds.
-	leaseID, err := m.taskStore.Grant(int64(Params.RootCoordCfg.ImportTaskRetention))
-	if err != nil {
-		log.Error("failed to grant lease from Etcd for data import",
-			zap.Int64("task ID", task.GetId()),
-			zap.Error(err))
-		return err
-	}
-	log.Debug("lease granted for task", zap.Int64("task ID", task.GetId()))
-	var taskInfo []byte
-	if taskInfo, err = proto.Marshal(task); err != nil {
-		log.Error("failed to marshall task proto", zap.Int64("task ID", task.GetId()), zap.Error(err))
-		return err
-	} else if err = m.taskStore.SaveWithLease(BuildImportTaskKey(task.GetId()), string(taskInfo), leaseID); err != nil {
-		log.Error("failed to save import task info into Etcd",
-			zap.Int64("task ID", task.GetId()),
-			zap.Error(err))
-		return err
-	}
-	log.Debug("task info successfully saved", zap.Int64("task ID", task.GetId()))
-	return nil
-}
-
-// updateImportTaskStore updates the task info in Etcd according to task ID. It won't change the lease on the key.
-func (m *importManager) updateImportTaskStore(ti *datapb.ImportTaskInfo) error {
-	log.Debug("updating import task info in Etcd", zap.Int64("Task ID", ti.GetId()))
+// persistTaskInfo stores or updates the import task info in Etcd.
+func (m *importManager) persistTaskInfo(ti *datapb.ImportTaskInfo) error {
+	log.Info("updating import task info in Etcd", zap.Int64("task ID", ti.GetId()))
 	if taskInfo, err := proto.Marshal(ti); err != nil {
-		log.Error("failed to marshall task info proto", zap.Int64("Task ID", ti.GetId()), zap.Error(err))
+		log.Error("failed to marshall task info proto",
+			zap.Int64("task ID", ti.GetId()),
+			zap.Error(err))
 		return err
-	} else if err = m.taskStore.SaveWithIgnoreLease(BuildImportTaskKey(ti.GetId()), string(taskInfo)); err != nil {
-		log.Error("failed to update import task info info in Etcd", zap.Int64("Task ID", ti.GetId()), zap.Error(err))
+	} else if err = m.taskStore.Save(BuildImportTaskKey(ti.GetId()), string(taskInfo)); err != nil {
+		log.Error("failed to update import task info in Etcd",
+			zap.Int64("task ID", ti.GetId()),
+			zap.Error(err))
 		return err
 	}
-	log.Debug("task info successfully updated in Etcd", zap.Int64("Task ID", ti.GetId()))
 	return nil
 }
 
-// expireOldTasks marks expires tasks as failed.
-func (m *importManager) expireOldTasks(releaseLockFunc func(context.Context, int64, []int64) error) {
+// yieldTaskInfo removes the task info from Etcd.
+func (m *importManager) yieldTaskInfo(tID int64) error {
+	log.Info("removing import task info from Etcd",
+		zap.Int64("task ID", tID))
+	if err := m.taskStore.Remove(BuildImportTaskKey(tID)); err != nil {
+		log.Error("failed to update import task info in Etcd",
+			zap.Int64("task ID", tID),
+			zap.Error(err))
+		return err
+	}
+	return nil
+}
+
+// expireOldTasks removes expired tasks from memory.
+func (m *importManager) expireOldTasksFromMem() {
 	// Expire old pending tasks, if any.
 	func() {
 		m.pendingLock.Lock()
 		defer m.pendingLock.Unlock()
+		index := 0
 		for _, t := range m.pendingTasks {
 			if taskExpired(t) {
-				// Mark this expired task as failed.
 				log.Info("a pending task has expired", zap.Int64("task ID", t.GetId()))
-				t.State.StateCode = commonpb.ImportState_ImportFailed
-				t.State.ErrorMessage = taskExpiredMsgPrefix +
-					(time.Duration(Params.RootCoordCfg.ImportTaskExpiration*1000) * time.Millisecond).String()
-				log.Info("releasing seg ref locks on expired import task",
-					zap.Int64s("segment IDs", t.GetState().GetSegments()))
-				err := retry.Do(m.ctx, func() error {
-					return releaseLockFunc(m.ctx, t.GetId(), t.GetState().GetSegments())
-				}, retry.Attempts(100))
-				if err != nil {
-					log.Error("failed to release lock, about to panic!")
-					panic(err)
-				}
-				m.updateImportTaskStore(t)
+			} else {
+				// Only keep non-expired tasks in memory.
+				m.pendingTasks[index] = t
+				index++
 			}
 		}
+		// To prevent memory leak.
+		for i := index; i < len(m.pendingTasks); i++ {
+			m.pendingTasks[i] = nil
+		}
+		m.pendingTasks = m.pendingTasks[:index]
 	}()
 	// Expire old working tasks.
 	func() {
@@ -617,24 +667,49 @@ func (m *importManager) expireOldTasks(releaseLockFunc func(context.Context, int
 		defer m.workingLock.Unlock()
 		for _, v := range m.workingTasks {
 			if taskExpired(v) {
-				// Mark this expired task as failed.
 				log.Info("a working task has expired", zap.Int64("task ID", v.GetId()))
-				v.State.StateCode = commonpb.ImportState_ImportFailed
-				v.State.ErrorMessage = taskExpiredMsgPrefix +
-					(time.Duration(Params.RootCoordCfg.ImportTaskExpiration*1000) * time.Millisecond).String()
-				log.Info("releasing seg ref locks on expired import task",
-					zap.Int64s("segment IDs", v.GetState().GetSegments()))
-				err := retry.Do(m.ctx, func() error {
-					return releaseLockFunc(m.ctx, v.GetId(), v.GetState().GetSegments())
-				}, retry.Attempts(100))
-				if err != nil {
-					log.Error("failed to release lock, about to panic!")
-					panic(err)
-				}
-				m.updateImportTaskStore(v)
+				// Unset `isImport` flag of the bulk load segments.
+				taskID := v.GetId()
+				m.workingLock.Unlock()
+				m.callUnsetIsImportState(taskID)
+				// Re-lock.
+				m.workingLock.Lock()
+				// Remove this task from memory.
+				delete(m.workingTasks, v.GetId())
 			}
 		}
 	}()
+}
+
+// expireOldTasksFromEtcd removes tasks from Etcd that are over `ImportTaskRetention` seconds old.
+func (m *importManager) expireOldTasksFromEtcd() {
+	var vs []string
+	var err error
+	// Collect all import task records.
+	if _, vs, err = m.taskStore.LoadWithPrefix(Params.RootCoordCfg.ImportTaskSubPath); err != nil {
+		log.Error("failed to load import tasks from Etcd during task cleanup")
+		return
+	}
+	// Loop through all import tasks in Etcd and look for the ones that have passed retention period.
+	for _, val := range vs {
+		ti := &datapb.ImportTaskInfo{}
+		if err := proto.Unmarshal([]byte(val), ti); err != nil {
+			log.Error("failed to unmarshal proto", zap.String("taskInfo", val), zap.Error(err))
+			// Ignore bad protos. This is just a cleanup task, so we are not panicking.
+			continue
+		}
+		if taskPastRetention(ti) {
+			log.Info("an import task has passed retention period and will be removed from Etcd",
+				zap.Int64("task ID", ti.GetId()))
+			// Unset `isImport` flag of the bulk load segments.
+			m.callUnsetIsImportState(ti.GetId())
+			if err = m.yieldTaskInfo(ti.GetId()); err != nil {
+				log.Error("failed to remove import task from Etcd",
+					zap.Int64("task ID", ti.GetId()),
+					zap.Error(err))
+			}
+		}
+	}
 }
 
 func rearrangeTasks(tasks []*milvuspb.GetImportStateResponse) {
@@ -650,18 +725,14 @@ func (m *importManager) listAllTasks() []*milvuspb.GetImportStateResponse {
 		m.pendingLock.Lock()
 		defer m.pendingLock.Unlock()
 		for _, t := range m.pendingTasks {
-			resp := &milvuspb.GetImportStateResponse{
-				Status: &commonpb.Status{
-					ErrorCode: commonpb.ErrorCode_Success,
-				},
-				Infos:         make([]*commonpb.KeyValuePair, 0),
-				Id:            t.GetId(),
-				State:         commonpb.ImportState_ImportPending,
-				DataQueryable: t.GetDataQueryable(),
-				DataIndexed:   t.GetDataIndexed(),
-			}
-			resp.Infos = append(resp.Infos, &commonpb.KeyValuePair{Key: Files, Value: strings.Join(t.GetFiles(), ",")})
-			m.getCollectionPartitionName(t, resp)
+			resp := &milvuspb.GetImportStateResponse{}
+			m.copyTaskInfo(t, resp)
+
+			// Release lock early.
+			m.pendingLock.Unlock()
+
+			// Re-lock.
+			m.pendingLock.Lock()
 			tasks = append(tasks, resp)
 		}
 		log.Info("tasks in pending list", zap.Int("count", len(m.pendingTasks)))
@@ -671,24 +742,14 @@ func (m *importManager) listAllTasks() []*milvuspb.GetImportStateResponse {
 		m.workingLock.Lock()
 		defer m.workingLock.Unlock()
 		for _, v := range m.workingTasks {
-			resp := &milvuspb.GetImportStateResponse{
-				Status: &commonpb.Status{
-					ErrorCode: commonpb.ErrorCode_Success,
-				},
-				Infos:         make([]*commonpb.KeyValuePair, 0),
-				Id:            v.GetId(),
-				State:         v.GetState().GetStateCode(),
-				RowCount:      v.GetState().GetRowCount(),
-				IdList:        v.GetState().GetRowIds(),
-				DataQueryable: v.GetDataQueryable(),
-				DataIndexed:   v.GetDataIndexed(),
-			}
-			resp.Infos = append(resp.Infos, &commonpb.KeyValuePair{Key: Files, Value: strings.Join(v.GetFiles(), ",")})
-			resp.Infos = append(resp.Infos, &commonpb.KeyValuePair{
-				Key:   FailedReason,
-				Value: v.GetState().GetErrorMessage(),
-			})
-			m.getCollectionPartitionName(v, resp)
+			resp := &milvuspb.GetImportStateResponse{}
+			m.copyTaskInfo(v, resp)
+
+			// Release lock early.
+			m.workingLock.Unlock()
+
+			// Re-lock.
+			m.workingLock.Lock()
 			tasks = append(tasks, resp)
 		}
 		log.Info("tasks in working list", zap.Int("count", len(m.workingTasks)))
@@ -703,10 +764,49 @@ func BuildImportTaskKey(taskID int64) string {
 	return fmt.Sprintf("%s%s%d", Params.RootCoordCfg.ImportTaskSubPath, delimiter, taskID)
 }
 
-// taskExpired returns true if the task is considered expired.
+// taskExpired returns true if the in-mem task is considered expired.
 func taskExpired(ti *datapb.ImportTaskInfo) bool {
-	return ti.GetState().GetStateCode() != commonpb.ImportState_ImportFailed &&
-		ti.GetState().GetStateCode() != commonpb.ImportState_ImportPersisted &&
-		ti.GetState().GetStateCode() != commonpb.ImportState_ImportCompleted &&
-		Params.RootCoordCfg.ImportTaskExpiration <= float64(time.Now().Unix()-ti.GetCreateTs())
+	return Params.RootCoordCfg.ImportTaskExpiration <= float64(time.Now().Unix()-ti.GetCreateTs())
+}
+
+// taskPastRetention returns true if the task is considered expired in Etcd.
+func taskPastRetention(ti *datapb.ImportTaskInfo) bool {
+	return Params.RootCoordCfg.ImportTaskRetention <= float64(time.Now().Unix()-ti.GetCreateTs())
+}
+
+func (m *importManager) GetImportFailedSegmentIDs() ([]int64, error) {
+	ret := make([]int64, 0)
+	m.pendingLock.RLock()
+	for _, importTaskInfo := range m.pendingTasks {
+		if importTaskInfo.State.StateCode == commonpb.ImportState_ImportFailed {
+			ret = append(ret, importTaskInfo.State.Segments...)
+		}
+	}
+	m.pendingLock.RUnlock()
+	m.workingLock.RLock()
+	for _, importTaskInfo := range m.workingTasks {
+		if importTaskInfo.State.StateCode == commonpb.ImportState_ImportFailed {
+			ret = append(ret, importTaskInfo.State.Segments...)
+		}
+	}
+	m.workingLock.RUnlock()
+	return ret, nil
+}
+
+func cloneImportTaskInfo(taskInfo *datapb.ImportTaskInfo) *datapb.ImportTaskInfo {
+	cloned := &datapb.ImportTaskInfo{
+		Id:             taskInfo.GetId(),
+		DatanodeId:     taskInfo.GetDatanodeId(),
+		CollectionId:   taskInfo.GetCollectionId(),
+		PartitionId:    taskInfo.GetPartitionId(),
+		ChannelNames:   taskInfo.GetChannelNames(),
+		Bucket:         taskInfo.GetBucket(),
+		RowBased:       taskInfo.GetRowBased(),
+		Files:          taskInfo.GetFiles(),
+		CreateTs:       taskInfo.GetCreateTs(),
+		State:          taskInfo.GetState(),
+		CollectionName: taskInfo.GetCollectionName(),
+		PartitionName:  taskInfo.GetPartitionName(),
+	}
+	return cloned
 }

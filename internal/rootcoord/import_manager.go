@@ -487,12 +487,11 @@ func (m *importManager) setCollectionPartitionName(colID, partID int64, task *da
 			task.CollectionName = colName
 			task.PartitionName = partName
 			return nil
-		} else {
-			log.Error("failed to setCollectionPartitionName",
-				zap.Int64("collection ID", colID),
-				zap.Int64("partition ID", partID),
-				zap.Error(err))
 		}
+		log.Error("failed to setCollectionPartitionName",
+			zap.Int64("collection ID", colID),
+			zap.Int64("partition ID", partID),
+			zap.Error(err))
 	}
 	return errors.New("failed to setCollectionPartitionName for import task")
 }

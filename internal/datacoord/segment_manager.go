@@ -26,7 +26,6 @@ import (
 	"github.com/milvus-io/milvus/api/commonpb"
 	"github.com/milvus-io/milvus/internal/log"
 	"github.com/milvus-io/milvus/internal/proto/datapb"
-	"github.com/milvus-io/milvus/internal/proto/rootcoordpb"
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/trace"
 	"github.com/milvus-io/milvus/internal/util/tsoutil"
@@ -302,25 +301,6 @@ func (s *SegmentManager) allocSegmentForImport(ctx context.Context, collectionID
 		log.Error("RootCoord client not set")
 		return nil, errors.New("RootCoord client not set")
 	}
-	status, err := s.rcc.ReportImport(context.Background(), &rootcoordpb.ImportResult{
-		Status: &commonpb.Status{
-			ErrorCode: commonpb.ErrorCode_Success,
-		},
-		TaskId:     importTaskID,
-		DatanodeId: Params.DataNodeCfg.GetNodeID(),
-		State:      commonpb.ImportState_ImportAllocSegment,
-		Segments:   []int64{segment.GetID()},
-	})
-	if err != nil {
-		log.Error("failed to report import on new segment", zap.Error(err))
-		return nil, err
-	}
-	if status.GetErrorCode() != commonpb.ErrorCode_Success {
-		log.Error("failed to report import on new segment", zap.String("reason", status.GetReason()))
-		return nil, fmt.Errorf("failed to report import on new segment: %s", status.GetReason())
-	}
-	log.Info("successfully report import the new segment",
-		zap.Int64("segment ID", segment.GetID()))
 
 	allocation.ExpireTime = expireTs
 	allocation.SegmentID = segment.GetID()

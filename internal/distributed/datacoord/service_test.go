@@ -50,7 +50,7 @@ type MockDataCoord struct {
 	partStatResp              *datapb.GetPartitionStatisticsResponse
 	recoverResp               *datapb.GetRecoveryInfoResponse
 	flushSegResp              *datapb.GetFlushedSegmentsResponse
-	configResp           *internalpb.ShowConfigurationsResponse
+	configResp                *internalpb.ShowConfigurationsResponse
 	metricResp                *milvuspb.GetMetricsResponse
 	compactionStateResp       *milvuspb.GetCompactionStateResponse
 	manualCompactionResp      *milvuspb.ManualCompactionResponse

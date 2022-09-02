@@ -696,18 +696,25 @@ func (replica *SegmentReplica) getCollectionSchema(collID UniqueID, ts Timestamp
 		return nil, fmt.Errorf("not supported collection %v", collID)
 	}
 
-	replica.segMu.Lock()
-	defer replica.segMu.Unlock()
-	if replica.collSchema == nil {
-		sch, err := replica.metaService.getCollectionSchema(context.Background(), collID, ts)
-		if err != nil {
-			log.Error("Grpc error", zap.Error(err))
-			return nil, err
+	{
+		replica.segMu.RLock()
+		if replica.collSchema != nil {
+			replica.segMu.RUnlock()
+			return replica.collSchema, nil
 		}
-		replica.collSchema = sch
+		replica.segMu.RUnlock()
 	}
 
-	return replica.collSchema, nil
+	sch, err := replica.metaService.getCollectionSchema(context.Background(), collID, ts)
+	if err != nil {
+		log.Error("Grpc error", zap.Error(err))
+		return nil, err
+	}
+
+	replica.segMu.Lock()
+	replica.collSchema = sch
+	replica.segMu.Unlock()
+	return sch, nil
 }
 
 func (replica *SegmentReplica) validCollection(collID UniqueID) bool {
@@ -883,9 +890,10 @@ func (replica *SegmentReplica) listNotFlushedSegmentIDs() []UniqueID {
 // getSegmentStatslog returns the segment statslog for the provided segment id.
 func (replica *SegmentReplica) getSegmentStatslog(segID UniqueID) ([]byte, error) {
 	replica.segMu.RLock()
-	defer replica.segMu.RUnlock()
+	colID := replica.getCollectionID()
+	replica.segMu.RUnlock()
 
-	schema, err := replica.getCollectionSchema(replica.collectionID, 0)
+	schema, err := replica.getCollectionSchema(colID, 0)
 	if err != nil {
 		return nil, err
 	}

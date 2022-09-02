@@ -143,7 +143,7 @@ func TestDataSyncService_newDataSyncService(te *testing.T) {
 			1, "by-dev-rootcoord-dml-test_v1",
 			1, 1, "by-dev-rootcoord-dml-test_v1", 0,
 			1, 2, "by-dev-rootcoord-dml-test_v1", 0,
-			"add normal segments"},
+			"add un-flushed and flushed segments"},
 	}
 	cm := storage.NewLocalChunkManager(storage.RootPath(dataSyncServiceTestDir))
 	defer cm.RemoveWithPrefix("")

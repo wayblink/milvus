@@ -1096,11 +1096,38 @@ func (s *SegmentReplicaSuite) TearDownSuite() {
 
 func (s *SegmentReplicaSuite) SetupTest() {
 	var err error
-	err = s.sr.addNewSegment(1, s.collID, s.partID, s.vchanName, &internalpb.MsgPosition{}, nil)
+	err = s.sr.addSegment(addSegmentReq{
+		segType:     datapb.SegmentType_New,
+		segID:       1,
+		collID:      s.collID,
+		partitionID: s.partID,
+		channelName: s.vchanName,
+		startPos:    &internalpb.MsgPosition{},
+		endPos:      nil,
+	})
 	s.Require().NoError(err)
-	err = s.sr.addNormalSegment(2, s.collID, s.partID, s.vchanName, 10, nil, nil, 0)
+	err = s.sr.addSegment(addSegmentReq{
+		segType:      datapb.SegmentType_Normal,
+		segID:        2,
+		collID:       s.collID,
+		partitionID:  s.partID,
+		channelName:  s.vchanName,
+		numOfRows:    10,
+		statsBinLogs: nil,
+		cp:           nil,
+		recoverTs:    0,
+	})
 	s.Require().NoError(err)
-	err = s.sr.addFlushedSegment(3, s.collID, s.partID, s.vchanName, 10, nil, 0)
+	err = s.sr.addSegment(addSegmentReq{
+		segType:      datapb.SegmentType_Flushed,
+		segID:        3,
+		collID:       s.collID,
+		partitionID:  s.partID,
+		channelName:  s.vchanName,
+		numOfRows:    10,
+		statsBinLogs: nil,
+		recoverTs:    0,
+	})
 	s.Require().NoError(err)
 }
 

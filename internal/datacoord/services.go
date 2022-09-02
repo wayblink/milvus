@@ -39,7 +39,6 @@ import (
 	"github.com/milvus-io/milvus/internal/util/typeutil"
 	"github.com/samber/lo"
 	"go.uber.org/zap"
-	"go.uber.org/zap"
 )
 
 var ImportFlushedCheckInterval = 5 * time.Second

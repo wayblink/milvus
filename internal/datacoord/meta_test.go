@@ -717,14 +717,14 @@ func Test_meta_SetSegmentCompacting(t *testing.T) {
 	}
 }
 
-func Test_meta_SetSegmentIsImporting(t *testing.T) {
+func Test_meta_SetSegmentImporting(t *testing.T) {
 	type fields struct {
 		client   kv.TxnKV
 		segments *SegmentsInfo
 	}
 	type args struct {
-		segmentID   UniqueID
-		isImporting bool
+		segmentID UniqueID
+		importing bool
 	}
 	tests := []struct {
 		name   string
@@ -748,20 +748,20 @@ func Test_meta_SetSegmentIsImporting(t *testing.T) {
 				},
 			},
 			args{
-				segmentID:   1,
-				isImporting: true,
+				segmentID: 1,
+				importing: true,
 			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := &meta{
-				client:   tt.fields.client,
+				catalog:  &datacoord.Catalog{Txn: tt.fields.client},
 				segments: tt.fields.segments,
 			}
-			m.SetSegmentIsImporting(tt.args.segmentID, tt.args.isImporting)
+			m.SetSegmentCompacting(tt.args.segmentID, tt.args.importing)
 			segment := m.GetSegment(tt.args.segmentID)
-			assert.Equal(t, tt.args.isImporting, segment.isImporting)
+			assert.Equal(t, tt.args.importing, segment.isCompacting)
 		})
 	}
 }

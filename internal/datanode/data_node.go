@@ -1259,7 +1259,9 @@ func importFlushReqFunc(node *DataNode, req *datapb.ImportTaskRequest, res *root
 		if err != nil {
 			return errors.New("failed to get channel position")
 		}
-		log.Info("adding segment to the correct DataNode flow graph and saving binlog paths")
+		log.Info("adding segment to the correct DataNode flow graph and saving binlog paths",
+			zap.Int64("segment ID", segmentID),
+			zap.Uint64("ts", ts))
 		err = retry.Do(context.Background(), func() error {
 			// Ask DataCoord to save binlog path and add segment to the corresponding DataNode flow graph.
 			resp, err := node.dataCoord.SaveImportSegment(context.Background(), &datapb.SaveImportSegmentRequest{

@@ -29,51 +29,9 @@ func (_m *DataNode) EXPECT() *DataNode_Expecter {
 	return &DataNode_Expecter{mock: &_m.Mock}
 }
 
-// AddSegment provides a mock function with given fields: ctx, req
-func (_m *DataNode) AddSegment(ctx context.Context, req *datapb.AddSegmentRequest) (*commonpb.Status, error) {
-	ret := _m.Called(ctx, req)
-
-	var r0 *commonpb.Status
-	if rf, ok := ret.Get(0).(func(context.Context, *datapb.AddSegmentRequest) *commonpb.Status); ok {
-		r0 = rf(ctx, req)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*commonpb.Status)
-		}
-	}
-
-	var r1 error
-	if rf, ok := ret.Get(1).(func(context.Context, *datapb.AddSegmentRequest) error); ok {
-		r1 = rf(ctx, req)
-	} else {
-		r1 = ret.Error(1)
-	}
-
-	return r0, r1
-}
-
-// DataNode_AddSegment_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'AddSegment'
-type DataNode_AddSegment_Call struct {
-	*mock.Call
-}
-
-// AddSegment is a helper method to define mock.On call
-//  - ctx context.Context
-//  - req *datapb.AddSegmentRequest
-func (_e *DataNode_Expecter) AddSegment(ctx interface{}, req interface{}) *DataNode_AddSegment_Call {
-	return &DataNode_AddSegment_Call{Call: _e.mock.On("AddSegment", ctx, req)}
-}
-
-func (_c *DataNode_AddSegment_Call) Run(run func(ctx context.Context, req *datapb.AddSegmentRequest)) *DataNode_AddSegment_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(*datapb.AddSegmentRequest))
-	})
-	return _c
-}
-
-func (_c *DataNode_AddSegment_Call) Return(_a0 *commonpb.Status, _a1 error) *DataNode_AddSegment_Call {
-	_c.Call.Return(_a0, _a1)
-	return _c
+func (_m *DataNode) AddImportSegment(ctx context.Context, req *datapb.AddImportSegmentRequest) (*commonpb.Status, error) {
+	//TODO implement me
+	panic("implement me")
 }
 
 // Compaction provides a mock function with given fields: ctx, req

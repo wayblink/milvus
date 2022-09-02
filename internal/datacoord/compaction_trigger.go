@@ -238,7 +238,7 @@ func (t *compactionTrigger) handleGlobalSignal(signal *compactionSignal) {
 			isFlush(segment) &&
 			IsParentDropped(t.meta, segment) &&
 			!segment.isCompacting && // not compacting now
-		    !segment.isImporting     // not importing now
+			!segment.isImporting // not importing now
 	}) // m is list of chanPartSegments, which is channel-partition organized segments
 	for _, group := range m {
 		if !signal.isForce && t.compactionHandler.isFull() {

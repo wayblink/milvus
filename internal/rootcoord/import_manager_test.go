@@ -699,9 +699,8 @@ func TestImportManager_setCollectionPartitionName(t *testing.T) {
 		getCollectionName: func(collID, partitionID typeutil.UniqueID) (string, string, error) {
 			if collID == 1 && partitionID == 2 {
 				return "c1", "p1", nil
-			} else {
-				return "", "", errors.New("Error")
 			}
+			return "", "", errors.New("Error")
 		},
 	}
 

@@ -22,10 +22,6 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-
-	"github.com/milvus-io/milvus/internal/util/errorutil"
-
-	"github.com/milvus-io/milvus/internal/util"
 	"time"
 
 	"github.com/golang/protobuf/proto"
@@ -42,6 +38,7 @@ import (
 	"github.com/milvus-io/milvus/internal/proto/querypb"
 	"github.com/milvus-io/milvus/internal/util"
 	"github.com/milvus-io/milvus/internal/util/crypto"
+	"github.com/milvus-io/milvus/internal/util/errorutil"
 	"github.com/milvus-io/milvus/internal/util/logutil"
 	"github.com/milvus-io/milvus/internal/util/metricsinfo"
 	"github.com/milvus-io/milvus/internal/util/timerecord"

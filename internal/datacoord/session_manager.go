@@ -31,7 +31,7 @@ import (
 )
 
 const (
-	flushTimeout = 5 * time.Second
+	flushTimeout = 15 * time.Second
 	// TODO: evaluate and update import timeout.
 	importTimeout     = 3 * time.Hour
 	reCollectTimeout  = 5 * time.Second

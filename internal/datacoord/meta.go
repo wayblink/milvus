@@ -227,6 +227,9 @@ func (m *meta) SetState(segmentID UniqueID, state commonpb.SegmentState) error {
 		return nil
 	}
 	oldState := curSegInfo.GetState()
+	log.Debug("Set segment state",
+		zap.Int64("segmentID", segmentID),
+		zap.String("state", state.String()))
 	m.segments.SetState(segmentID, state)
 	curSegInfo = m.segments.GetSegment(segmentID)
 	if curSegInfo != nil && isSegmentHealthy(curSegInfo) {

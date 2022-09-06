@@ -434,9 +434,32 @@ func (s *SegmentManager) GetFlushableSegments(ctx context.Context, channel strin
 	for _, id := range s.segments {
 		info := s.meta.GetSegment(id)
 		if info == nil || info.InsertChannel != channel {
+			//if info.InsertChannel != channel {
+			//	log.Debug("flushable segment candidate",
+			//		zap.Int64("id", id),
+			//		zap.String("state", info.GetState().String()),
+			//		zap.Uint64("lastExpireTime", info.GetLastExpireTime()),
+			//		zap.Int64("currRows", info.currRows),
+			//		zap.String("segment_channel", info.InsertChannel),
+			//		zap.String("channel", channel),
+			//		zap.Uint64("timestamp", t))
+			//} else {
+			//	log.Debug("flushable segment candidate",
+			//		zap.Int64("id", id),
+			//		zap.Uint64("timestamp", t))
+			//}
 			continue
 		}
+		log.Debug("flushable segment candidate",
+			zap.Int64("id", id),
+			zap.String("state", info.GetState().String()),
+			zap.Uint64("lastExpireTime", info.GetLastExpireTime()),
+			zap.Int64("currRows", info.currRows),
+			zap.String("segment_channel", info.InsertChannel),
+			zap.String("channel", channel),
+			zap.Uint64("timestamp", t))
 		if s.flushPolicy(info, t) {
+			log.Debug("flushable segment", zap.Int64("id", id))
 			ret = append(ret, id)
 		}
 	}

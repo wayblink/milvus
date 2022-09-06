@@ -182,7 +182,7 @@ func (dsService *dataSyncService) initNodes(vchanInfo *datapb.VchannelInfo) erro
 	}
 
 	futures := make([]*concurrency.Future, 0, len(unflushedSegmentInfos)+len(flushedSegmentInfos))
-
+	reFlushSegments := make([]*datapb.SegmentInfo, 0)
 	for _, us := range unflushedSegmentInfos {
 		if us.CollectionID != dsService.collectionID ||
 			us.GetInsertChannel() != vchanInfo.ChannelName {
@@ -198,8 +198,13 @@ func (dsService *dataSyncService) initNodes(vchanInfo *datapb.VchannelInfo) erro
 		log.Info("recover growing segments form checkpoints",
 			zap.String("vChannelName", us.GetInsertChannel()),
 			zap.Int64("segmentID", us.GetID()),
+			zap.String("state", us.GetState().String()),
 			zap.Int64("numRows", us.GetNumOfRows()),
 		)
+
+		if us.GetState() == commonpb.SegmentState_Sealed || us.GetState() == commonpb.SegmentState_Flushing {
+			reFlushSegments = append(reFlushSegments, us)
+		}
 		var cp *segmentCheckPoint
 		if us.GetDmlPosition() != nil {
 			cp = &segmentCheckPoint{
@@ -345,6 +350,14 @@ func (dsService *dataSyncService) initNodes(vchanInfo *datapb.VchannelInfo) erro
 	if err != nil {
 		log.Error("set edges failed in node", zap.String("name", deleteNode.Name()), zap.Error(err))
 		return err
+	}
+
+	for _, segment := range reFlushSegments {
+		dsService.flushCh <- flushMsg{
+			segmentID:    segment.GetID(),
+			collectionID: segment.GetCollectionID(),
+			flushed:      true,
+		}
 	}
 	return nil
 }

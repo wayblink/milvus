@@ -314,9 +314,7 @@ func (dct *dropCollectionTask) PreExecute(ctx context.Context) error {
 func (dct *dropCollectionTask) Execute(ctx context.Context) error {
 	collID, err := globalMetaCache.GetCollectionID(ctx, dct.CollectionName)
 	if err != nil {
-		// make dropping collection idempotent.
-		dct.result = &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success}
-		return nil
+		return err
 	}
 
 	dct.result, err = dct.rootCoord.DropCollection(ctx, dct.DropCollectionRequest)

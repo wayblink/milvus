@@ -799,7 +799,7 @@ func TestDropCollectionTask(t *testing.T) {
 		return 0, errors.New("mock")
 	})
 	err = task.Execute(ctx)
-	assert.NoError(t, err)
+	assert.Error(t, err)
 	cache.setGetIDFunc(func(ctx context.Context, collectionName string) (typeutil.UniqueID, error) {
 		return 0, nil
 	})

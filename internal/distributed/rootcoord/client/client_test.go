@@ -125,6 +125,10 @@ func Test_NewClient(t *testing.T) {
 			retCheck(retNotNil, r, err)
 		}
 		{
+			r, err := client.ReleaseDQLMessageStream(ctx, nil)
+			retCheck(retNotNil, r, err)
+		}
+		{
 			r, err := client.GetMetrics(ctx, nil)
 			retCheck(retNotNil, r, err)
 		}
@@ -320,6 +324,10 @@ func Test_NewClient(t *testing.T) {
 	}
 	{
 		rTimeout, err := client.ShowSegments(shortCtx, nil)
+		retCheck(rTimeout, err)
+	}
+	{
+		rTimeout, err := client.ReleaseDQLMessageStream(shortCtx, nil)
 		retCheck(rTimeout, err)
 	}
 	{

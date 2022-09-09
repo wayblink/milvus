@@ -4,18 +4,23 @@ import (
 	"context"
 
 	"github.com/milvus-io/milvus/internal/log"
+	"github.com/milvus-io/milvus/internal/proto/commonpb"
 	"github.com/milvus-io/milvus/internal/proto/datapb"
 	"go.uber.org/zap"
 )
 
 type GetCollectionNameFunc func(collID, partitionID UniqueID) (string, string, error)
 type IDAllocator func(count uint32) (UniqueID, UniqueID, error)
-type ImportFunc func(ctx context.Context, req *datapb.ImportTaskRequest) *datapb.ImportTaskResponse
+type ImportFunc func(ctx context.Context, req *datapb.ImportTaskRequest) (*datapb.ImportTaskResponse, error)
+type UnsetImportingFunc func(ctx context.Context, segIDs []int64) (*commonpb.Status, error)
+type MarkSegmentsDroppedFunc func(ctx context.Context, segIDs []int64) (*commonpb.Status, error)
 
 type ImportFactory interface {
 	NewGetCollectionNameFunc() GetCollectionNameFunc
 	NewIDAllocator() IDAllocator
 	NewImportFunc() ImportFunc
+	NewUnsetImportingFunc() UnsetImportingFunc
+	NewMarkSegmentsDroppedFunc() MarkSegmentsDroppedFunc
 }
 
 type ImportFactoryImpl struct {
@@ -32,6 +37,14 @@ func (f ImportFactoryImpl) NewIDAllocator() IDAllocator {
 
 func (f ImportFactoryImpl) NewImportFunc() ImportFunc {
 	return ImportFuncWithCore(f.c)
+}
+
+func (f ImportFactoryImpl) NewUnsetImportingFunc() UnsetImportingFunc {
+	return UnsetImportingFuncWithCore(f.c)
+}
+
+func (f ImportFactoryImpl) NewMarkSegmentsDroppedFunc() MarkSegmentsDroppedFunc {
+	return MarkSegmentsDroppedWithCore(f.c)
 }
 
 func NewImportFactory(c *Core) ImportFactory {
@@ -63,9 +76,23 @@ func IDAllocatorWithCore(c *Core) IDAllocator {
 }
 
 func ImportFuncWithCore(c *Core) ImportFunc {
-	return func(ctx context.Context, req *datapb.ImportTaskRequest) *datapb.ImportTaskResponse {
-		// TODO: better to handle error here.
-		resp, _ := c.broker.Import(ctx, req)
-		return resp
+	return func(ctx context.Context, req *datapb.ImportTaskRequest) (*datapb.ImportTaskResponse, error) {
+		return c.broker.Import(ctx, req)
+	}
+}
+
+func UnsetImportingFuncWithCore(c *Core) UnsetImportingFunc {
+	return func(ctx context.Context, segIDs []int64) (*commonpb.Status, error) {
+		return c.broker.UnsetIsImportingState(ctx, &datapb.UnsetIsImportingStateRequest{
+			SegmentIds: segIDs,
+		})
+	}
+}
+
+func MarkSegmentsDroppedWithCore(c *Core) MarkSegmentsDroppedFunc {
+	return func(ctx context.Context, segIDs []int64) (*commonpb.Status, error) {
+		return c.broker.MarkSegmentsDropped(ctx, &datapb.MarkSegmentsDroppedRequest{
+			SegmentIds: segIDs,
+		})
 	}
 }

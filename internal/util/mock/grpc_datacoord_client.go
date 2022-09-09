@@ -149,10 +149,10 @@ func (m *GrpcDataCoordClient) SaveImportSegment(ctx context.Context, in *datapb.
 	return &commonpb.Status{}, m.Err
 }
 
-func (m *GrpcDataCoordClient) CompleteBulkLoad(context.Context, *datapb.CompleteBulkLoadRequest, ...grpc.CallOption) (*commonpb.Status, error) {
+func (m *GrpcDataCoordClient) UnsetIsImportingState(context.Context, *datapb.UnsetIsImportingStateRequest, ...grpc.CallOption) (*commonpb.Status, error) {
 	return &commonpb.Status{}, m.Err
 }
 
-func (m *GrpcDataCoordClient) UnsetIsImportingState(context.Context, *datapb.UnsetIsImportingStateRequest, ...grpc.CallOption) (*commonpb.Status, error) {
+func (m *GrpcDataCoordClient) MarkSegmentsDropped(context.Context, *datapb.MarkSegmentsDroppedRequest, ...grpc.CallOption) (*commonpb.Status, error) {
 	return &commonpb.Status{}, m.Err
 }

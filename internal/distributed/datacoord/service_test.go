@@ -64,8 +64,8 @@ type MockDataCoord struct {
 	acquireSegLockResp        *commonpb.Status
 	releaseSegLockResp        *commonpb.Status
 	addSegmentResp            *commonpb.Status
-	completeBulkLoadResp      *commonpb.Status
 	unsetIsImportingStateResp *commonpb.Status
+	markSegmentsDroppedResp   *commonpb.Status
 }
 
 func (m *MockDataCoord) Init() error {
@@ -206,12 +206,12 @@ func (m *MockDataCoord) SaveImportSegment(ctx context.Context, req *datapb.SaveI
 	return m.addSegmentResp, m.err
 }
 
-func (m *MockDataCoord) CompleteBulkLoad(context.Context, *datapb.CompleteBulkLoadRequest) (*commonpb.Status, error) {
-	return m.completeBulkLoadResp, m.err
-}
-
 func (m *MockDataCoord) UnsetIsImportingState(context.Context, *datapb.UnsetIsImportingStateRequest) (*commonpb.Status, error) {
 	return m.unsetIsImportingStateResp, m.err
+}
+
+func (m *MockDataCoord) MarkSegmentsDropped(ctx context.Context, req *datapb.MarkSegmentsDroppedRequest) (*commonpb.Status, error) {
+	return m.markSegmentsDroppedResp, m.err
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -492,17 +492,6 @@ func Test_NewServer(t *testing.T) {
 		assert.NotNil(t, resp)
 	})
 
-	t.Run("complete bulk load", func(t *testing.T) {
-		server.dataCoord = &MockDataCoord{
-			completeBulkLoadResp: &commonpb.Status{
-				ErrorCode: commonpb.ErrorCode_Success,
-			},
-		}
-		resp, err := server.CompleteBulkLoad(ctx, nil)
-		assert.Nil(t, err)
-		assert.NotNil(t, resp)
-	})
-
 	t.Run("unset isImporting state", func(t *testing.T) {
 		server.dataCoord = &MockDataCoord{
 			unsetIsImportingStateResp: &commonpb.Status{
@@ -510,6 +499,17 @@ func Test_NewServer(t *testing.T) {
 			},
 		}
 		resp, err := server.UnsetIsImportingState(ctx, nil)
+		assert.Nil(t, err)
+		assert.NotNil(t, resp)
+	})
+
+	t.Run("mark segments dropped", func(t *testing.T) {
+		server.dataCoord = &MockDataCoord{
+			markSegmentsDroppedResp: &commonpb.Status{
+				ErrorCode: commonpb.ErrorCode_Success,
+			},
+		}
+		resp, err := server.MarkSegmentsDropped(ctx, nil)
 		assert.Nil(t, err)
 		assert.NotNil(t, resp)
 	})

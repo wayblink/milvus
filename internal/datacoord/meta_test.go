@@ -739,10 +739,10 @@ func Test_meta_SetSegmentImporting(t *testing.T) {
 					map[int64]*SegmentInfo{
 						1: {
 							SegmentInfo: &datapb.SegmentInfo{
-								ID:    1,
-								State: commonpb.SegmentState_Flushed,
+								ID:          1,
+								State:       commonpb.SegmentState_Flushed,
+								IsImporting: false,
 							},
-							isImporting: false,
 						},
 					},
 				},

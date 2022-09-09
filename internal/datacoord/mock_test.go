@@ -36,8 +36,6 @@ import (
 	"github.com/milvus-io/milvus/internal/util/typeutil"
 )
 
-const ImportFailedSegmentID = 102
-
 func newMemoryMeta(allocator allocator) (*meta, error) {
 	memoryKV := memkv.NewMemoryKV()
 	return newMeta(context.TODO(), memoryKV)
@@ -254,22 +252,6 @@ func (c *mockDataNodeClient) Stop() error {
 type mockRootCoordService struct {
 	state internalpb.StateCode
 	cnt   int64
-}
-
-func (m *mockRootCoordService) GetImportFailedSegmentIDs(ctx context.Context, req *internalpb.GetImportFailedSegmentIDsRequest) (*internalpb.GetImportFailedSegmentIDsResponse, error) {
-	segIDs := make([]int64, 0)
-	segIDs = append(segIDs, ImportFailedSegmentID)
-	return &internalpb.GetImportFailedSegmentIDsResponse{
-		Status: &commonpb.Status{
-			ErrorCode: commonpb.ErrorCode_Success,
-			Reason:    "",
-		},
-		SegmentIDs: segIDs,
-	}, nil
-}
-
-func (m *mockRootCoordService) CheckSegmentIndexReady(context.Context, *internalpb.CheckSegmentIndexReadyRequest) (*commonpb.Status, error) {
-	panic("implement me")
 }
 
 func (m *mockRootCoordService) CreateAlias(ctx context.Context, req *milvuspb.CreateAliasRequest) (*commonpb.Status, error) {

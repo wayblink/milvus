@@ -28,16 +28,15 @@ import (
 	"syscall"
 	"time"
 
-	etcdkv "github.com/milvus-io/milvus/internal/kv/etcd"
-
-	"github.com/milvus-io/milvus/internal/metastore/db/rootcoord"
-
-	pb "github.com/milvus-io/milvus/internal/proto/etcdpb"
-
+	"github.com/milvus-io/milvus/internal/allocator"
+	"github.com/milvus-io/milvus/internal/common"
 	"github.com/milvus-io/milvus/internal/kv"
+	etcdkv "github.com/milvus-io/milvus/internal/kv/etcd"
+	"github.com/milvus-io/milvus/internal/log"
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/metastore/db/dao"
 	"github.com/milvus-io/milvus/internal/metastore/db/dbcore"
+	"github.com/milvus-io/milvus/internal/metastore/db/rootcoord"
 	kvmetestore "github.com/milvus-io/milvus/internal/metastore/kv/rootcoord"
 
 	"github.com/milvus-io/milvus/api/commonpb"
@@ -75,6 +74,11 @@ type UniqueID = typeutil.UniqueID
 type Timestamp = typeutil.Timestamp
 
 const InvalidCollectionID = UniqueID(0)
+
+var CheckTaskPersistedInterval = 5 * time.Second
+var CheckTaskPersistedWaitLimit = 300 * time.Second
+
+var reportImportAttempts uint = 20
 
 // ------------------ struct -----------------------
 
@@ -410,6 +414,8 @@ func (c *Core) initImportManager() error {
 		impTaskKv,
 		f.NewIDAllocator(),
 		f.NewImportFunc(),
+		f.NewUnsetImportingFunc(),
+		f.NewMarkSegmentsDroppedFunc(),
 		f.NewGetCollectionNameFunc(),
 	)
 	c.importManager.init(c.ctx)
@@ -610,12 +616,13 @@ func (c *Core) startInternal() error {
 		panic(err)
 	}
 
-	c.wg.Add(5)
+	c.wg.Add(6)
 	go c.startTimeTickLoop()
 	go c.tsLoop()
 	go c.chanTimeTick.startWatch(&c.wg)
 	go c.importManager.expireOldTasksLoop(&c.wg)
 	go c.importManager.sendOutTasksLoop(&c.wg)
+	go c.importManager.removeBadImportSegmentsLoop(&c.wg)
 	Params.RootCoordCfg.CreatedTime = time.Now()
 	Params.RootCoordCfg.UpdatedTime = time.Now()
 
@@ -1549,8 +1556,107 @@ func (c *Core) Import(ctx context.Context, req *milvuspb.ImportRequest) (*milvus
 		zap.Int("# of files = ", len(req.GetFiles())),
 		zap.Bool("row-based", req.GetRowBased()),
 	)
-	resp := c.importManager.importJob(ctx, req, cID, pID)
-	return resp, nil
+	importJobResp := c.importManager.importJob(ctx, req, cID, pID)
+	log.Info("import job complete, now completing import",
+		zap.Int64s("task IDs", importJobResp.GetTasks()))
+	for _, taskID := range importJobResp.GetTasks() {
+		go c.completeImportAsync(taskID)
+	}
+	return importJobResp, nil
+}
+
+func (c *Core) completeImportAsync(taskID int64) {
+	// First check if the import task has turned persisted state. Returns an error status if not after retrying.
+	// This could take a few or tens of seconds.
+	getImportResp, err := c.checkImportTaskPersisted(taskID)
+	if err != nil {
+		// Task has not reached `ImportPersisted` state for a very long time, return and
+		// leave the task in its previous state forever, until it expires and cleaned up
+		// in the background.
+		log.Error("task not persisted yet after wait limit",
+			zap.Int64("wait limit (seconds)", int64(CheckTaskPersistedWaitLimit.Seconds())),
+			zap.Int64("task ID", taskID),
+			zap.Any("current task state", getImportResp.GetState()))
+		return
+	}
+	// Check index status. Note that checkSegmentIndexReady returns SUCCESS if:
+	// (1) there's no index defined on the collection, or
+	// (2) all indexes have been successfully built
+	checkIndexStatus, err := c.checkSegmentIndexReady(c.ctx, taskID, getImportResp.GetCollectionId(), getImportResp.GetSegmentIds())
+	if err != nil {
+		log.Warn(fmt.Sprintf("failed to wait for all index build to complete %s, but continue anyway", err.Error()))
+		return
+	}
+	if checkIndexStatus.GetErrorCode() != commonpb.ErrorCode_Success {
+		log.Warn(fmt.Sprintf("failed to wait for all index build to complete %s, but continue anyway", checkIndexStatus.Reason))
+		return
+	}
+
+	// Update import task state to `ImportState_ImportCompleted`.
+	// Retry on errors.
+	err = retry.Do(c.ctx, func() error {
+		status, err := c.ReportImport(c.ctx, &rootcoordpb.ImportResult{
+			TaskId: taskID,
+			State:  commonpb.ImportState_ImportCompleted,
+		})
+		if err != nil {
+			return err
+		}
+		if status.GetErrorCode() != commonpb.ErrorCode_Success {
+			return errors.New(status.GetReason())
+		}
+		return nil
+	}, retry.Attempts(reportImportAttempts))
+	if err != nil {
+		log.Error("failed to report import, we are not able to update the import task state to `ImportState_ImportCompleted`",
+			zap.Int64("task ID", taskID),
+			zap.Error(err))
+		// Data should not be visible if we failed to update task state.
+		// Everything has to start all over again.
+		return
+	}
+	// Remove the `isImport` states of these segments only when the import task reaches `ImportState_ImportCompleted` state.
+	c.dataCoord.UnsetIsImportingState(c.ctx, &datapb.UnsetIsImportingStateRequest{
+		SegmentIds: getImportResp.GetSegmentIds(),
+	})
+}
+
+// checkImportTaskPersisted starts a loop to periodically check if the import task becomes ImportState_ImportPersisted state.
+// A non-nil error is returned if the import task was not in ImportState_ImportPersisted state.
+func (c *Core) checkImportTaskPersisted(taskID int64) (*milvuspb.GetImportStateResponse, error) {
+	ticker := time.NewTicker(CheckTaskPersistedInterval)
+	defer ticker.Stop()
+	expireTicker := time.NewTicker(CheckTaskPersistedWaitLimit)
+	defer expireTicker.Stop()
+	var getImportResp *milvuspb.GetImportStateResponse
+	for {
+		select {
+		case <-c.ctx.Done():
+			log.Info("(in check task persisted loop) context done, exiting CheckSegmentIndexReady loop")
+			return nil, errors.New("proxy node context done")
+		case <-ticker.C:
+			var err error
+			getImportResp, err = c.GetImportState(c.ctx, &milvuspb.GetImportStateRequest{Task: taskID})
+			if err != nil {
+				log.Warn(fmt.Sprintf("an error occurred while completing bulk load %s", err.Error()))
+				return nil, err
+			}
+			if getImportResp.GetStatus().GetErrorCode() != commonpb.ErrorCode_Success {
+				log.Warn(fmt.Sprintf("an error occurred while completing bulk load %s", getImportResp.GetStatus().GetReason()))
+				return nil, errors.New(getImportResp.GetStatus().GetReason())
+			}
+			if getImportResp.GetState() == commonpb.ImportState_ImportPersisted {
+				log.Info("import task persisted",
+					zap.Int64("task ID", getImportResp.GetId()),
+					zap.Any("task state", getImportResp.GetState()))
+				return getImportResp, nil
+			}
+		case <-expireTicker.C:
+			log.Warn("(in check task persisted loop) task still not persisted after max waiting time",
+				zap.Int64("task ID", taskID))
+			return nil, errors.New("task still not persisted, please try again later")
+		}
+	}
 }
 
 // GetImportState returns the current state of an import task.
@@ -1590,7 +1696,7 @@ func (c *Core) ReportImport(ctx context.Context, ir *rootcoordpb.ImportResult) (
 	}
 	// If setting ImportState_ImportCompleted, simply update the state and return directly.
 	if ir.GetState() == commonpb.ImportState_ImportCompleted {
-		if err := c.importManager.setCompleteImportState(ir.GetTaskId()); err != nil {
+		if err := c.importManager.setImportTaskState(ir.GetTaskId(), commonpb.ImportState_ImportCompleted); err != nil {
 			errMsg := "failed to set import task as ImportState_ImportCompleted"
 			log.Error(errMsg, zap.Error(err))
 			return &commonpb.Status{
@@ -1617,7 +1723,7 @@ func (c *Core) ReportImport(ctx context.Context, ir *rootcoordpb.ImportResult) (
 			c.importManager.busyNodesLock.Lock()
 			defer c.importManager.busyNodesLock.Unlock()
 			delete(c.importManager.busyNodes, ir.GetDatanodeId())
-			log.Info("DataNode is no longer busy",
+			log.Info("a DataNode is no longer busy after processing task",
 				zap.Int64("dataNode ID", ir.GetDatanodeId()),
 				zap.Int64("task ID", ir.GetTaskId()))
 
@@ -1630,25 +1736,21 @@ func (c *Core) ReportImport(ctx context.Context, ir *rootcoordpb.ImportResult) (
 
 	// If task failed, send task to idle datanode
 	if ir.GetState() == commonpb.ImportState_ImportFailed {
-		log.Info("task failed, resending import task")
+		// When a DataNode failed importing, remove this DataNode from the busy node list and send out import tasks again.
+		log.Info("an import task has failed, marking DataNode available and resending import task")
 		resendTaskFunc()
-	}
-
-	// So much for reporting, unless the task just reached `ImportPersisted` state.
-	if ir.GetState() != commonpb.ImportState_ImportPersisted {
-		log.Debug("non import-persisted state received, return immediately",
+	} else if ir.GetState() != commonpb.ImportState_ImportPersisted {
+		log.Debug("unexpected import task state reported, return immediately (this should not happen)",
 			zap.Any("task ID", ir.GetTaskId()),
 			zap.Any("import state", ir.GetState()))
-		return &commonpb.Status{
-			ErrorCode: commonpb.ErrorCode_Success,
-		}, nil
+		resendTaskFunc()
+	} else {
+		// Here ir.GetState() == commonpb.ImportState_ImportPersisted
+		// When a DataNode finishes importing, remove this DataNode from the busy node list and send out import tasks again.
+		resendTaskFunc()
+		// Flush all import data segments.
+		c.broker.Flush(ctx, ti.GetCollectionId(), ir.GetSegments())
 	}
-
-	// When DataNode has done its thing, remove it from the busy node list. And send import task again
-	resendTaskFunc()
-
-	// Flush all import data segments.
-	c.broker.Flush(ctx, ti.GetCollectionId(), ir.GetSegments())
 
 	return &commonpb.Status{
 		ErrorCode: commonpb.ErrorCode_Success,
@@ -1833,55 +1935,48 @@ func (c *Core) ListCredUsers(ctx context.Context, in *milvuspb.ListCredUsersRequ
 	}, nil
 }
 
-func (c *Core) GetImportFailedSegmentIDs(ctx context.Context, req *internalpb.GetImportFailedSegmentIDsRequest) (*internalpb.GetImportFailedSegmentIDsResponse, error) {
-	segmentIds, err := c.importManager.GetImportFailedSegmentIDs()
-	if err != nil {
-		return &internalpb.GetImportFailedSegmentIDsResponse{
-			Status: failStatus(commonpb.ErrorCode_GetImportFailedSegmentsFailure, "GetImportFailedSegmentsIDFailed"+err.Error()),
-		}, err
-	}
-	return &internalpb.GetImportFailedSegmentIDsResponse{
-		Status:     succStatus(),
-		SegmentIDs: segmentIds,
-	}, nil
-}
-
-func (c *Core) CheckSegmentIndexReady(ctx context.Context, req *internalpb.CheckSegmentIndexReadyRequest) (*commonpb.Status, error) {
+func (c *Core) checkSegmentIndexReady(ctx context.Context, taskID int64, collID int64, segIDs []int64) (*commonpb.Status, error) {
 	log.Info("start checking segments index ready states",
-		zap.Int64("task ID", req.GetTaskID()),
-		zap.Int64("col ID", req.GetColID()),
-		zap.Int64s("segment IDs", req.GetSegIDs()))
+		zap.Int64("task ID", taskID),
+		zap.Int64("col ID", collID),
+		zap.Int64s("segment IDs", segIDs))
 	// Look up collection name on collection ID.
 	var colMeta *model.Collection
 	var err error
-	if colMeta, err = c.MetaTable.GetCollectionByID(req.GetColID(), 0); err != nil {
+	if colMeta, err = c.meta.GetCollectionByID(ctx, collID, 0); err != nil {
 		log.Error("failed to get collection name",
-			zap.Int64("collection ID", req.GetColID()),
+			zap.Int64("collection ID", collID),
 			zap.Error(err))
 		// In some unexpected cases, user drop collection when bulk load task still in pending list, the datanode become idle.
 		// If we directly return, the pending tasks will remain in pending list. So we call resendTaskFunc() to push next pending task to idle datanode.
 		return &commonpb.Status{
 			ErrorCode: commonpb.ErrorCode_CollectionNameNotFound,
-			Reason:    "failed to get collection name for collection ID" + strconv.FormatInt(req.GetColID(), 10),
+			Reason:    "failed to get collection name for collection ID" + strconv.FormatInt(collID, 10),
 		}, nil
 	}
 	// Check if collection has any indexed fields. If so, start a loop to check segments' index states.
-	var indexInfos []*indexpb.IndexInfo
-	if indexInfos, err = c.CallDescribeIndexService(ctx, req.GetColID()); err != nil {
-		log.Error("failed to describe index",
-			zap.Int64("collection ID", req.GetColID()),
-			zap.Error(err))
-	} else {
-		log.Info("index info retrieved for collection",
-			zap.Int64("collection ID", req.GetColID()),
-			zap.Any("index info", indexInfos))
-		if len(indexInfos) == 0 {
-			log.Info("no index field found for collection", zap.Int64("collection ID", req.GetColID()))
+	var descIdxResp *indexpb.DescribeIndexResponse
+	if descIdxResp, err = c.broker.DescribeIndex(ctx, collID); err != nil {
+		if descIdxResp.GetStatus().GetErrorCode() == commonpb.ErrorCode_IndexNotExist {
+			log.Info("no index field found for collection", zap.Int64("collection ID", collID))
 			return &commonpb.Status{
 				ErrorCode: commonpb.ErrorCode_Success,
 			}, nil
 		}
-		log.Info("start checking index state", zap.Int64("collection ID", req.GetColID()))
+		log.Error("failed to describe index",
+			zap.Int64("collection ID", collID),
+			zap.Error(err))
+	} else {
+		log.Info("index info retrieved for collection",
+			zap.Int64("collection ID", collID),
+			zap.Any("index info", descIdxResp.GetIndexInfos()))
+		if len(descIdxResp.GetIndexInfos()) == 0 {
+			log.Info("no index field found for collection", zap.Int64("collection ID", collID))
+			return &commonpb.Status{
+				ErrorCode: commonpb.ErrorCode_Success,
+			}, nil
+		}
+		log.Info("start checking index state", zap.Int64("collection ID", collID))
 		ticker := time.NewTicker(time.Duration(Params.RootCoordCfg.ImportIndexCheckInterval*1000) * time.Millisecond)
 		defer ticker.Stop()
 		expireTicker := time.NewTicker(time.Duration(Params.RootCoordCfg.ImportIndexWaitLimit*1000) * time.Millisecond)
@@ -1895,9 +1990,9 @@ func (c *Core) CheckSegmentIndexReady(ctx context.Context, req *internalpb.Check
 					Reason:    "check complete index context done",
 				}, nil
 			case <-ticker.C:
-				if done, err := c.countCompleteIndex(ctx, colMeta.Name, req.GetColID(), indexInfos, req.GetSegIDs()); err == nil && done {
+				if done, err := c.countCompleteIndex(ctx, colMeta.Name, collID, descIdxResp.GetIndexInfos(), segIDs); err == nil && done {
 					log.Info("(in check segment index ready loop) indexes are built or no index needed",
-						zap.Int64("task ID", req.GetTaskID()))
+						zap.Int64("task ID", taskID))
 					return &commonpb.Status{
 						ErrorCode: commonpb.ErrorCode_Success,
 					}, nil
@@ -1907,9 +2002,9 @@ func (c *Core) CheckSegmentIndexReady(ctx context.Context, req *internalpb.Check
 				}
 			case <-expireTicker.C:
 				log.Warn("(in check segment index ready loop) indexing is taken too long",
-					zap.Int64("task ID", req.GetTaskID()),
-					zap.Int64("collection ID", req.GetColID()),
-					zap.Int64s("segment IDs", req.GetSegIDs()))
+					zap.Int64("task ID", taskID),
+					zap.Int64("collection ID", collID),
+					zap.Int64s("segment IDs", segIDs))
 				return &commonpb.Status{
 					ErrorCode: commonpb.ErrorCode_UnexpectedError,
 					Reason:    "index building is taking too long",
@@ -1931,7 +2026,7 @@ func (c *Core) countCompleteIndex(ctx context.Context, collectionName string, co
 
 	indexedSegmentCount := len(allSegmentIDs)
 	for _, indexInfo := range indexInfos {
-		states, err := c.CallGetSegmentIndexStateService(ctx, collectionID, indexInfo.GetIndexName(), allSegmentIDs)
+		states, err := c.broker.GetSegmentIndexState(ctx, collectionID, indexInfo.GetIndexName(), allSegmentIDs)
 		if err != nil {
 			log.Error("failed to get index state in checkSegmentIndexStates", zap.Error(err))
 			return false, err

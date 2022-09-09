@@ -583,13 +583,12 @@ func (c *Client) SaveImportSegment(ctx context.Context, req *datapb.SaveImportSe
 	return ret.(*commonpb.Status), err
 }
 
-// CompleteBulkLoad is the DataCoord client side code for CompleteBulkLoad call.
-func (c *Client) CompleteBulkLoad(ctx context.Context, req *datapb.CompleteBulkLoadRequest) (*commonpb.Status, error) {
+func (c *Client) UnsetIsImportingState(ctx context.Context, req *datapb.UnsetIsImportingStateRequest) (*commonpb.Status, error) {
 	ret, err := c.grpcClient.ReCall(ctx, func(client interface{}) (interface{}, error) {
 		if !funcutil.CheckCtxValid(ctx) {
 			return nil, ctx.Err()
 		}
-		return client.(datapb.DataCoordClient).CompleteBulkLoad(ctx, req)
+		return client.(datapb.DataCoordClient).UnsetIsImportingState(ctx, req)
 	})
 	if err != nil || ret == nil {
 		return nil, err
@@ -597,12 +596,12 @@ func (c *Client) CompleteBulkLoad(ctx context.Context, req *datapb.CompleteBulkL
 	return ret.(*commonpb.Status), err
 }
 
-func (c *Client) UnsetIsImportingState(ctx context.Context, req *datapb.UnsetIsImportingStateRequest) (*commonpb.Status, error) {
+func (c *Client) MarkSegmentsDropped(ctx context.Context, req *datapb.MarkSegmentsDroppedRequest) (*commonpb.Status, error) {
 	ret, err := c.grpcClient.ReCall(ctx, func(client interface{}) (interface{}, error) {
 		if !funcutil.CheckCtxValid(ctx) {
 			return nil, ctx.Err()
 		}
-		return client.(datapb.DataCoordClient).UnsetIsImportingState(ctx, req)
+		return client.(datapb.DataCoordClient).MarkSegmentsDropped(ctx, req)
 	})
 	if err != nil || ret == nil {
 		return nil, err

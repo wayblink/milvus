@@ -355,12 +355,10 @@ func (s *SegmentManager) openNewSegment(ctx context.Context, collectionID Unique
 		MaxRowNum:      int64(maxNumOfRows),
 		LastExpireTime: 0,
 	}
-	var segment *SegmentInfo
 	if segmentState == commonpb.SegmentState_Importing {
-		segment = NewImportSegmentInfo(segmentInfo)
-	} else {
-		segment = NewSegmentInfo(segmentInfo)
+		segmentInfo.IsImporting = true
 	}
+	segment := NewSegmentInfo(segmentInfo)
 	if err := s.meta.AddSegment(segment); err != nil {
 		log.Error("failed to add segment to DataCoord", zap.Error(err))
 		return nil, err

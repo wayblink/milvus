@@ -244,6 +244,22 @@ func (m *meta) SetState(segmentID UniqueID, state commonpb.SegmentState) error {
 	return nil
 }
 
+// UnsetIsImporting removes the `isImporting` flag of a segment.
+func (m *meta) UnsetIsImporting(segmentID UniqueID) error {
+	m.Lock()
+	defer m.Unlock()
+	curSegInfo := m.segments.GetSegment(segmentID)
+	if curSegInfo == nil {
+		return nil
+	}
+	m.segments.SetIsImporting(segmentID, false)
+	curSegInfo = m.segments.GetSegment(segmentID)
+	if curSegInfo != nil && isSegmentHealthy(curSegInfo) {
+		return m.catalog.AlterSegments(m.ctx, []*datapb.SegmentInfo{curSegInfo.SegmentInfo})
+	}
+	return nil
+}
+
 // UpdateFlushSegmentsInfo update segment partial/completed flush info
 // `flushed` parameter indicating whether segment is flushed completely or partially
 // `binlogs`, `checkpoints` and `statPositions` are persistence data for segment

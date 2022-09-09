@@ -153,19 +153,6 @@ func TestAssignSegmentID(t *testing.T) {
 		assert.EqualValues(t, 1000, assign.Count)
 	})
 
-	t.Run("assign segment for bulk load", func(t *testing.T) {
-		svr := newTestServer(t, nil)
-		defer closeTestServer(t, svr)
-		reportImportAttempts = 2
-		svr.rootCoordClient = &mockRootCoord{
-			RootCoord: svr.rootCoordClient,
-			collID:    collID,
-		}
-		svr.CompleteBulkLoad(context.TODO(), &datapb.CompleteBulkLoadRequest{
-			SegmentIds: []int64{1001, 1002, 1003},
-		})
-	})
-
 	t.Run("with closed server", func(t *testing.T) {
 		req := &datapb.SegmentIDRequest{
 			Count:        100,
@@ -230,12 +217,6 @@ func (r *mockRootCoord) DescribeCollection(ctx context.Context, req *milvuspb.De
 		}, nil
 	}
 	return r.RootCoord.DescribeCollection(ctx, req)
-}
-
-func (r *mockRootCoord) CheckSegmentIndexReady(context.Context, *internalpb.CheckSegmentIndexReadyRequest) (*commonpb.Status, error) {
-	return &commonpb.Status{
-		ErrorCode: commonpb.ErrorCode_Success,
-	}, nil
 }
 
 func (r *mockRootCoord) ReportImport(context.Context, *rootcoordpb.ImportResult) (*commonpb.Status, error) {

@@ -262,14 +262,6 @@ func (m *MockRootCoord) ListPolicy(ctx context.Context, in *internalpb.ListPolic
 	return nil, nil
 }
 
-func (m *MockRootCoord) GetImportFailedSegmentIDs(ctx context.Context, req *internalpb.GetImportFailedSegmentIDsRequest) (*internalpb.GetImportFailedSegmentIDsResponse, error) {
-	return nil, nil
-}
-
-func (m *MockRootCoord) CheckSegmentIndexReady(context.Context, *internalpb.CheckSegmentIndexReadyRequest) (*commonpb.Status, error) {
-	return nil, nil
-}
-
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 type MockIndexCoord struct {
 	MockBase
@@ -478,11 +470,11 @@ func (m *MockDataCoord) SaveImportSegment(ctx context.Context, req *datapb.SaveI
 	return nil, nil
 }
 
-func (m *MockDataCoord) CompleteBulkLoad(ctx context.Context, req *datapb.CompleteBulkLoadRequest) (*commonpb.Status, error) {
+func (m *MockDataCoord) UnsetIsImportingState(ctx context.Context, req *datapb.UnsetIsImportingStateRequest) (*commonpb.Status, error) {
 	return nil, nil
 }
 
-func (m *MockDataCoord) UnsetIsImportingState(ctx context.Context, req *datapb.UnsetIsImportingStateRequest) (*commonpb.Status, error) {
+func (m *MockDataCoord) MarkSegmentsDropped(ctx context.Context, req *datapb.MarkSegmentsDroppedRequest) (*commonpb.Status, error) {
 	return nil, nil
 }
 

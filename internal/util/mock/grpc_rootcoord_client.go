@@ -35,14 +35,6 @@ type GrpcRootCoordClient struct {
 	Err error
 }
 
-func (m *GrpcRootCoordClient) GetImportFailedSegmentIDs(ctx context.Context, in *internalpb.GetImportFailedSegmentIDsRequest, opts ...grpc.CallOption) (*internalpb.GetImportFailedSegmentIDsResponse, error) {
-	return &internalpb.GetImportFailedSegmentIDsResponse{}, m.Err
-}
-
-func (m *GrpcRootCoordClient) CheckSegmentIndexReady(ctx context.Context, in *internalpb.CheckSegmentIndexReadyRequest, opts ...grpc.CallOption) (*commonpb.Status, error) {
-	return &commonpb.Status{}, m.Err
-}
-
 func (m *GrpcRootCoordClient) CreateRole(ctx context.Context, in *milvuspb.CreateRoleRequest, opts ...grpc.CallOption) (*commonpb.Status, error) {
 	return &commonpb.Status{}, m.Err
 }

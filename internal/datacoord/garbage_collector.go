@@ -17,7 +17,6 @@
 package datacoord
 
 import (
-	"context"
 	"path"
 	"sync"
 	"time"
@@ -30,9 +29,7 @@ import (
 	"github.com/milvus-io/milvus/api/commonpb"
 	"github.com/milvus-io/milvus/internal/log"
 	"github.com/milvus-io/milvus/internal/proto/datapb"
-	"github.com/milvus-io/milvus/internal/proto/internalpb"
 	"github.com/milvus-io/milvus/internal/storage"
-	"github.com/milvus-io/milvus/internal/types"
 	"github.com/minio/minio-go/v7"
 	"go.uber.org/zap"
 )
@@ -62,8 +59,6 @@ type garbageCollector struct {
 	segRefer   *SegmentReferenceManager
 	indexCoord types.IndexCoord
 
-	rcc types.RootCoord
-
 	startOnce sync.Once
 	stopOnce  sync.Once
 	wg        sync.WaitGroup
@@ -71,8 +66,7 @@ type garbageCollector struct {
 }
 
 // newGarbageCollector create garbage collector with meta and option
-func newGarbageCollector(meta *meta, segRefer *SegmentReferenceManager,
-	indexCoord types.IndexCoord, opt GcOption) *garbageCollector {
+func newGarbageCollector(meta *meta, segRefer *SegmentReferenceManager, indexCoord types.IndexCoord, opt GcOption) *garbageCollector {
 	log.Info("GC with option", zap.Bool("enabled", opt.enabled), zap.Duration("interval", opt.checkInterval),
 		zap.Duration("missingTolerance", opt.missingTolerance), zap.Duration("dropTolerance", opt.dropTolerance))
 	return &garbageCollector{
@@ -224,7 +218,7 @@ func (gc *garbageCollector) clearEtcd() {
 
 func (gc *garbageCollector) isExpire(dropts Timestamp) bool {
 	droptime := time.Unix(0, int64(dropts))
-	return time.Since(droptime) >= gc.option.dropTolerance
+	return time.Since(droptime) > gc.option.dropTolerance
 }
 
 func getLogs(sinfo *SegmentInfo) []*datapb.Binlog {

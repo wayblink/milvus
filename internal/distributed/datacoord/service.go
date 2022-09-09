@@ -383,12 +383,12 @@ func (s *Server) SaveImportSegment(ctx context.Context, request *datapb.SaveImpo
 	return s.dataCoord.SaveImportSegment(ctx, request)
 }
 
-// CompleteBulkLoad is the distributed caller of CompleteBulkLoad.
-func (s *Server) CompleteBulkLoad(ctx context.Context, request *datapb.CompleteBulkLoadRequest) (*commonpb.Status, error) {
-	return s.dataCoord.CompleteBulkLoad(ctx, request)
-}
-
 // UnsetIsImportingState is the distributed caller of UnsetIsImportingState.
 func (s *Server) UnsetIsImportingState(ctx context.Context, request *datapb.UnsetIsImportingStateRequest) (*commonpb.Status, error) {
 	return s.dataCoord.UnsetIsImportingState(ctx, request)
+}
+
+// MarkSegmentsDropped is the distributed caller of MarkSegmentsDropped.
+func (s *Server) MarkSegmentsDropped(ctx context.Context, req *datapb.MarkSegmentsDroppedRequest) (*commonpb.Status, error) {
+	return s.dataCoord.MarkSegmentsDropped(ctx, req)
 }

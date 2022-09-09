@@ -60,8 +60,8 @@ service DataCoord {
   rpc ReleaseSegmentLock(ReleaseSegmentLockRequest) returns (common.Status) {}
 
   rpc SaveImportSegment(SaveImportSegmentRequest) returns(common.Status) {}
-  rpc CompleteBulkLoad(CompleteBulkLoadRequest) returns(common.Status) {}
   rpc UnsetIsImportingState(UnsetIsImportingStateRequest) returns(common.Status) {}
+  rpc MarkSegmentsDropped(MarkSegmentsDroppedRequest) returns(common.Status) {}
 }
 
 service DataNode {
@@ -268,6 +268,10 @@ message SegmentInfo {
   bool createdByCompaction = 14;
   repeated int64 compactionFrom = 15;
   uint64 dropped_at = 16; // timestamp when segment marked drop
+  // A flag indicating if:
+  // (1) this segment is created by bulk load, and
+  // (2) the bulk load task that creates this segment has not yet reached `ImportCompleted` state.
+  bool is_importing = 17;
 }
 
 message SegmentStartPosition {
@@ -575,16 +579,14 @@ message SaveImportSegmentRequest {
   bytes dml_position_id = 8;
 }
 
-message CompleteBulkLoadRequest {
-  common.MsgBase base = 1;
-  int64 task_id = 2;                    // ID of the import task that needs to be completed.
-  int64 collection_id = 3;              // Collection ID of the import task.
-  repeated int64 segment_ids = 4;       // Segment IDs of the bulk load task.
-}
-
 message UnsetIsImportingStateRequest {
   common.MsgBase base = 1;
   repeated int64 segment_ids = 2;       // IDs of segments whose `isImport` states need to be unset.
+}
+
+message MarkSegmentsDroppedRequest {
+  common.MsgBase base = 1;
+  repeated int64 segment_ids = 2;       // IDs of segments that needs to be marked as `dropped`.
 }
 
 message SegmentReferenceLock {

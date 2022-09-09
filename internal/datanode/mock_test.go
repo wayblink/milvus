@@ -257,13 +257,13 @@ func (ds *DataCoordFactory) SaveImportSegment(ctx context.Context, req *datapb.S
 	}, nil
 }
 
-func (ds *DataCoordFactory) CompleteBulkLoad(context.Context, *datapb.CompleteBulkLoadRequest) (*commonpb.Status, error) {
+func (ds *DataCoordFactory) UnsetIsImportingState(context.Context, *datapb.UnsetIsImportingStateRequest) (*commonpb.Status, error) {
 	return &commonpb.Status{
 		ErrorCode: commonpb.ErrorCode_Success,
 	}, nil
 }
 
-func (ds *DataCoordFactory) UnsetIsImportingState(context.Context, *datapb.UnsetIsImportingStateRequest) (*commonpb.Status, error) {
+func (ds *DataCoordFactory) MarkSegmentsDropped(context.Context, *datapb.MarkSegmentsDroppedRequest) (*commonpb.Status, error) {
 	return &commonpb.Status{
 		ErrorCode: commonpb.ErrorCode_Success,
 	}, nil

@@ -308,11 +308,11 @@ type DataCoord interface {
 	// segment to that DataNode.
 	SaveImportSegment(ctx context.Context, req *datapb.SaveImportSegmentRequest) (*commonpb.Status, error)
 
-	// CompleteBulkLoad is the DataCoord side work for a complete bulk load operation.
-	CompleteBulkLoad(ctx context.Context, req *datapb.CompleteBulkLoadRequest) (*commonpb.Status, error)
-
 	// UnsetIsImportingState unsets the `isImport` state of the given segments so that they can get compacted normally.
 	UnsetIsImportingState(ctx context.Context, req *datapb.UnsetIsImportingStateRequest) (*commonpb.Status, error)
+
+	// MarkSegmentsDropped marks the given segments as `dropped` state.
+	MarkSegmentsDropped(ctx context.Context, req *datapb.MarkSegmentsDroppedRequest) (*commonpb.Status, error)
 }
 
 // DataCoordComponent defines the interface of DataCoord component.
@@ -738,10 +738,6 @@ type RootCoord interface {
 	OperatePrivilege(ctx context.Context, req *milvuspb.OperatePrivilegeRequest) (*commonpb.Status, error)
 	SelectGrant(ctx context.Context, req *milvuspb.SelectGrantRequest) (*milvuspb.SelectGrantResponse, error)
 	ListPolicy(ctx context.Context, in *internalpb.ListPolicyRequest) (*internalpb.ListPolicyResponse, error)
-	// GetImportFailedSegmentIDs get import failed segment IDs
-	GetImportFailedSegmentIDs(ctx context.Context, req *internalpb.GetImportFailedSegmentIDsRequest) (*internalpb.GetImportFailedSegmentIDsResponse, error)
-	// CheckSegmentIndexReady checks if indexes have been successfully built on the given segments.
-	CheckSegmentIndexReady(ctx context.Context, req *internalpb.CheckSegmentIndexReadyRequest) (*commonpb.Status, error)
 }
 
 // RootCoordComponent is used by grpc server of RootCoord

@@ -1296,11 +1296,22 @@ func (s *Server) SaveImportSegment(ctx context.Context, req *datapb.SaveImportSe
 }
 
 // UnsetIsImportingState unsets the isImporting states of the given segments.
+// An error status will be returned and error will be logged, if we failed to update *all* segments.
 func (s *Server) UnsetIsImportingState(ctx context.Context, req *datapb.UnsetIsImportingStateRequest) (*commonpb.Status, error) {
 	log.Info("unsetting isImport state of segments",
 		zap.Int64s("segments", req.GetSegmentIds()))
+	failure := false
 	for _, segID := range req.GetSegmentIds() {
-		s.meta.UnsetIsImporting(segID)
+		if err := s.meta.UnsetIsImporting(segID); err != nil {
+			// Fail-open.
+			log.Error("failed to unset segment is importing state", zap.Int64("segment ID", segID))
+			failure = true
+		}
+	}
+	if failure {
+		return &commonpb.Status{
+			ErrorCode: commonpb.ErrorCode_UnexpectedError,
+		}, nil
 	}
 	return &commonpb.Status{
 		ErrorCode: commonpb.ErrorCode_Success,
@@ -1308,11 +1319,22 @@ func (s *Server) UnsetIsImportingState(ctx context.Context, req *datapb.UnsetIsI
 }
 
 // MarkSegmentsDropped unsets the isImporting states of the given segments.
+// An error status will be returned and error will be logged, if we failed to mark *all* segments.
 func (s *Server) MarkSegmentsDropped(ctx context.Context, req *datapb.MarkSegmentsDroppedRequest) (*commonpb.Status, error) {
 	log.Info("marking segments dropped",
 		zap.Int64s("segments", req.GetSegmentIds()))
+	failure := false
 	for _, segID := range req.GetSegmentIds() {
-		s.meta.SetState(segID, commonpb.SegmentState_Dropped)
+		if err := s.meta.SetState(segID, commonpb.SegmentState_Dropped); err != nil {
+			// Fail-open.
+			log.Error("failed to set segment state as dropped", zap.Int64("segment ID", segID))
+			failure = true
+		}
+	}
+	if failure {
+		return &commonpb.Status{
+			ErrorCode: commonpb.ErrorCode_UnexpectedError,
+		}, nil
 	}
 	return &commonpb.Status{
 		ErrorCode: commonpb.ErrorCode_Success,

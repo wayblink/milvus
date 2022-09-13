@@ -217,30 +217,36 @@ func (m *meta) GetAllSegment(segID UniqueID) *SegmentInfo {
 }
 
 // SetState setting segment with provided ID state
-func (m *meta) SetState(segmentID UniqueID, state commonpb.SegmentState) error {
+func (m *meta) SetState(segmentID UniqueID, targetState commonpb.SegmentState) error {
 	m.Lock()
 	defer m.Unlock()
 	curSegInfo := m.segments.GetSegment(segmentID)
 	if curSegInfo == nil {
 		return nil
 	}
+	// Persist segment updates first.
+	clonedSegment := curSegInfo.Clone()
+	clonedSegment.State = targetState
 	oldState := curSegInfo.GetState()
-	m.segments.SetState(segmentID, state)
-	curSegInfo = m.segments.GetSegment(segmentID)
-	if curSegInfo != nil && isSegmentHealthy(curSegInfo) {
-		err := m.catalog.AlterSegments(m.ctx, []*datapb.SegmentInfo{curSegInfo.SegmentInfo})
-		if err == nil {
-			metrics.DataCoordNumSegments.WithLabelValues(oldState.String()).Dec()
-			metrics.DataCoordNumSegments.WithLabelValues(state.String()).Inc()
-			if state == commonpb.SegmentState_Flushed {
-				metrics.DataCoordNumStoredRows.WithLabelValues().Add(float64(curSegInfo.GetNumOfRows()))
-				metrics.DataCoordNumStoredRowsCounter.WithLabelValues().Add(float64(curSegInfo.GetNumOfRows()))
-			} else if oldState == commonpb.SegmentState_Flushed {
-				metrics.DataCoordNumStoredRows.WithLabelValues().Sub(float64(curSegInfo.GetNumOfRows()))
-			}
+	if clonedSegment != nil && isSegmentHealthy(clonedSegment) {
+		if err := m.catalog.AlterSegments(m.ctx, []*datapb.SegmentInfo{clonedSegment.SegmentInfo}); err != nil {
+			log.Error("failed to alter segments",
+				zap.Int64("segment ID", segmentID),
+				zap.Any("target state", targetState),
+				zap.Error(err))
+			return err
 		}
-		return err
+		metrics.DataCoordNumSegments.WithLabelValues(oldState.String()).Dec()
+		metrics.DataCoordNumSegments.WithLabelValues(targetState.String()).Inc()
+		if targetState == commonpb.SegmentState_Flushed {
+			metrics.DataCoordNumStoredRows.WithLabelValues().Add(float64(curSegInfo.GetNumOfRows()))
+			metrics.DataCoordNumStoredRowsCounter.WithLabelValues().Add(float64(curSegInfo.GetNumOfRows()))
+		} else if oldState == commonpb.SegmentState_Flushed {
+			metrics.DataCoordNumStoredRows.WithLabelValues().Sub(float64(curSegInfo.GetNumOfRows()))
+		}
 	}
+	// Update in-memory meta.
+	m.segments.SetState(segmentID, targetState)
 	return nil
 }
 
@@ -252,11 +258,19 @@ func (m *meta) UnsetIsImporting(segmentID UniqueID) error {
 	if curSegInfo == nil {
 		return nil
 	}
-	m.segments.SetIsImporting(segmentID, false)
-	curSegInfo = m.segments.GetSegment(segmentID)
-	if curSegInfo != nil && isSegmentHealthy(curSegInfo) {
-		return m.catalog.AlterSegments(m.ctx, []*datapb.SegmentInfo{curSegInfo.SegmentInfo})
+	// Persist segment updates first.
+	clonedSegment := curSegInfo.Clone()
+	clonedSegment.IsImporting = false
+	if isSegmentHealthy(clonedSegment) {
+		if err := m.catalog.AlterSegments(m.ctx, []*datapb.SegmentInfo{clonedSegment.SegmentInfo}); err != nil {
+			log.Error("failed to unset segment isImporting state",
+				zap.Int64("segment ID", segmentID),
+				zap.Error(err))
+			return err
+		}
 	}
+	// Update in-memory meta.
+	m.segments.SetIsImporting(segmentID, false)
 	return nil
 }
 
@@ -726,11 +740,22 @@ func (m *meta) SelectSegments(selector SegmentInfoSelector) []*SegmentInfo {
 func (m *meta) AddAllocation(segmentID UniqueID, allocation *Allocation) error {
 	m.Lock()
 	defer m.Unlock()
-	m.segments.AddAllocation(segmentID, allocation)
-	if segInfo := m.segments.GetSegment(segmentID); segInfo != nil {
-		// update segment LastExpireTime
-		return m.catalog.AlterSegments(m.ctx, []*datapb.SegmentInfo{segInfo.SegmentInfo})
+	curSegInfo := m.segments.GetSegment(segmentID)
+	if curSegInfo == nil {
+		return nil
 	}
+	// Persist segment updates first.
+	clonedSegment := curSegInfo.Clone(AddAllocation(allocation))
+	if clonedSegment != nil && isSegmentHealthy(clonedSegment) {
+		if err := m.catalog.AlterSegments(m.ctx, []*datapb.SegmentInfo{clonedSegment.SegmentInfo}); err != nil {
+			log.Error("failed to add allocation for segment",
+				zap.Int64("segment ID", segmentID),
+				zap.Error(err))
+			return err
+		}
+	}
+	// Update in-memory meta.
+	m.segments.AddAllocation(segmentID, allocation)
 	return nil
 }
 

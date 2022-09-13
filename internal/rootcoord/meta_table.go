@@ -77,6 +77,7 @@ type IMetaTable interface {
 	ListCollections(ctx context.Context, ts Timestamp) ([]*model.Collection, error)
 	ListAbnormalCollections(ctx context.Context, ts Timestamp) ([]*model.Collection, error)
 	ListCollectionPhysicalChannels() map[typeutil.UniqueID][]string
+	GetCollectionVirtualChannels(colID int64) []string
 	AddPartition(ctx context.Context, partition *model.Partition) error
 	ChangePartitionState(ctx context.Context, collectionID UniqueID, partitionID UniqueID, state pb.PartitionState, ts Timestamp) error
 	RemovePartition(ctx context.Context, collectionID UniqueID, partitionID UniqueID, ts Timestamp) error
@@ -356,6 +357,18 @@ func (mt *MetaTable) ListCollectionPhysicalChannels() map[typeutil.UniqueID][]st
 	}
 
 	return chanMap
+}
+
+// GetCollectionVirtualChannels returns virtual channels of a given collection.
+func (mt *MetaTable) GetCollectionVirtualChannels(colID int64) []string {
+	mt.ddLock.RLock()
+	defer mt.ddLock.RUnlock()
+	for id, collInfo := range mt.collID2Meta {
+		if id == colID {
+			return common.CloneStringList(collInfo.VirtualChannelNames)
+		}
+	}
+	return nil
 }
 
 func (mt *MetaTable) AddPartition(ctx context.Context, partition *model.Partition) error {

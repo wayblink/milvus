@@ -52,6 +52,8 @@ type mockMetaTable struct {
 	DropAliasFunc             func(ctx context.Context, alias string, ts Timestamp) error
 	IsAliasFunc               func(name string) bool
 	ListAliasesByIDFunc       func(collID UniqueID) []string
+	GetCollectionIDByNameFunc func(name string) (UniqueID, error)
+	GetPartitionByNameFunc    func(collID UniqueID, partitionName string, ts Timestamp) (UniqueID, error)
 }
 
 func (m mockMetaTable) ListCollections(ctx context.Context, ts Timestamp) ([]*model.Collection, error) {
@@ -108,6 +110,14 @@ func (m mockMetaTable) IsAlias(name string) bool {
 
 func (m mockMetaTable) ListAliasesByID(collID UniqueID) []string {
 	return m.ListAliasesByIDFunc(collID)
+}
+
+func (m mockMetaTable) GetCollectionIDByName(name string) (UniqueID, error) {
+	return m.GetCollectionIDByNameFunc(name)
+}
+
+func (m mockMetaTable) GetPartitionByName(collID UniqueID, partitionName string, ts Timestamp) (UniqueID, error) {
+	return m.GetPartitionByNameFunc(collID, partitionName, ts)
 }
 
 func newMockMetaTable() *mockMetaTable {

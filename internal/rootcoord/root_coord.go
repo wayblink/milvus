@@ -414,7 +414,6 @@ func (c *Core) initImportManager() error {
 		impTaskKv,
 		f.NewIDAllocator(),
 		f.NewImportFunc(),
-		f.NewUnsetImportingFunc(),
 		f.NewMarkSegmentsDroppedFunc(),
 		f.NewGetCollectionNameFunc(),
 	)
@@ -1541,6 +1540,10 @@ func (c *Core) Import(ctx context.Context, req *milvuspb.ImportRequest) (*milvus
 			zap.Error(err))
 		return nil, err
 	}
+	req.ChannelNames = c.meta.GetCollectionVirtualChannels(cID)
+	if req.GetPartitionName() == "" {
+		req.PartitionName = Params.CommonCfg.DefaultPartitionName
+	}
 	var pID UniqueID
 	if pID, err = c.meta.GetPartitionByName(cID, req.GetPartitionName(), typeutil.MaxTimestamp); err != nil {
 		log.Error("failed to get partition ID from its name",
@@ -1552,6 +1555,7 @@ func (c *Core) Import(ctx context.Context, req *milvuspb.ImportRequest) (*milvus
 		zap.String("collection name", req.GetCollectionName()),
 		zap.Int64("collection ID", cID),
 		zap.String("partition name", req.GetPartitionName()),
+		zap.Strings("virtual channel names", req.GetChannelNames()),
 		zap.Int64("partition ID", pID),
 		zap.Int("# of files = ", len(req.GetFiles())),
 		zap.Bool("row-based", req.GetRowBased()),
@@ -1568,6 +1572,8 @@ func (c *Core) Import(ctx context.Context, req *milvuspb.ImportRequest) (*milvus
 func (c *Core) completeImportAsync(taskID int64) {
 	// First check if the import task has turned persisted state. Returns an error status if not after retrying.
 	// This could take a few or tens of seconds.
+	log.Info("start checking task persisted state",
+		zap.Int64("task ID", taskID))
 	getImportResp, err := c.checkImportTaskPersisted(taskID)
 	if err != nil {
 		// Task has not reached `ImportPersisted` state for a very long time, return and
@@ -1579,6 +1585,8 @@ func (c *Core) completeImportAsync(taskID int64) {
 			zap.Any("current task state", getImportResp.GetState()))
 		return
 	}
+	log.Info("start checking segment index ready state",
+		zap.Int64("task ID", taskID))
 	// Check index status. Note that checkSegmentIndexReady returns SUCCESS if:
 	// (1) there's no index defined on the collection, or
 	// (2) all indexes have been successfully built
@@ -1594,6 +1602,8 @@ func (c *Core) completeImportAsync(taskID int64) {
 
 	// Update import task state to `ImportState_ImportCompleted`.
 	// Retry on errors.
+	log.Info("trying to set task state as ImportComplete",
+		zap.Int64("task ID", taskID))
 	err = retry.Do(c.ctx, func() error {
 		status, err := c.ReportImport(c.ctx, &rootcoordpb.ImportResult{
 			TaskId: taskID,
@@ -1615,10 +1625,20 @@ func (c *Core) completeImportAsync(taskID int64) {
 		// Everything has to start all over again.
 		return
 	}
+	log.Info("start unsetting isImporting state of segments",
+		zap.Int64s("segment IDs", getImportResp.GetSegmentIds()))
 	// Remove the `isImport` states of these segments only when the import task reaches `ImportState_ImportCompleted` state.
-	c.dataCoord.UnsetIsImportingState(c.ctx, &datapb.UnsetIsImportingStateRequest{
+	status, err := c.dataCoord.UnsetIsImportingState(c.ctx, &datapb.UnsetIsImportingStateRequest{
 		SegmentIds: getImportResp.GetSegmentIds(),
 	})
+	if err != nil {
+		log.Error("failed to unset importing state of all segments (could be partial failure)",
+			zap.Error(err))
+	}
+	if status.GetErrorCode() != commonpb.ErrorCode_Success {
+		log.Error("failed to unset importing state of all segments (could be partial failure)",
+			zap.Error(errors.New(status.GetReason())))
+	}
 }
 
 // checkImportTaskPersisted starts a loop to periodically check if the import task becomes ImportState_ImportPersisted state.
@@ -2023,7 +2043,6 @@ func (c *Core) checkSegmentIndexReady(ctx context.Context, taskID int64, collID 
 // segments.
 func (c *Core) countCompleteIndex(ctx context.Context, collectionName string, collectionID UniqueID,
 	indexInfos []*indexpb.IndexInfo, allSegmentIDs []UniqueID) (bool, error) {
-
 	indexedSegmentCount := len(allSegmentIDs)
 	for _, indexInfo := range indexInfos {
 		states, err := c.broker.GetSegmentIndexState(ctx, collectionID, indexInfo.GetIndexName(), allSegmentIDs)

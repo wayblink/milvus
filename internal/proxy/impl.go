@@ -3799,30 +3799,6 @@ func (node *Proxy) Import(ctx context.Context, req *milvuspb.ImportRequest) (*mi
 		resp.Status = unhealthyStatus()
 		return resp, nil
 	}
-	// Get collection ID and then channel names.
-	collID, err := globalMetaCache.GetCollectionID(ctx, req.GetCollectionName())
-	if err != nil {
-		log.Error("collection ID not found",
-			zap.String("collection name", req.GetCollectionName()),
-			zap.Error(err))
-		resp.Status.ErrorCode = commonpb.ErrorCode_UnexpectedError
-		resp.Status.Reason = err.Error()
-		return resp, nil
-	}
-	chNames, err := node.chMgr.getVChannels(collID)
-	if err != nil {
-		log.Error("failed to get virtual channels",
-			zap.Error(err),
-			zap.String("collection", req.GetCollectionName()),
-			zap.Int64("collection_id", collID))
-		resp.Status.ErrorCode = commonpb.ErrorCode_UnexpectedError
-		resp.Status.Reason = err.Error()
-		return resp, nil
-	}
-	req.ChannelNames = chNames
-	if req.GetPartitionName() == "" {
-		req.PartitionName = Params.CommonCfg.DefaultPartitionName
-	}
 	// Call rootCoord to finish import.
 	respFromRC, err := node.rootCoord.Import(ctx, req)
 	if err != nil {

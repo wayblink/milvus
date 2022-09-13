@@ -89,7 +89,6 @@ type importManager struct {
 	idAllocator             func(count uint32) (typeutil.UniqueID, typeutil.UniqueID, error)
 	callImportService       func(ctx context.Context, req *datapb.ImportTaskRequest) (*datapb.ImportTaskResponse, error)
 	getCollectionName       func(collID, partitionID typeutil.UniqueID) (string, string, error)
-	callUnsetIsImportState  func(ctx context.Context, segIDs []typeutil.UniqueID) (*commonpb.Status, error)
 	callMarkSegmentsDropped func(ctx context.Context, segIDs []typeutil.UniqueID) (*commonpb.Status, error)
 }
 
@@ -97,7 +96,6 @@ type importManager struct {
 func newImportManager(ctx context.Context, client kv.MetaKv,
 	idAlloc func(count uint32) (typeutil.UniqueID, typeutil.UniqueID, error),
 	importService func(ctx context.Context, req *datapb.ImportTaskRequest) (*datapb.ImportTaskResponse, error),
-	unsetIsImportState func(ctx context.Context, segIDs []typeutil.UniqueID) (*commonpb.Status, error),
 	markSegmentsDropped func(ctx context.Context, segIDs []typeutil.UniqueID) (*commonpb.Status, error),
 	getCollectionName func(collID, partitionID typeutil.UniqueID) (string, string, error)) *importManager {
 	mgr := &importManager{
@@ -112,7 +110,6 @@ func newImportManager(ctx context.Context, client kv.MetaKv,
 		lastReqID:               0,
 		idAllocator:             idAlloc,
 		callImportService:       importService,
-		callUnsetIsImportState:  unsetIsImportState,
 		callMarkSegmentsDropped: markSegmentsDropped,
 		getCollectionName:       getCollectionName,
 	}
@@ -438,6 +435,7 @@ func (m *importManager) updateTaskState(ir *rootcoordpb.ImportResult) (*datapb.I
 	m.workingLock.Lock()
 	defer m.workingLock.Unlock()
 	ok := false
+	var toPersistImportTaskInfo *datapb.ImportTaskInfo
 	if v, ok = m.workingTasks[ir.GetTaskId()]; ok {
 		// If the task has already been marked failed. Prevent further state updating and return an error.
 		if v.GetState().GetStateCode() == commonpb.ImportState_ImportFailed {
@@ -446,7 +444,7 @@ func (m *importManager) updateTaskState(ir *rootcoordpb.ImportResult) (*datapb.I
 		}
 		found = true
 		// Meta persist should be done before memory objs change.
-		toPersistImportTaskInfo := cloneImportTaskInfo(v)
+		toPersistImportTaskInfo = cloneImportTaskInfo(v)
 		toPersistImportTaskInfo.State.StateCode = ir.GetState()
 		toPersistImportTaskInfo.State.Segments = ir.GetSegments()
 		toPersistImportTaskInfo.State.RowCount = ir.GetRowCount()
@@ -471,7 +469,7 @@ func (m *importManager) updateTaskState(ir *rootcoordpb.ImportResult) (*datapb.I
 		log.Debug("import manager update task import result failed", zap.Int64("task ID", ir.GetTaskId()))
 		return nil, errors.New("failed to update import task, ID not found: " + strconv.FormatInt(ir.TaskId, 10))
 	}
-	return v, nil
+	return toPersistImportTaskInfo, nil
 }
 
 // setImportTaskState sets the task state of an import task. Changes to the import task state will be persisted.
@@ -824,10 +822,23 @@ func (m *importManager) removeBadImportSegments(ctx context.Context) {
 		if t.GetState().GetStateCode() != commonpb.ImportState_ImportFailed {
 			continue
 		}
+		log.Info("trying to mark segments as dropped",
+			zap.Int64s("segment IDs", t.GetState().GetSegments()))
 		// Ignoring return value as it will always return a success state.
-		m.callMarkSegmentsDropped(ctx, t.GetState().GetSegments())
+		status, err := m.callMarkSegmentsDropped(ctx, t.GetState().GetSegments())
+		errMsg := "failed to mark all segments dropped, some segments might already have been dropped"
+		if err != nil {
+			log.Error(errMsg,
+				zap.Int64s("segments", t.GetState().GetSegments()),
+				zap.Error(err))
+		}
+		if status.GetErrorCode() != commonpb.ErrorCode_Success {
+			log.Error(errMsg,
+				zap.Int64s("segments", t.GetState().GetSegments()),
+				zap.Error(errors.New(status.GetReason())))
+		}
 		if err = m.setImportTaskState(t.GetId(), commonpb.ImportState_ImportFailedAndCleaned); err != nil {
-			log.Error("failed to set import task state",
+			log.Error(errMsg,
 				zap.Int64("task ID", t.GetId()))
 		}
 	}

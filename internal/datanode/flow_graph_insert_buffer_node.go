@@ -214,7 +214,7 @@ func (ibNode *insertBufferNode) Operate(in []Msg) []Msg {
 	if len(seg2Upload) > 0 {
 		log.Info("seg2Upload",
 			zap.Any("seg2Upload", seg2Upload),
-			zap.Any("insertMessages", fgMsg.insertMessages),
+			//zap.Any("insertMessages", fgMsg.insertMessages),
 			zap.Any("startPositions", startPositions[0]),
 			zap.Any("endPositions", endPositions[0]))
 	}

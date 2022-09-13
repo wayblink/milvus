@@ -31,6 +31,7 @@ type MockBaseKV struct {
 }
 
 func (m *MockBaseKV) Load(key string) (string, error) {
+	log.Debug("doing load", zap.String("key", key))
 	if val, ok := m.InMemKv.Load(key); ok {
 		return val.(string), nil
 	}

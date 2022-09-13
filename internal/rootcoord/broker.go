@@ -184,7 +184,7 @@ func (b *ServerBroker) Flush(ctx context.Context, cID int64, segIDs []int64) err
 	if err != nil {
 		return errors.New("failed to call flush to data coordinator: " + err.Error())
 	}
-	if resp.Status.ErrorCode != commonpb.ErrorCode_Success {
+	if resp.GetStatus().GetErrorCode() != commonpb.ErrorCode_Success {
 		return errors.New(resp.Status.Reason)
 	}
 	log.Info("flush on collection succeed", zap.Int64("collection ID", cID))

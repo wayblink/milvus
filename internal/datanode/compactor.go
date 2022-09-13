@@ -25,7 +25,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bits-and-blooms/bloom/v3"
 	"github.com/milvus-io/milvus/internal/log"
 	"github.com/milvus-io/milvus/internal/metrics"
 	"github.com/milvus-io/milvus/internal/proto/datapb"
@@ -129,35 +128,12 @@ func (t *compactionTask) getChannelName() string {
 	return t.plan.GetChannel()
 }
 
-func (t *compactionTask) getPlanTargetEntryNumber() int64 {
-	if t.plan == nil {
-		// if plan empty return default size
-		return int64(bloomFilterSize)
-	}
-	var result int64
-	for _, info := range t.plan.GetSegmentBinlogs() {
-		for _, fieldLog := range info.GetFieldBinlogs() {
-			for _, binlog := range fieldLog.GetBinlogs() {
-				result += binlog.GetEntriesNum()
-			}
-		}
-	}
-
-	// prevent bloom filter too small
-	if result == 0 {
-		log.Warn("compaction target entry number zero", zap.Int64("planID", t.getPlanID()))
-		return int64(bloomFilterSize)
-	}
-	return result
-}
-
-func (t *compactionTask) mergeDeltalogs(dBlobs map[UniqueID][]*Blob, timetravelTs Timestamp) (map[interface{}]Timestamp, *DelDataBuf, error) {
-	log := log.With(zap.Int64("planID", t.getPlanID()))
+func (t *compactionTask) mergeDeltalogs(dBlobs map[UniqueID][]*Blob, timetravelTs Timestamp) (map[primaryKey]Timestamp, *DelDataBuf, error) {
 	mergeStart := time.Now()
 	dCodec := storage.NewDeleteCodec()
 
 	var (
-		pk2ts = make(map[interface{}]Timestamp)
+		pk2ts = make(map[primaryKey]Timestamp)
 		dbuff = &DelDataBuf{
 			delData: &DeleteData{
 				Pks: make([]primaryKey, 0),
@@ -181,7 +157,7 @@ func (t *compactionTask) mergeDeltalogs(dBlobs map[UniqueID][]*Blob, timetravelT
 			ts := dData.Tss[i]
 
 			if timetravelTs != Timestamp(0) && dData.Tss[i] <= timetravelTs {
-				pk2ts[pk.GetValue()] = ts
+				pk2ts[pk] = ts
 				continue
 			}
 
@@ -198,7 +174,7 @@ func (t *compactionTask) mergeDeltalogs(dBlobs map[UniqueID][]*Blob, timetravelT
 	}
 
 	dbuff.updateSize(dbuff.delData.RowCount)
-	log.Debug("mergeDeltalogs end",
+	log.Debug("mergeDeltalogs end", zap.Int64("PlanID", t.getPlanID()),
 		zap.Int("number of pks to compact in insert logs", len(pk2ts)),
 		zap.Any("elapse in ms", nano2Milli(time.Since(mergeStart))))
 
@@ -210,8 +186,7 @@ func nano2Milli(nano time.Duration) float64 {
 	return float64(nano) / float64(time.Millisecond)
 }
 
-func (t *compactionTask) merge(mergeItr iterator, delta map[interface{}]Timestamp, schema *schemapb.CollectionSchema, currentTs Timestamp) ([]*InsertData, []byte, int64, error) {
-	log := log.With(zap.Int64("planID", t.getPlanID()))
+func (t *compactionTask) merge(mergeItr iterator, delta map[primaryKey]Timestamp, schema *schemapb.CollectionSchema, currentTs Timestamp) ([]*InsertData, int64, error) {
 	mergeStart := time.Now()
 
 	var (
@@ -221,46 +196,31 @@ func (t *compactionTask) merge(mergeItr iterator, delta map[interface{}]Timestam
 		expired          int64 // the number of expired entity
 		err              error
 
-		// statslog generation
-		segment *Segment // empty segment used for bf generation
-		pkID    UniqueID
-		pkType  schemapb.DataType
-
 		iDatas      = make([]*InsertData, 0)
 		fID2Type    = make(map[UniqueID]schemapb.DataType)
 		fID2Content = make(map[UniqueID][]interface{})
 	)
 
 	isDeletedValue := func(v *storage.Value) bool {
-		ts, ok := delta[v.PK.GetValue()]
-		if ok && uint64(v.Timestamp) <= ts {
-			return true
+		for pk, ts := range delta {
+			if pk.EQ(v.PK) && uint64(v.Timestamp) <= ts {
+				return true
+			}
 		}
 
 		return false
 	}
 
-	//
-	targetRowCount := t.getPlanTargetEntryNumber()
-	log.Debug("merge estimate target row count", zap.Int64("row count", targetRowCount))
-	segment = &Segment{
-		pkFilter: bloom.NewWithEstimates(uint(targetRowCount), maxBloomFalsePositive),
-	}
-
 	// get dim
 	for _, fs := range schema.GetFields() {
 		fID2Type[fs.GetFieldID()] = fs.GetDataType()
-		if fs.GetIsPrimaryKey() {
-			pkID = fs.GetFieldID()
-			pkType = fs.GetDataType()
-		}
 		if fs.GetDataType() == schemapb.DataType_FloatVector ||
 			fs.GetDataType() == schemapb.DataType_BinaryVector {
 			for _, t := range fs.GetTypeParams() {
 				if t.Key == "dim" {
 					if dim, err = strconv.Atoi(t.Value); err != nil {
 						log.Warn("strconv wrong on get dim", zap.Error(err))
-						return nil, nil, 0, err
+						return nil, 0, err
 					}
 					break
 				}
@@ -276,7 +236,7 @@ func (t *compactionTask) merge(mergeItr iterator, delta map[interface{}]Timestam
 		v, ok := vInter.(*storage.Value)
 		if !ok {
 			log.Warn("transfer interface to Value wrong")
-			return nil, nil, 0, errors.New("unexpected error")
+			return nil, 0, errors.New("unexpected error")
 		}
 
 		if isDeletedValue(v) {
@@ -293,7 +253,7 @@ func (t *compactionTask) merge(mergeItr iterator, delta map[interface{}]Timestam
 		row, ok := v.Value.(map[UniqueID]interface{})
 		if !ok {
 			log.Warn("transfer interface to map wrong")
-			return nil, nil, 0, errors.New("unexpected error")
+			return nil, 0, errors.New("unexpected error")
 		}
 
 		for fID, vInter := range row {
@@ -320,7 +280,7 @@ func (t *compactionTask) merge(mergeItr iterator, delta map[interface{}]Timestam
 		tp, ok := fID2Type[fID]
 		if !ok {
 			log.Warn("no field ID in this schema", zap.Int64("fieldID", fID))
-			return nil, nil, 0, errors.New("Unexpected error")
+			return nil, 0, errors.New("Unexpected error")
 		}
 
 		for i := 0; i < numBinlogs; i++ {
@@ -336,30 +296,17 @@ func (t *compactionTask) merge(mergeItr iterator, delta map[interface{}]Timestam
 
 			if err != nil {
 				log.Warn("transfer interface to FieldData wrong", zap.Error(err))
-				return nil, nil, 0, err
-			}
-			if fID == pkID {
-				err = segment.updatePKRange(fData)
-				if err != nil {
-					log.Warn("update pk range failed", zap.Error(err))
-					return nil, nil, 0, err
-				}
+				return nil, 0, err
 			}
 			iDatas[i].Data[fID] = fData
 		}
+
 	}
 
-	// marshal segment statslog
-	segStats, err := segment.getSegmentStatslog(pkID, pkType)
-	if err != nil {
-		log.Warn("failed to generate segment statslog", zap.Int64("pkID", pkID), zap.Error(err))
-		return nil, nil, 0, err
-	}
-
-	log.Debug("merge end", zap.Int64("remaining insert numRows", numRows),
+	log.Debug("merge end", zap.Int64("planID", t.getPlanID()), zap.Int64("remaining insert numRows", numRows),
 		zap.Int64("expired entities", expired),
-		zap.Float64("elapse in ms", nano2Milli(time.Since(mergeStart))))
-	return iDatas, segStats, numRows, nil
+		zap.Any("elapse in ms", nano2Milli(time.Since(mergeStart))))
+	return iDatas, numRows, nil
 }
 
 func (t *compactionTask) compact() (*datapb.CompactionResult, error) {
@@ -526,14 +473,14 @@ func (t *compactionTask) compact() (*datapb.CompactionResult, error) {
 		return nil, err
 	}
 
-	iDatas, segStats, numRows, err := t.merge(mergeItr, deltaPk2Ts, meta.GetSchema(), t.GetCurrentTime())
+	iDatas, numRows, err := t.merge(mergeItr, deltaPk2Ts, meta.GetSchema(), t.GetCurrentTime())
 	if err != nil {
 		log.Error("compact wrong", zap.Int64("planID", t.plan.GetPlanID()), zap.Error(err))
 		return nil, err
 	}
 
 	uploadStart := time.Now()
-	segPaths, err := t.upload(ctxTimeout, targetSegID, partID, iDatas, segStats, deltaBuf.delData, meta)
+	segPaths, err := t.upload(ctxTimeout, targetSegID, partID, iDatas, deltaBuf.delData, meta)
 	if err != nil {
 		log.Error("compact wrong", zap.Int64("planID", t.plan.GetPlanID()), zap.Error(err))
 		return nil, err

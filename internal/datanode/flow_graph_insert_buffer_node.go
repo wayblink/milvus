@@ -157,7 +157,7 @@ func (ibNode *insertBufferNode) Close() {
 }
 
 func (ibNode *insertBufferNode) Operate(in []Msg) []Msg {
-	log.Debug("InsertBufferNode Operating")
+	//log.Debug("InsertBufferNode Operating")
 
 	if len(in) != 1 {
 		log.Error("Invalid operate message input in insertBufferNode", zap.Int("input length", len(in)))
@@ -211,7 +211,13 @@ func (ibNode *insertBufferNode) Operate(in []Msg) []Msg {
 
 	// Updating segment statistics in replica
 	seg2Upload, err := ibNode.updateSegStatesInReplica(fgMsg.insertMessages, startPositions[0], endPositions[0])
-	log.Info("seg2Upload", zap.Any("seg2Upload", seg2Upload))
+	if len(seg2Upload) > 0 {
+		log.Info("seg2Upload",
+			zap.Any("seg2Upload", seg2Upload),
+			zap.Any("insertMessages", fgMsg.insertMessages),
+			zap.Any("startPositions", startPositions[0]),
+			zap.Any("endPositions", endPositions[0]))
+	}
 	if err != nil {
 		// Occurs only if the collectionID is mismatch, should not happen
 		err = fmt.Errorf("update segment states in Replica wrong, err = %s", err)
@@ -561,7 +567,7 @@ func (ibNode *insertBufferNode) bufferInsertMsg(msg *msgstream.InsertMsg, endPos
 
 // writeHardTimeTick writes timetick once insertBufferNode operates.
 func (ibNode *insertBufferNode) writeHardTimeTick(ts Timestamp, segmentIDs []int64) {
-	log.Debug("writeHardTimeTick", zap.Any("segs", segmentIDs))
+	//log.Debug("writeHardTimeTick", zap.Any("segs", segmentIDs))
 	ibNode.ttLogger.LogTs(ts)
 	ibNode.ttMerger.bufferTs(ts, segmentIDs)
 }

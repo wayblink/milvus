@@ -2809,11 +2809,11 @@ func TestDataCoord_Import(t *testing.T) {
 	})
 }
 
-func TestDataCoord_AddSegment(t *testing.T) {
+func TestDataCoord_SaveImportSegment(t *testing.T) {
 	t.Run("test add segment", func(t *testing.T) {
 		svr := newTestServer(t, nil)
 		defer closeTestServer(t, svr)
-		seg := buildSegment(100, 100, 100, "ch1")
+		seg := buildSegment(100, 100, 100, "ch1", false)
 		svr.meta.AddSegment(seg)
 		svr.sessionManager.AddSession(&NodeInfo{
 			NodeID:  110,
@@ -2870,6 +2870,51 @@ func TestDataCoord_AddSegment(t *testing.T) {
 		status, err := svr.SaveImportSegment(context.TODO(), &datapb.SaveImportSegmentRequest{})
 		assert.NoError(t, err)
 		assert.Equal(t, commonpb.ErrorCode_DataCoordNA, status.GetErrorCode())
+	})
+}
+
+func TestDataCoord_UnsetIsImportingState(t *testing.T) {
+	t.Run("normal case", func(t *testing.T) {
+		svr := newTestServer(t, nil)
+		defer closeTestServer(t, svr)
+		seg := buildSegment(100, 100, 100, "ch1", false)
+		svr.meta.AddSegment(seg)
+
+		status, err := svr.UnsetIsImportingState(context.Background(), &datapb.UnsetIsImportingStateRequest{
+			SegmentIds: []int64{100},
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, commonpb.ErrorCode_Success, status.GetErrorCode())
+
+		// Trying to unset state of a segment that does not exist.
+		status, err = svr.UnsetIsImportingState(context.Background(), &datapb.UnsetIsImportingStateRequest{
+			SegmentIds: []int64{999},
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, commonpb.ErrorCode_UnexpectedError, status.GetErrorCode())
+	})
+}
+
+func TestDataCoord_MarkSegmentsDropped(t *testing.T) {
+	t.Run("normal case", func(t *testing.T) {
+		svr := newTestServer(t, nil)
+		defer closeTestServer(t, svr)
+		seg := buildSegment(100, 100, 100, "ch1", false)
+		svr.meta.AddSegment(seg)
+
+		status, err := svr.MarkSegmentsDropped(context.Background(), &datapb.MarkSegmentsDroppedRequest{
+			SegmentIds: []int64{100},
+		})
+		assert.NoError(t, err)
+		assert.Equal(t, commonpb.ErrorCode_Success, status.GetErrorCode())
+
+		// Trying to mark dropped of a segment that does not exist.
+		status, err = svr.MarkSegmentsDropped(context.Background(), &datapb.MarkSegmentsDroppedRequest{
+			SegmentIds: []int64{999},
+		})
+		assert.NoError(t, err)
+		// Returning success as SetState will succeed if segment does not exist. This should probably get fixed.
+		assert.Equal(t, commonpb.ErrorCode_Success, status.GetErrorCode())
 	})
 }
 

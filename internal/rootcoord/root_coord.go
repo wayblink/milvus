@@ -1652,17 +1652,17 @@ func (c *Core) checkImportTaskPersisted(taskID int64) (*milvuspb.GetImportStateR
 	for {
 		select {
 		case <-c.ctx.Done():
-			log.Info("(in check task persisted loop) context done, exiting CheckSegmentIndexReady loop")
-			return nil, errors.New("proxy node context done")
+			log.Info("(in check task persisted loop) context done, exiting checkImportTaskPersisted loop")
+			return nil, errors.New("RootCoord core context done")
 		case <-ticker.C:
 			var err error
 			getImportResp, err = c.GetImportState(c.ctx, &milvuspb.GetImportStateRequest{Task: taskID})
 			if err != nil {
-				log.Warn(fmt.Sprintf("an error occurred while completing bulk load %s", err.Error()))
+				log.Warn(fmt.Sprintf("an error occurred while checking import task persisted: %s", err.Error()))
 				return nil, err
 			}
 			if getImportResp.GetStatus().GetErrorCode() != commonpb.ErrorCode_Success {
-				log.Warn(fmt.Sprintf("an error occurred while completing bulk load %s", getImportResp.GetStatus().GetReason()))
+				log.Warn(fmt.Sprintf("an error occurred while checking import task persisted %s", getImportResp.GetStatus().GetReason()))
 				return nil, errors.New(getImportResp.GetStatus().GetReason())
 			}
 			if getImportResp.GetState() == commonpb.ImportState_ImportPersisted {
@@ -1977,16 +1977,16 @@ func (c *Core) checkSegmentIndexReady(ctx context.Context, taskID int64, collID 
 	// Check if collection has any indexed fields. If so, start a loop to check segments' index states.
 	var descIdxResp *indexpb.DescribeIndexResponse
 	if descIdxResp, err = c.broker.DescribeIndex(ctx, collID); err != nil {
-		if descIdxResp.GetStatus().GetErrorCode() == commonpb.ErrorCode_IndexNotExist {
-			log.Info("no index field found for collection", zap.Int64("collection ID", collID))
-			return &commonpb.Status{
-				ErrorCode: commonpb.ErrorCode_Success,
-			}, nil
-		}
 		log.Error("failed to describe index",
 			zap.Int64("collection ID", collID),
 			zap.Error(err))
 	} else {
+		if descIdxResp.GetStatus().GetErrorCode() == commonpb.ErrorCode_IndexNotExist {
+			log.Info("index not exist for collection", zap.Int64("collection ID", collID))
+			return &commonpb.Status{
+				ErrorCode: commonpb.ErrorCode_Success,
+			}, nil
+		}
 		log.Info("index info retrieved for collection",
 			zap.Int64("collection ID", collID),
 			zap.Any("index info", descIdxResp.GetIndexInfos()))

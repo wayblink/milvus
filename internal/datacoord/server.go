@@ -637,6 +637,22 @@ func (s *Server) updateSegmentStatistics(stats []*datapb.SegmentStats) {
 	}
 }
 
+func (s *Server) updateSegmentStatistics2(stats []*datapb.SegmentStats) {
+	for _, stat := range stats {
+		// Log if # of rows is updated.
+		if s.meta.GetAllSegment(stat.GetSegmentID()) != nil &&
+			s.meta.GetAllSegment(stat.GetSegmentID()).GetNumOfRows() != stat.GetNumRows() {
+			log.Debug("Updating segment number of rows",
+				zap.Int64("segment ID", stat.GetSegmentID()),
+				zap.Int64("old value", s.meta.GetAllSegment(stat.GetSegmentID()).GetNumOfRows()),
+				zap.Int64("new value", stat.GetNumRows()),
+				zap.Any("seg info", s.meta.GetSegment(stat.GetSegmentID())),
+			)
+		}
+		s.meta.SetCurrentRows(stat.GetSegmentID(), stat.GetNumRows())
+	}
+}
+
 func (s *Server) getFlushableSegmentsInfo(flushableIDs []int64) []*SegmentInfo {
 	res := make([]*SegmentInfo, 0, len(flushableIDs))
 	for _, id := range flushableIDs {

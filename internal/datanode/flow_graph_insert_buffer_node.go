@@ -228,6 +228,7 @@ func (ibNode *insertBufferNode) Operate(in []Msg) []Msg {
 	ibNode.lastTimestamp = endPositions[0].Timestamp
 
 	// Updating segment statistics in replica
+	log.Info("wayblink", zap.Any("fgMsg.insertMessages", fgMsg.insertMessages))
 	seg2Upload, err := ibNode.updateSegStatesInReplica(fgMsg.insertMessages, startPositions[0], endPositions[0])
 	if err != nil {
 		// Occurs only if the collectionID is mismatch, should not happen
@@ -660,10 +661,11 @@ func newInsertBufferNode(ctx context.Context, collID UniqueID, flushCh <-chan fl
 		pt, _ := tsoutil.ParseHybridTs(ts)
 		pChan := funcutil.ToPhysicalChannel(config.vChannelName)
 		metrics.DataNodeTimeSync.WithLabelValues(fmt.Sprint(Params.DataNodeCfg.GetNodeID()), pChan).Set(float64(pt))
+		log.Debug("wayblink produce", zap.Any("pack", msgPack))
 		return wTtMsgStream.Produce(&msgPack)
 	})
 
-	return &insertBufferNode{
+	res := &insertBufferNode{
 		ctx:          ctx,
 		BaseNode:     baseNode,
 		insertBuffer: sync.Map{},
@@ -680,5 +682,7 @@ func newInsertBufferNode(ctx context.Context, collID UniqueID, flushCh <-chan fl
 		channelName: config.vChannelName,
 		ttMerger:    mt,
 		ttLogger:    &timeTickLogger{vChannelName: config.vChannelName},
-	}, nil
+	}
+	log.Info("create insertBufferNode", zap.Any("node", res))
+	return res, nil
 }

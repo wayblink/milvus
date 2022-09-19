@@ -1054,7 +1054,7 @@ func (s *Server) UpdateSegmentStatistics(ctx context.Context, req *datapb.Update
 		resp.Reason = msgDataCoordIsUnhealthy(Params.DataCoordCfg.GetNodeID())
 		return resp, nil
 	}
-	s.updateSegmentStatistics(req.GetStats())
+	s.updateSegmentStatistics2(req.GetStats())
 	return &commonpb.Status{
 		ErrorCode: commonpb.ErrorCode_Success,
 	}, nil

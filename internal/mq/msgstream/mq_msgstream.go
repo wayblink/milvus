@@ -233,6 +233,7 @@ func (ms *mqMsgStream) GetProduceChannels() []string {
 }
 
 func (ms *mqMsgStream) Produce(msgPack *MsgPack) error {
+	log.Debug("wayblink produce", zap.Any("pack", msgPack))
 	if msgPack == nil || len(msgPack.Msgs) <= 0 {
 		log.Debug("Warning: Receive empty msgPack")
 		return nil

@@ -28,6 +28,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/milvus-io/milvus/api/commonpb"
+	"github.com/milvus-io/milvus/api/milvuspb"
 	"github.com/milvus-io/milvus/internal/allocator"
 	"github.com/milvus-io/milvus/internal/common"
 	"github.com/milvus-io/milvus/internal/kv"
@@ -38,14 +40,11 @@ import (
 	"github.com/milvus-io/milvus/internal/metastore/db/dbcore"
 	"github.com/milvus-io/milvus/internal/metastore/db/rootcoord"
 	kvmetestore "github.com/milvus-io/milvus/internal/metastore/kv/rootcoord"
-
-	"github.com/milvus-io/milvus/api/commonpb"
-	"github.com/milvus-io/milvus/api/milvuspb"
-	"github.com/milvus-io/milvus/internal/allocator"
-	"github.com/milvus-io/milvus/internal/common"
-	"github.com/milvus-io/milvus/internal/log"
 	"github.com/milvus-io/milvus/internal/metastore/model"
 	"github.com/milvus-io/milvus/internal/metrics"
+	"github.com/milvus-io/milvus/internal/proto/datapb"
+	pb "github.com/milvus-io/milvus/internal/proto/etcdpb"
+	"github.com/milvus-io/milvus/internal/proto/indexpb"
 	"github.com/milvus-io/milvus/internal/proto/internalpb"
 	"github.com/milvus-io/milvus/internal/proto/proxypb"
 	"github.com/milvus-io/milvus/internal/proto/rootcoordpb"
@@ -78,7 +77,7 @@ const InvalidCollectionID = UniqueID(0)
 var CheckTaskPersistedInterval = 5 * time.Second
 var CheckTaskPersistedWaitLimit = 300 * time.Second
 
-var reportImportAttempts uint = 20
+var ReportImportAttempts uint = 20
 
 // ------------------ struct -----------------------
 
@@ -1616,7 +1615,7 @@ func (c *Core) completeImportAsync(taskID int64) {
 			return errors.New(status.GetReason())
 		}
 		return nil
-	}, retry.Attempts(reportImportAttempts))
+	}, retry.Attempts(ReportImportAttempts))
 	if err != nil {
 		log.Error("failed to report import, we are not able to update the import task state to `ImportState_ImportCompleted`",
 			zap.Int64("task ID", taskID),

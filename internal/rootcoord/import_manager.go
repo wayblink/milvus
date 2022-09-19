@@ -715,6 +715,7 @@ func (m *importManager) expireOldTasksFromMem() {
 					log.Error("failed to set import task state",
 						zap.Int64("task ID", taskID),
 						zap.Any("target state", commonpb.ImportState_ImportFailed))
+					// TODO: if error, still keep the pending task.
 				}
 				m.pendingLock.Lock()
 				log.Info("a pending task has expired", zap.Int64("task ID", t.GetId()))
@@ -822,6 +823,7 @@ func (m *importManager) removeBadImportSegments(ctx context.Context) {
 		if t.GetState().GetStateCode() != commonpb.ImportState_ImportFailed {
 			continue
 		}
+		// TODO: improve logs.
 		log.Info("trying to mark segments as dropped",
 			zap.Int64s("segment IDs", t.GetState().GetSegments()))
 		// Ignoring return value as it will always return a success state.

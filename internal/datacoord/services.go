@@ -30,7 +30,6 @@ import (
 	"github.com/milvus-io/milvus/internal/log"
 	"github.com/milvus-io/milvus/internal/proto/datapb"
 	"github.com/milvus-io/milvus/internal/proto/internalpb"
-	"github.com/milvus-io/milvus/internal/proto/milvuspb"
 	"github.com/milvus-io/milvus/internal/util/logutil"
 	"github.com/milvus-io/milvus/internal/util/metricsinfo"
 	"github.com/milvus-io/milvus/internal/util/retry"
@@ -43,7 +42,7 @@ import (
 
 var ImportFlushedCheckInterval = 5 * time.Second
 var ImportFlushedWaitLimit = 2 * time.Minute
-var reportImportAttempts uint = 20
+var ReportImportAttempts uint = 20
 
 // checks whether server in Healthy State
 func (s *Server) isClosed() bool {

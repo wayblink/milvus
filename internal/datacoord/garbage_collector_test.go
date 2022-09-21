@@ -255,7 +255,7 @@ func Test_garbageCollector_scan(t *testing.T) {
 	})
 
 	t.Run("list object with error", func(t *testing.T) {
-		gc := newGarbageCollector(meta, segRefer, GcOption{
+		gc := newGarbageCollector(meta, segRefer, indexCoord, GcOption{
 			cli:              cli,
 			enabled:          true,
 			checkInterval:    time.Minute * 30,

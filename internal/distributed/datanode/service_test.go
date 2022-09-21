@@ -36,19 +36,20 @@ import (
 type MockDataNode struct {
 	nodeID typeutil.UniqueID
 
-	stateCode      internalpb.StateCode
-	states         *internalpb.ComponentStates
-	status         *commonpb.Status
-	err            error
-	initErr        error
-	startErr       error
-	stopErr        error
-	regErr         error
-	strResp        *milvuspb.StringResponse
-	configResp     *internalpb.ShowConfigurationsResponse
-	metricResp     *milvuspb.GetMetricsResponse
-	resendResp     *datapb.ResendSegmentStatsResponse
-	compactionResp *datapb.CompactionStateResponse
+	stateCode            internalpb.StateCode
+	states               *internalpb.ComponentStates
+	status               *commonpb.Status
+	err                  error
+	initErr              error
+	startErr             error
+	stopErr              error
+	regErr               error
+	strResp              *milvuspb.StringResponse
+	configResp           *internalpb.ShowConfigurationsResponse
+	metricResp           *milvuspb.GetMetricsResponse
+	resendResp           *datapb.ResendSegmentStatsResponse
+	addImportSegmentResp *datapb.AddImportSegmentResponse
+	compactionResp       *datapb.CompactionStateResponse
 }
 
 func (m *MockDataNode) Init() error {
@@ -130,8 +131,8 @@ func (m *MockDataNode) ResendSegmentStats(ctx context.Context, req *datapb.Resen
 	return m.resendResp, m.err
 }
 
-func (m *MockDataNode) AddImportSegment(ctx context.Context, req *datapb.AddImportSegmentRequest) (*commonpb.Status, error) {
-	return m.status, m.err
+func (m *MockDataNode) AddImportSegment(ctx context.Context, req *datapb.AddImportSegmentRequest) (*datapb.AddImportSegmentResponse, error) {
+	return m.addImportSegmentResp, m.err
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -299,6 +300,11 @@ func Test_NewServer(t *testing.T) {
 	t.Run("add segment", func(t *testing.T) {
 		server.datanode = &MockDataNode{
 			status: &commonpb.Status{},
+			addImportSegmentResp: &datapb.AddImportSegmentResponse{
+				Status: &commonpb.Status{
+					ErrorCode: commonpb.ErrorCode_Success,
+				},
+			},
 		}
 		resp, err := server.AddImportSegment(ctx, nil)
 		assert.Nil(t, err)

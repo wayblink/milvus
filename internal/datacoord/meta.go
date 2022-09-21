@@ -745,6 +745,7 @@ func (m *meta) AddAllocation(segmentID UniqueID, allocation *Allocation) error {
 	defer m.Unlock()
 	curSegInfo := m.segments.GetSegment(segmentID)
 	if curSegInfo == nil {
+		// TODO: Error handling.
 		return nil
 	}
 	// Persist segment updates first.

@@ -116,11 +116,12 @@ func newTestSchema() *schemapb.CollectionSchema {
 }
 
 type mockDataNodeClient struct {
-	id                  int64
-	state               internalpb.StateCode
-	ch                  chan interface{}
-	compactionStateResp *datapb.CompactionStateResponse
-	compactionResp      *commonpb.Status
+	id                   int64
+	state                internalpb.StateCode
+	ch                   chan interface{}
+	compactionStateResp  *datapb.CompactionStateResponse
+	addImportSegmentResp *datapb.AddImportSegmentResponse
+	compactionResp       *commonpb.Status
 }
 
 func newMockDataNodeClient(id int64, ch chan interface{}) (*mockDataNodeClient, error) {
@@ -128,6 +129,11 @@ func newMockDataNodeClient(id int64, ch chan interface{}) (*mockDataNodeClient, 
 		id:    id,
 		state: internalpb.StateCode_Initializing,
 		ch:    ch,
+		addImportSegmentResp: &datapb.AddImportSegmentResponse{
+			Status: &commonpb.Status{
+				ErrorCode: commonpb.ErrorCode_Success,
+			},
+		},
 	}, nil
 }
 
@@ -240,8 +246,8 @@ func (c *mockDataNodeClient) Import(ctx context.Context, in *datapb.ImportTaskRe
 	return &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success}, nil
 }
 
-func (c *mockDataNodeClient) AddImportSegment(ctx context.Context, req *datapb.AddImportSegmentRequest) (*commonpb.Status, error) {
-	return &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success}, nil
+func (c *mockDataNodeClient) AddImportSegment(ctx context.Context, req *datapb.AddImportSegmentRequest) (*datapb.AddImportSegmentResponse, error) {
+	return c.addImportSegmentResp, nil
 }
 
 func (c *mockDataNodeClient) Stop() error {

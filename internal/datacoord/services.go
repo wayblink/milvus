@@ -40,10 +40,6 @@ import (
 	"go.uber.org/zap"
 )
 
-var ImportFlushedCheckInterval = 5 * time.Second
-var ImportFlushedWaitLimit = 2 * time.Minute
-var ReportImportAttempts uint = 20
-
 // checks whether server in Healthy State
 func (s *Server) isClosed() bool {
 	return atomic.LoadInt64(&s.isServing) != ServerStateHealthy
@@ -629,7 +625,6 @@ func (s *Server) GetRecoveryInfo(ctx context.Context, req *datapb.GetRecoveryInf
 		log.Debug("datacoord append channelInfo in GetRecoveryInfo",
 			zap.Any("channelInfo", channelInfo),
 		)
-
 		flushedIDs.Insert(channelInfo.GetFlushedSegmentIds()...)
 	}
 
@@ -651,7 +646,7 @@ func (s *Server) GetRecoveryInfo(ctx context.Context, req *datapb.GetRecoveryInf
 			continue
 		}
 		// Also skip bulk load segments.
-		if segment.IsImporting {
+		if segment.GetIsImporting() {
 			continue
 		}
 		segment2InsertChannel[segment.ID] = segment.InsertChannel
@@ -1250,14 +1245,6 @@ func (s *Server) SaveImportSegment(ctx context.Context, req *datapb.SaveImportSe
 		errResp.Reason = fmt.Sprint("no DataNode found for channel ", req.GetChannelName())
 		return errResp, nil
 	}
-	// Start saving bin log paths.
-	rsp, err := s.SaveBinlogPaths(context.Background(), req.GetSaveBinlogPathReq())
-	if err := VerifyResponse(rsp, err); err != nil {
-		log.Error("failed to SaveBinlogPaths", zap.Error(err))
-		return &commonpb.Status{
-			ErrorCode: commonpb.ErrorCode_UnexpectedError,
-		}, nil
-	}
 	// Call DataNode to add the new segment to its own flow graph.
 	cli, err := s.sessionManager.getClient(ctx, nodeID)
 	if err != nil {
@@ -1274,21 +1261,31 @@ func (s *Server) SaveImportSegment(ctx context.Context, req *datapb.SaveImportSe
 				SourceID:  Params.DataNodeCfg.GetNodeID(),
 				Timestamp: req.GetBase().GetTimestamp(),
 			},
-			SegmentId:     req.GetSegmentId(),
-			ChannelName:   req.GetChannelName(),
-			CollectionId:  req.GetCollectionId(),
-			PartitionId:   req.GetPartitionId(),
-			RowNum:        req.GetRowNum(),
-			StatsLog:      req.GetSaveBinlogPathReq().GetField2StatslogPaths(),
-			DmlPositionId: req.GetDmlPositionId(),
+			SegmentId:    req.GetSegmentId(),
+			ChannelName:  req.GetChannelName(),
+			CollectionId: req.GetCollectionId(),
+			PartitionId:  req.GetPartitionId(),
+			RowNum:       req.GetRowNum(),
+			StatsLog:     req.GetSaveBinlogPathReq().GetField2StatslogPaths(),
 		})
-	if err := VerifyResponse(resp, err); err != nil {
+	if err := VerifyResponse(resp.GetStatus(), err); err != nil {
 		log.Error("failed to add segment", zap.Int64("DataNode ID", nodeID), zap.Error(err))
 		return &commonpb.Status{
 			ErrorCode: commonpb.ErrorCode_UnexpectedError,
 		}, nil
 	}
 	log.Info("succeed to add segment", zap.Int64("DataNode ID", nodeID), zap.Any("add segment req", req))
+	// Fill in start position message ID.
+	req.SaveBinlogPathReq.StartPositions[0].StartPosition.MsgID = resp.GetChannelPos()
+
+	// Start saving bin log paths.
+	rsp, err := s.SaveBinlogPaths(context.Background(), req.GetSaveBinlogPathReq())
+	if err := VerifyResponse(rsp, err); err != nil {
+		log.Error("failed to SaveBinlogPaths", zap.Error(err))
+		return &commonpb.Status{
+			ErrorCode: commonpb.ErrorCode_UnexpectedError,
+		}, nil
+	}
 	return &commonpb.Status{
 		ErrorCode: commonpb.ErrorCode_Success,
 	}, nil
@@ -1317,7 +1314,7 @@ func (s *Server) UnsetIsImportingState(ctx context.Context, req *datapb.UnsetIsI
 	}, nil
 }
 
-// MarkSegmentsDropped unsets the isImporting states of the given segments.
+// MarkSegmentsDropped marks the given segments as `Dropped`.
 // An error status will be returned and error will be logged, if we failed to mark *all* segments.
 func (s *Server) MarkSegmentsDropped(ctx context.Context, req *datapb.MarkSegmentsDroppedRequest) (*commonpb.Status, error) {
 	log.Info("marking segments dropped",

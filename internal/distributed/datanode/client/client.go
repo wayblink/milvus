@@ -246,7 +246,7 @@ func (c *Client) ResendSegmentStats(ctx context.Context, req *datapb.ResendSegme
 }
 
 // AddImportSegment is the DataNode client side code for AddImportSegment call.
-func (c *Client) AddImportSegment(ctx context.Context, req *datapb.AddImportSegmentRequest) (*commonpb.Status, error) {
+func (c *Client) AddImportSegment(ctx context.Context, req *datapb.AddImportSegmentRequest) (*datapb.AddImportSegmentResponse, error) {
 	ret, err := c.grpcClient.ReCall(ctx, func(client interface{}) (interface{}, error) {
 		if !funcutil.CheckCtxValid(ctx) {
 			return nil, ctx.Err()
@@ -256,5 +256,5 @@ func (c *Client) AddImportSegment(ctx context.Context, req *datapb.AddImportSegm
 	if err != nil || ret == nil {
 		return nil, err
 	}
-	return ret.(*commonpb.Status), err
+	return ret.(*datapb.AddImportSegmentResponse), err
 }

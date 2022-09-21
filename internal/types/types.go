@@ -95,7 +95,7 @@ type DataNode interface {
 	ResendSegmentStats(ctx context.Context, req *datapb.ResendSegmentStatsRequest) (*datapb.ResendSegmentStatsResponse, error)
 
 	// AddImportSegment puts the given import segment to current DataNode's flow graph.
-	AddImportSegment(ctx context.Context, req *datapb.AddImportSegmentRequest) (*commonpb.Status, error)
+	AddImportSegment(ctx context.Context, req *datapb.AddImportSegmentRequest) (*datapb.AddImportSegmentResponse, error)
 }
 
 // DataNodeComponent is used by grpc server of DataNode

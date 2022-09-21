@@ -21,16 +21,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/milvus-io/milvus/internal/common"
-	"github.com/milvus-io/milvus/internal/types"
-	"github.com/milvus-io/milvus/internal/util/typeutil"
-	"github.com/samber/lo"
-
 	"github.com/milvus-io/milvus/api/commonpb"
+	"github.com/milvus-io/milvus/internal/common"
 	"github.com/milvus-io/milvus/internal/log"
 	"github.com/milvus-io/milvus/internal/proto/datapb"
 	"github.com/milvus-io/milvus/internal/storage"
+	"github.com/milvus-io/milvus/internal/types"
+	"github.com/milvus-io/milvus/internal/util/typeutil"
 	"github.com/minio/minio-go/v7"
+	"github.com/samber/lo"
 	"go.uber.org/zap"
 )
 
@@ -70,11 +69,11 @@ func newGarbageCollector(meta *meta, segRefer *SegmentReferenceManager, indexCoo
 	log.Info("GC with option", zap.Bool("enabled", opt.enabled), zap.Duration("interval", opt.checkInterval),
 		zap.Duration("missingTolerance", opt.missingTolerance), zap.Duration("dropTolerance", opt.dropTolerance))
 	return &garbageCollector{
-		meta:     meta,
-		segRefer: segRefer,
+		meta:       meta,
+		segRefer:   segRefer,
 		indexCoord: indexCoord,
-		option:   opt,
-		closeCh:  make(chan struct{}),
+		option:     opt,
+		closeCh:    make(chan struct{}),
 	}
 }
 

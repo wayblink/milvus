@@ -71,6 +71,8 @@ type insertBufferNode struct {
 	ttMerger       *mergedTimeTickerSender
 
 	lastTimestamp Timestamp
+
+	operated bool
 }
 
 type timeTickLogger struct {
@@ -176,7 +178,10 @@ func (ibNode *insertBufferNode) Close() {
 
 func (ibNode *insertBufferNode) Operate(in []Msg) []Msg {
 	// log.Debug("InsertBufferNode Operating")
-
+	if !ibNode.operated {
+		log.Debug("InsertBufferNode first operate", zap.String("channel", ibNode.channelName))
+		ibNode.operated = true
+	}
 	if len(in) != 1 {
 		log.Error("Invalid operate message input in insertBufferNode", zap.Int("input length", len(in)))
 		return []Msg{}

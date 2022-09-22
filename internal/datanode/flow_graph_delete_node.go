@@ -54,6 +54,8 @@ type deleteNode struct {
 	flushManager flushManager
 
 	clearSignal chan<- string
+
+	operated bool
 }
 
 // DelDataBuf buffers insert data, monitoring buffer size and limit
@@ -121,6 +123,10 @@ func (dn *deleteNode) showDelBuf(segIDs []UniqueID, ts Timestamp) {
 // Operate implementing flowgraph.Node, performs delete data process
 func (dn *deleteNode) Operate(in []Msg) []Msg {
 	//log.Debug("deleteNode Operating")
+	if !dn.operated {
+		log.Debug("deleteNode first operate", zap.String("channel", dn.channelName))
+		dn.operated = true
+	}
 
 	if len(in) != 1 {
 		log.Error("Invalid operate message input in deleteNode", zap.Int("input length", len(in)))

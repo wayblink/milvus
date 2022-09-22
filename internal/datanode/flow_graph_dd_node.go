@@ -70,6 +70,8 @@ type ddNode struct {
 	growingSegInfo    map[UniqueID]*datapb.SegmentInfo // segmentID
 	sealedSegInfo     map[UniqueID]*datapb.SegmentInfo // segmentID
 	droppedSegmentIDs []int64
+
+	operated bool
 }
 
 // Name returns node name, implementing flowgraph.Node
@@ -82,6 +84,11 @@ func (ddn *ddNode) Operate(in []Msg) []Msg {
 	if len(in) != 1 {
 		log.Warn("Invalid operate message input in ddNode", zap.Int("input length", len(in)))
 		return []Msg{}
+	}
+
+	if !ddn.operated {
+		log.Debug("ddNode first operate", zap.String("channel", ddn.vChannelName))
+		ddn.operated = true
 	}
 
 	msMsg, ok := in[0].(*MsgStreamMsg)

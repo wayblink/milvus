@@ -30,6 +30,8 @@ type InputNode struct {
 	BaseNode
 	inStream msgstream.MsgStream
 	name     string
+
+	operated bool
 }
 
 // IsInputNode returns whether Node is InputNode
@@ -62,6 +64,10 @@ func (inNode *InputNode) InStream() msgstream.MsgStream {
 
 // Operate consume a message pack from msgstream and return
 func (inNode *InputNode) Operate(in []Msg) []Msg {
+	if !inNode.operated {
+		log.Debug("InputNode first operate", zap.String("channel", inNode.name))
+		inNode.operated = true
+	}
 	msgPack, ok := <-inNode.inStream.Chan()
 	if !ok {
 		log.Warn("MsgStream closed", zap.Any("input node", inNode.Name()))

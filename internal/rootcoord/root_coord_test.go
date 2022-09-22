@@ -16,7 +16,6 @@ import (
 	"github.com/milvus-io/milvus/internal/metastore/model"
 	"github.com/milvus-io/milvus/internal/proto/datapb"
 	"github.com/milvus-io/milvus/internal/proto/etcdpb"
-	"github.com/milvus-io/milvus/internal/proto/indexpb"
 	"github.com/milvus-io/milvus/internal/proto/internalpb"
 	"github.com/milvus-io/milvus/internal/proto/proxypb"
 	"github.com/milvus-io/milvus/internal/proto/rootcoordpb"
@@ -891,7 +890,7 @@ func TestCore_GetImportState(t *testing.T) {
 	t.Run("normal case", func(t *testing.T) {
 		ctx := context.Background()
 		c := newTestCore(withHealthyCode())
-		c.importManager = newImportManager(ctx, mockKv, nil, nil, nil, nil)
+		c.importManager = newImportManager(ctx, mockKv, nil, nil, nil, nil, nil, nil, nil)
 		resp, err := c.GetImportState(ctx, &milvuspb.GetImportStateRequest{
 			Task: 100,
 		})
@@ -952,7 +951,7 @@ func TestCore_ListImportTasks(t *testing.T) {
 	t.Run("normal case", func(t *testing.T) {
 		ctx := context.Background()
 		c := newTestCore(withHealthyCode())
-		c.importManager = newImportManager(ctx, mockKv, nil, nil, nil, nil)
+		c.importManager = newImportManager(ctx, mockKv, nil, nil, nil, nil, nil, nil, nil)
 		resp, err := c.ListImportTasks(ctx, &milvuspb.ListImportTasksRequest{})
 		assert.NoError(t, err)
 		assert.Equal(t, 3, len(resp.GetTasks()))
@@ -1056,7 +1055,7 @@ func TestCore_ReportImport(t *testing.T) {
 	t.Run("report complete import", func(t *testing.T) {
 		ctx := context.Background()
 		c := newTestCore(withHealthyCode())
-		c.importManager = newImportManager(ctx, mockKv, idAlloc, callImportServiceFn, callMarkSegmentsDropped, nil)
+		c.importManager = newImportManager(ctx, mockKv, idAlloc, callImportServiceFn, callMarkSegmentsDropped, nil, nil, nil, nil)
 		resp, err := c.ReportImport(ctx, &rootcoordpb.ImportResult{
 			TaskId: 100,
 			State:  commonpb.ImportState_ImportCompleted,
@@ -1071,7 +1070,7 @@ func TestCore_ReportImport(t *testing.T) {
 	t.Run("report complete import with task not found", func(t *testing.T) {
 		ctx := context.Background()
 		c := newTestCore(withHealthyCode())
-		c.importManager = newImportManager(ctx, mockKv, idAlloc, callImportServiceFn, callMarkSegmentsDropped, nil)
+		c.importManager = newImportManager(ctx, mockKv, idAlloc, callImportServiceFn, callMarkSegmentsDropped, nil, nil, nil, nil)
 		resp, err := c.ReportImport(ctx, &rootcoordpb.ImportResult{
 			TaskId: 101,
 			State:  commonpb.ImportState_ImportCompleted,
@@ -1083,7 +1082,7 @@ func TestCore_ReportImport(t *testing.T) {
 	t.Run("report import started state", func(t *testing.T) {
 		ctx := context.Background()
 		c := newTestCore(withHealthyCode())
-		c.importManager = newImportManager(ctx, mockKv, idAlloc, callImportServiceFn, callMarkSegmentsDropped, nil)
+		c.importManager = newImportManager(ctx, mockKv, idAlloc, callImportServiceFn, callMarkSegmentsDropped, nil, nil, nil, nil)
 		c.importManager.loadFromTaskStore(true)
 		c.importManager.sendOutTasks(ctx)
 		resp, err := c.ReportImport(ctx, &rootcoordpb.ImportResult{
@@ -1106,7 +1105,7 @@ func TestCore_ReportImport(t *testing.T) {
 			withTtSynchronizer(ticker),
 			withDataCoord(dc))
 		c.broker = newServerBroker(c)
-		c.importManager = newImportManager(ctx, mockKv, idAlloc, callImportServiceFn, callMarkSegmentsDropped, nil)
+		c.importManager = newImportManager(ctx, mockKv, idAlloc, callImportServiceFn, callMarkSegmentsDropped, nil, nil, nil, nil)
 		c.importManager.loadFromTaskStore(true)
 		c.importManager.sendOutTasks(ctx)
 
@@ -1119,554 +1118,6 @@ func TestCore_ReportImport(t *testing.T) {
 		// Change the state back.
 		err = c.importManager.setImportTaskState(100, commonpb.ImportState_ImportPending)
 		assert.NoError(t, err)
-	})
-}
-
-func TestCore_completeImportAsync(t *testing.T) {
-	mockKv := &kv.MockMetaKV{}
-	mockKv.InMemKv = sync.Map{}
-	ti1 := &datapb.ImportTaskInfo{
-		Id:             100,
-		CollectionName: "collection-A",
-		State: &datapb.ImportTaskState{
-			StateCode: commonpb.ImportState_ImportPending,
-		},
-		CreateTs: time.Now().Unix() - 100,
-	}
-	ti2 := &datapb.ImportTaskInfo{
-		Id:             200,
-		CollectionName: "collection-A",
-		State: &datapb.ImportTaskState{
-			StateCode: commonpb.ImportState_ImportPersisted,
-		},
-		CreateTs: time.Now().Unix() - 100,
-	}
-	ti3 := &datapb.ImportTaskInfo{
-		Id:             300,
-		CollectionName: "collection-B",
-		State: &datapb.ImportTaskState{
-			StateCode: commonpb.ImportState_ImportPersisted,
-		},
-		CreateTs: time.Now().Unix() - 100,
-	}
-	taskInfo1, err := proto.Marshal(ti1)
-	assert.NoError(t, err)
-	taskInfo2, err := proto.Marshal(ti2)
-	assert.NoError(t, err)
-	taskInfo3, err := proto.Marshal(ti3)
-	assert.NoError(t, err)
-	mockKv.Save(BuildImportTaskKey(100), string(taskInfo1))
-	mockKv.Save(BuildImportTaskKey(200), string(taskInfo2))
-	mockKv.Save(BuildImportTaskKey(300), string(taskInfo3))
-
-	t.Run("wait persisted timeout", func(t *testing.T) {
-		CheckTaskPersistedInterval = 50 * time.Millisecond
-		CheckTaskPersistedWaitLimit = 300 * time.Millisecond
-		c := newTestCore(withHealthyCode())
-		c.ctx = context.Background()
-		c.importManager = newImportManager(c.ctx, mockKv, nil, nil, nil, nil)
-		c.importManager.loadFromTaskStore(true)
-		c.completeImportAsync(200)
-	})
-
-	t.Run("wait persisted context done", func(t *testing.T) {
-		CheckTaskPersistedInterval = 50 * time.Millisecond
-		CheckTaskPersistedWaitLimit = 300 * time.Millisecond
-		c := newTestCore(withHealthyCode())
-		var cancel func()
-		c.ctx, cancel = context.WithCancel(context.Background())
-		cancel()
-		c.importManager = newImportManager(c.ctx, mockKv, nil, nil, nil, nil)
-		c.completeImportAsync(200)
-	})
-
-	t.Run("normal case", func(t *testing.T) {
-		meta := newMockMetaTable()
-		Params.RootCoordCfg.ImportIndexCheckInterval = 0.1
-		Params.RootCoordCfg.ImportIndexWaitLimit = 0.5
-		ctx := context.Background()
-
-		dc := newMockDataCoord()
-		dc.UnsetIsImportingStateFunc = func(ctx context.Context, req *datapb.UnsetIsImportingStateRequest) (*commonpb.Status, error) {
-			return &commonpb.Status{
-				ErrorCode: commonpb.ErrorCode_Success,
-			}, nil
-		}
-		broker := newMockBroker()
-		broker.GetSegmentIndexStateFunc = func(ctx context.Context, collID UniqueID, indexName string, segIDs []UniqueID) ([]*indexpb.SegmentIndexState, error) {
-			return []*indexpb.SegmentIndexState{
-				{
-					SegmentID: 200,
-					State:     commonpb.IndexState_Finished,
-				},
-				{
-					SegmentID: 201,
-					State:     commonpb.IndexState_Finished,
-				},
-				{
-					SegmentID: 202,
-					State:     commonpb.IndexState_Finished,
-				},
-			}, nil
-		}
-		broker.DescribeIndexFunc = func(ctx context.Context, colID UniqueID) (*indexpb.DescribeIndexResponse, error) {
-			return &indexpb.DescribeIndexResponse{
-				Status: &commonpb.Status{
-					ErrorCode: commonpb.ErrorCode_Success,
-				},
-				IndexInfos: []*indexpb.IndexInfo{
-					{},
-				},
-			}, nil
-		}
-		meta.GetCollectionByIDFunc = func(ctx context.Context, collectionID UniqueID, ts Timestamp) (*model.Collection, error) {
-			return &model.Collection{
-				CollectionID: 100,
-				Name:         "collection-A",
-			}, nil
-		}
-		c := newTestCore(withHealthyCode(),
-			withMeta(meta),
-			withBroker(broker),
-			withDataCoord(dc))
-		c.ctx = ctx
-		c.importManager = newImportManager(c.ctx, mockKv, nil, nil, nil, nil)
-		c.importManager.loadFromTaskStore(true)
-		ti3 = &datapb.ImportTaskInfo{
-			Id:             300,
-			CollectionName: "collection-B",
-			State: &datapb.ImportTaskState{
-				StateCode: commonpb.ImportState_ImportPersisted,
-			},
-			CreateTs: time.Now().Unix() - 100,
-		}
-		taskInfo3, err = proto.Marshal(ti3)
-		assert.NoError(t, err)
-		mockKv.Save(BuildImportTaskKey(300), string(taskInfo3))
-		c.completeImportAsync(300)
-	})
-
-	t.Run("unsetting fail", func(t *testing.T) {
-		meta := newMockMetaTable()
-		Params.RootCoordCfg.ImportIndexCheckInterval = 0.1
-		Params.RootCoordCfg.ImportIndexWaitLimit = 0.5
-		ctx := context.Background()
-
-		dc := newMockDataCoord()
-		dc.UnsetIsImportingStateFunc = func(ctx context.Context, req *datapb.UnsetIsImportingStateRequest) (*commonpb.Status, error) {
-			return &commonpb.Status{
-				ErrorCode: commonpb.ErrorCode_UnexpectedError,
-			}, errors.New("mock error")
-		}
-		broker := newMockBroker()
-		broker.GetSegmentIndexStateFunc = func(ctx context.Context, collID UniqueID, indexName string, segIDs []UniqueID) ([]*indexpb.SegmentIndexState, error) {
-			return []*indexpb.SegmentIndexState{
-				{
-					SegmentID: 200,
-					State:     commonpb.IndexState_Finished,
-				},
-				{
-					SegmentID: 201,
-					State:     commonpb.IndexState_Finished,
-				},
-				{
-					SegmentID: 202,
-					State:     commonpb.IndexState_Finished,
-				},
-			}, nil
-		}
-		broker.DescribeIndexFunc = func(ctx context.Context, colID UniqueID) (*indexpb.DescribeIndexResponse, error) {
-			return &indexpb.DescribeIndexResponse{
-				Status: &commonpb.Status{
-					ErrorCode: commonpb.ErrorCode_Success,
-				},
-				IndexInfos: []*indexpb.IndexInfo{
-					{},
-				},
-			}, nil
-		}
-		meta.GetCollectionByIDFunc = func(ctx context.Context, collectionID UniqueID, ts Timestamp) (*model.Collection, error) {
-			return &model.Collection{
-				CollectionID: 100,
-				Name:         "collection-A",
-			}, nil
-		}
-		c := newTestCore(withHealthyCode(),
-			withMeta(meta),
-			withBroker(broker),
-			withDataCoord(dc))
-		c.ctx = ctx
-		c.importManager = newImportManager(c.ctx, mockKv, nil, nil, nil, nil)
-		c.importManager.loadFromTaskStore(true)
-		ti3 = &datapb.ImportTaskInfo{
-			Id:             300,
-			CollectionName: "collection-B",
-			State: &datapb.ImportTaskState{
-				StateCode: commonpb.ImportState_ImportPersisted,
-			},
-			CreateTs: time.Now().Unix() - 100,
-		}
-		taskInfo3, err = proto.Marshal(ti3)
-		assert.NoError(t, err)
-		mockKv.Save(BuildImportTaskKey(300), string(taskInfo3))
-		c.completeImportAsync(300)
-	})
-}
-
-func TestCore_checkSegmentIndexReady(t *testing.T) {
-	meta := newMockMetaTable()
-	t.Run("failed to get collection by ID", func(t *testing.T) {
-		ctx := context.Background()
-		meta.GetCollectionByIDFunc = func(ctx context.Context, collectionID UniqueID, ts Timestamp) (*model.Collection, error) {
-			return nil, errors.New("mock GetCollectionByID error")
-		}
-		c := newTestCore(withHealthyCode(),
-			withMeta(meta))
-		status, err := c.checkSegmentIndexReady(ctx, 100, 100, []int64{200, 201, 202})
-		assert.NoError(t, err)
-		assert.Equal(t, commonpb.ErrorCode_CollectionNameNotFound, status.GetErrorCode())
-	})
-	t.Run("failed to describe index", func(t *testing.T) {
-		ctx := context.Background()
-		broker := newMockBroker()
-		broker.DescribeIndexFunc = func(ctx context.Context, colID UniqueID) (*indexpb.DescribeIndexResponse, error) {
-			return nil, errors.New("mock DescribeIndex error")
-		}
-		meta.GetCollectionByIDFunc = func(ctx context.Context, collectionID UniqueID, ts Timestamp) (*model.Collection, error) {
-			return &model.Collection{
-				CollectionID: 100,
-				Name:         "collection-A",
-			}, nil
-		}
-		c := newTestCore(withHealthyCode(),
-			withMeta(meta),
-			withBroker(broker))
-		status, err := c.checkSegmentIndexReady(ctx, 100, 100, []int64{200, 201, 202})
-		assert.NoError(t, err)
-		assert.Equal(t, commonpb.ErrorCode_UnexpectedError, status.GetErrorCode())
-	})
-	t.Run("index not exist", func(t *testing.T) {
-		ctx := context.Background()
-		broker := newMockBroker()
-		broker.DescribeIndexFunc = func(ctx context.Context, colID UniqueID) (*indexpb.DescribeIndexResponse, error) {
-			return &indexpb.DescribeIndexResponse{
-				Status: &commonpb.Status{
-					ErrorCode: commonpb.ErrorCode_IndexNotExist,
-				},
-			}, nil
-		}
-		meta.GetCollectionByIDFunc = func(ctx context.Context, collectionID UniqueID, ts Timestamp) (*model.Collection, error) {
-			return &model.Collection{
-				CollectionID: 100,
-				Name:         "collection-A",
-			}, nil
-		}
-		c := newTestCore(withHealthyCode(),
-			withMeta(meta),
-			withBroker(broker))
-		status, err := c.checkSegmentIndexReady(ctx, 100, 100, []int64{200, 201, 202})
-		assert.NoError(t, err)
-		assert.Equal(t, commonpb.ErrorCode_Success, status.GetErrorCode())
-	})
-	t.Run("zero index info", func(t *testing.T) {
-		ctx := context.Background()
-		broker := newMockBroker()
-		broker.DescribeIndexFunc = func(ctx context.Context, colID UniqueID) (*indexpb.DescribeIndexResponse, error) {
-			return &indexpb.DescribeIndexResponse{
-				Status: &commonpb.Status{
-					ErrorCode: commonpb.ErrorCode_Success,
-				},
-				IndexInfos: []*indexpb.IndexInfo{},
-			}, nil
-		}
-		meta.GetCollectionByIDFunc = func(ctx context.Context, collectionID UniqueID, ts Timestamp) (*model.Collection, error) {
-			return &model.Collection{
-				CollectionID: 100,
-				Name:         "collection-A",
-			}, nil
-		}
-		c := newTestCore(withHealthyCode(),
-			withMeta(meta),
-			withBroker(broker))
-		status, err := c.checkSegmentIndexReady(ctx, 100, 100, []int64{200, 201, 202})
-		assert.NoError(t, err)
-		assert.Equal(t, commonpb.ErrorCode_Success, status.GetErrorCode())
-	})
-	t.Run("context done", func(t *testing.T) {
-		Params.RootCoordCfg.ImportIndexCheckInterval = 0.1
-		Params.RootCoordCfg.ImportIndexWaitLimit = 0.5
-		ctx, cancel := context.WithCancel(context.Background())
-		broker := newMockBroker()
-		broker.DescribeIndexFunc = func(ctx context.Context, colID UniqueID) (*indexpb.DescribeIndexResponse, error) {
-			return &indexpb.DescribeIndexResponse{
-				Status: &commonpb.Status{
-					ErrorCode: commonpb.ErrorCode_Success,
-				},
-				IndexInfos: []*indexpb.IndexInfo{
-					{},
-				},
-			}, nil
-		}
-		meta.GetCollectionByIDFunc = func(ctx context.Context, collectionID UniqueID, ts Timestamp) (*model.Collection, error) {
-			return &model.Collection{
-				CollectionID: 100,
-				Name:         "collection-A",
-			}, nil
-		}
-		c := newTestCore(withHealthyCode(),
-			withMeta(meta),
-			withBroker(broker))
-		c.ctx = ctx
-		cancel()
-		status, err := c.checkSegmentIndexReady(ctx, 100, 100, []int64{200, 201, 202})
-		assert.NoError(t, err)
-		assert.Equal(t, commonpb.ErrorCode_UnexpectedError, status.GetErrorCode())
-	})
-	t.Run("max wait expire", func(t *testing.T) {
-		Params.RootCoordCfg.ImportIndexCheckInterval = 0.1
-		Params.RootCoordCfg.ImportIndexWaitLimit = 0.5
-		ctx := context.Background()
-		broker := newMockBroker()
-		broker.GetSegmentIndexStateFunc = func(ctx context.Context, collID UniqueID, indexName string, segIDs []UniqueID) ([]*indexpb.SegmentIndexState, error) {
-			return nil, errors.New("mock GetSegmentIndexState error")
-		}
-		broker.DescribeIndexFunc = func(ctx context.Context, colID UniqueID) (*indexpb.DescribeIndexResponse, error) {
-			return &indexpb.DescribeIndexResponse{
-				Status: &commonpb.Status{
-					ErrorCode: commonpb.ErrorCode_Success,
-				},
-				IndexInfos: []*indexpb.IndexInfo{
-					{},
-				},
-			}, nil
-		}
-		meta.GetCollectionByIDFunc = func(ctx context.Context, collectionID UniqueID, ts Timestamp) (*model.Collection, error) {
-			return &model.Collection{
-				CollectionID: 100,
-				Name:         "collection-A",
-			}, nil
-		}
-		c := newTestCore(withHealthyCode(),
-			withMeta(meta),
-			withBroker(broker))
-		c.ctx = ctx
-		status, err := c.checkSegmentIndexReady(ctx, 100, 100, []int64{200, 201, 202})
-		assert.NoError(t, err)
-		assert.Equal(t, commonpb.ErrorCode_UnexpectedError, status.GetErrorCode())
-	})
-	t.Run("normal case", func(t *testing.T) {
-		Params.RootCoordCfg.ImportIndexCheckInterval = 0.1
-		Params.RootCoordCfg.ImportIndexWaitLimit = 0.5
-		ctx := context.Background()
-		broker := newMockBroker()
-		broker.GetSegmentIndexStateFunc = func(ctx context.Context, collID UniqueID, indexName string, segIDs []UniqueID) ([]*indexpb.SegmentIndexState, error) {
-			return []*indexpb.SegmentIndexState{
-				{
-					SegmentID: 200,
-					State:     commonpb.IndexState_Finished,
-				},
-				{
-					SegmentID: 201,
-					State:     commonpb.IndexState_Finished,
-				},
-				{
-					SegmentID: 202,
-					State:     commonpb.IndexState_Finished,
-				},
-			}, nil
-		}
-		broker.DescribeIndexFunc = func(ctx context.Context, colID UniqueID) (*indexpb.DescribeIndexResponse, error) {
-			return &indexpb.DescribeIndexResponse{
-				Status: &commonpb.Status{
-					ErrorCode: commonpb.ErrorCode_Success,
-				},
-				IndexInfos: []*indexpb.IndexInfo{
-					{},
-				},
-			}, nil
-		}
-		meta.GetCollectionByIDFunc = func(ctx context.Context, collectionID UniqueID, ts Timestamp) (*model.Collection, error) {
-			return &model.Collection{
-				CollectionID: 100,
-				Name:         "collection-A",
-			}, nil
-		}
-		c := newTestCore(withHealthyCode(),
-			withMeta(meta),
-			withBroker(broker))
-		c.ctx = ctx
-		status, err := c.checkSegmentIndexReady(ctx, 100, 100, []int64{200, 201, 202})
-		assert.NoError(t, err)
-		assert.Equal(t, commonpb.ErrorCode_Success, status.GetErrorCode())
-	})
-}
-
-func TestCore_countCompleteIndex(t *testing.T) {
-	t.Run("get segment index state failure", func(t *testing.T) {
-		ctx := context.Background()
-		broker := newMockBroker()
-		broker.GetSegmentIndexStateFunc = func(ctx context.Context, collID UniqueID, indexName string, segIDs []UniqueID) ([]*indexpb.SegmentIndexState, error) {
-			return nil, errors.New("mock GetSegmentIndexState error")
-		}
-		c := newTestCore(withHealthyCode(), withBroker(broker))
-		done, err := c.countCompleteIndex(ctx, "collection-A", 100,
-			[]*indexpb.IndexInfo{
-				{
-					CollectionID: 100,
-					FieldID:      500,
-					IndexName:    "_idx_1",
-					IndexID:      1001,
-				},
-				{
-					CollectionID: 100,
-					FieldID:      600,
-					IndexName:    "_idx_2",
-					IndexID:      1002,
-				},
-				{
-					CollectionID: 100,
-					FieldID:      700,
-					IndexName:    "_idx_3",
-					IndexID:      1003,
-				},
-			},
-			[]int64{})
-		assert.Error(t, err)
-		assert.Equal(t, false, done)
-	})
-
-	t.Run("index partly done", func(t *testing.T) {
-		ctx := context.Background()
-		broker := newMockBroker()
-		broker.GetSegmentIndexStateFunc = func(ctx context.Context, collID UniqueID, indexName string, segIDs []UniqueID) ([]*indexpb.SegmentIndexState, error) {
-			return []*indexpb.SegmentIndexState{
-				{
-					SegmentID: 200,
-					State:     commonpb.IndexState_InProgress,
-				},
-				{
-					SegmentID: 201,
-					State:     commonpb.IndexState_Finished,
-				},
-				{
-					SegmentID: 202,
-					State:     commonpb.IndexState_Finished,
-				},
-			}, nil
-		}
-		c := newTestCore(withHealthyCode(), withBroker(broker))
-		done, err := c.countCompleteIndex(ctx, "collection-A", 100,
-			[]*indexpb.IndexInfo{
-				{
-					CollectionID: 100,
-					FieldID:      500,
-					IndexName:    "_idx_1",
-					IndexID:      1001,
-				},
-				{
-					CollectionID: 100,
-					FieldID:      600,
-					IndexName:    "_idx_2",
-					IndexID:      1002,
-				},
-				{
-					CollectionID: 100,
-					FieldID:      700,
-					IndexName:    "_idx_3",
-					IndexID:      1003,
-				},
-			},
-			[]int64{200, 201, 202})
-		assert.NoError(t, err)
-		assert.Equal(t, false, done)
-	})
-
-	t.Run("checking index with missing segments", func(t *testing.T) {
-		ctx := context.Background()
-		broker := newMockBroker()
-		broker.GetSegmentIndexStateFunc = func(ctx context.Context, collID UniqueID, indexName string, segIDs []UniqueID) ([]*indexpb.SegmentIndexState, error) {
-			return []*indexpb.SegmentIndexState{
-				{
-					SegmentID: 200,
-					State:     commonpb.IndexState_Finished,
-				},
-				{
-					SegmentID: 201,
-					State:     commonpb.IndexState_Finished,
-				},
-			}, nil
-		}
-		c := newTestCore(withHealthyCode(), withBroker(broker))
-		done, err := c.countCompleteIndex(ctx, "collection-A", 100,
-			[]*indexpb.IndexInfo{
-				{
-					CollectionID: 100,
-					FieldID:      500,
-					IndexName:    "_idx_1",
-					IndexID:      1001,
-				},
-				{
-					CollectionID: 100,
-					FieldID:      600,
-					IndexName:    "_idx_2",
-					IndexID:      1002,
-				},
-				{
-					CollectionID: 100,
-					FieldID:      700,
-					IndexName:    "_idx_3",
-					IndexID:      1003,
-				},
-			},
-			[]int64{200, 201, 999})
-		assert.NoError(t, err)
-		assert.Equal(t, false, done)
-	})
-
-	t.Run("normal case", func(t *testing.T) {
-		ctx := context.Background()
-		broker := newMockBroker()
-		broker.GetSegmentIndexStateFunc = func(ctx context.Context, collID UniqueID, indexName string, segIDs []UniqueID) ([]*indexpb.SegmentIndexState, error) {
-			return []*indexpb.SegmentIndexState{
-				{
-					SegmentID: 200,
-					State:     commonpb.IndexState_Finished,
-				},
-				{
-					SegmentID: 201,
-					State:     commonpb.IndexState_Finished,
-				},
-				{
-					SegmentID: 202,
-					State:     commonpb.IndexState_Finished,
-				},
-			}, nil
-		}
-		c := newTestCore(withHealthyCode(), withBroker(broker))
-		done, err := c.countCompleteIndex(ctx, "collection-A", 100,
-			[]*indexpb.IndexInfo{
-				{
-					CollectionID: 100,
-					FieldID:      500,
-					IndexName:    "_idx_1",
-					IndexID:      1001,
-				},
-				{
-					CollectionID: 100,
-					FieldID:      600,
-					IndexName:    "_idx_2",
-					IndexID:      1002,
-				},
-				{
-					CollectionID: 100,
-					FieldID:      700,
-					IndexName:    "_idx_3",
-					IndexID:      1003,
-				},
-			},
-			[]int64{200, 201, 202})
-		assert.NoError(t, err)
-		assert.Equal(t, true, done)
 	})
 }
 

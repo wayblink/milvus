@@ -2810,6 +2810,7 @@ func TestDataCoord_SaveImportSegment(t *testing.T) {
 			NodeID:  110,
 			Address: "localhost:8080",
 		})
+		svr.indexCoord.(*mocks.MockIndexCoord).EXPECT().GetIndexInfos(mock.Anything, mock.Anything).Return(nil, nil)
 		err := svr.channelManager.AddNode(110)
 		assert.Nil(t, err)
 		err = svr.channelManager.Watch(&channel{Name: "ch1", CollectionID: 100})
@@ -2828,6 +2829,15 @@ func TestDataCoord_SaveImportSegment(t *testing.T) {
 				SegmentID:    100,
 				CollectionID: 100,
 				Importing:    true,
+				StartPositions: []*datapb.SegmentStartPosition{
+					{
+						StartPosition: &internalpb.MsgPosition{
+							ChannelName: "ch1",
+							Timestamp:   1,
+						},
+						SegmentID: 100,
+					},
+				},
 			},
 		})
 		assert.NoError(t, err)

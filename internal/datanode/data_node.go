@@ -1005,7 +1005,7 @@ func (node *DataNode) Import(ctx context.Context, req *datapb.ImportTaskRequest)
 }
 
 // AddImportSegment adds the import segment to the current DataNode.
-func (node *DataNode) AddImportSegment(ctx context.Context, req *datapb.AddImportSegmentRequest) (*commonpb.Status, error) {
+func (node *DataNode) AddImportSegment(ctx context.Context, req *datapb.AddImportSegmentRequest) (*datapb.AddImportSegmentResponse, error) {
 	log.Info("adding segment to DataNode flow graph",
 		zap.Int64("segment ID", req.GetSegmentId()),
 		zap.Int64("collection ID", req.GetCollectionId()),
@@ -1027,10 +1027,23 @@ func (node *DataNode) AddImportSegment(ctx context.Context, req *datapb.AddImpor
 		log.Error("channel not found in current DataNode",
 			zap.String("channel name", req.GetChannelName()),
 			zap.Int64("node ID", Params.DataNodeCfg.GetNodeID()))
-		return &commonpb.Status{
-			// TODO: Add specific error code.
-			ErrorCode: commonpb.ErrorCode_UnexpectedError,
-			Reason:    "channel not found in current DataNode",
+		return &datapb.AddImportSegmentResponse{
+			Status: &commonpb.Status{
+				// TODO: Add specific error code.
+				ErrorCode: commonpb.ErrorCode_UnexpectedError,
+				Reason:    "channel not found in current DataNode",
+			},
+		}, nil
+	}
+	// Get the current dml channel position ID, that will be used in segments start positions and end positions.
+	posID, err := ds.getDmlChannelPositionByBroadcast(context.Background(), req.GetChannelName(), req.GetBase().GetTimestamp())
+	if err != nil {
+		return &datapb.AddImportSegmentResponse{
+			Status: &commonpb.Status{
+				// TODO: Add specific error code.
+				ErrorCode: commonpb.ErrorCode_UnexpectedError,
+				Reason:    "failed to get channel position",
+			},
 		}, nil
 	}
 	// Add the new segment to the replica.
@@ -1038,7 +1051,7 @@ func (node *DataNode) AddImportSegment(ctx context.Context, req *datapb.AddImpor
 		log.Info("adding a new segment to replica",
 			zap.Int64("segment ID", req.GetSegmentId()))
 		// Add segment as a flushed segment, but set `importing` to true to add extra information of the segment.
-		// By 'extra information' we mean segment info while adding a `SegmentType_New` typed segment.
+		// By 'extra information' we mean segment info while adding a `SegmentType_Flushed` typed segment.
 		if err := ds.replica.addSegment(
 			addSegmentReq{
 				segType:      datapb.SegmentType_Flushed,
@@ -1050,12 +1063,12 @@ func (node *DataNode) AddImportSegment(ctx context.Context, req *datapb.AddImpor
 				statsBinLogs: req.GetStatsLog(),
 				startPos: &internalpb.MsgPosition{
 					ChannelName: req.GetChannelName(),
-					MsgID:       req.GetDmlPositionId(),
+					MsgID:       posID,
 					Timestamp:   req.GetBase().GetTimestamp(),
 				},
 				endPos: &internalpb.MsgPosition{
 					ChannelName: req.GetChannelName(),
-					MsgID:       req.GetDmlPositionId(),
+					MsgID:       posID,
 					Timestamp:   req.GetBase().GetTimestamp(),
 				},
 				recoverTs: req.GetBase().GetTimestamp(),
@@ -1063,26 +1076,34 @@ func (node *DataNode) AddImportSegment(ctx context.Context, req *datapb.AddImpor
 			}); err != nil {
 			log.Error("failed to add segment to flow graph",
 				zap.Error(err))
-			return &commonpb.Status{
-				// TODO: Add specific error code.
-				ErrorCode: commonpb.ErrorCode_UnexpectedError,
-				Reason:    err.Error(),
+			return &datapb.AddImportSegmentResponse{
+				Status: &commonpb.Status{
+					// TODO: Add specific error code.
+					ErrorCode: commonpb.ErrorCode_UnexpectedError,
+					Reason:    err.Error(),
+				},
 			}, nil
 		}
 	}
 	ds.flushingSegCache.Remove(req.GetSegmentId())
-	return &commonpb.Status{
-		ErrorCode: commonpb.ErrorCode_Success,
+	return &datapb.AddImportSegmentResponse{
+		Status: &commonpb.Status{
+			ErrorCode: commonpb.ErrorCode_Success,
+		},
+		ChannelPos: posID,
 	}, nil
 }
 
 func importFlushReqFunc(node *DataNode, req *datapb.ImportTaskRequest, res *rootcoordpb.ImportResult, schema *schemapb.CollectionSchema, ts Timestamp) importutil.ImportFlushFunc {
 	return func(fields map[storage.FieldID]storage.FieldData, shardID int) error {
-		if shardID >= len(req.GetImportTask().GetChannelNames()) {
+		chNames := req.GetImportTask().GetChannelNames()
+		importTaskID := req.GetImportTask().GetTaskId()
+		if shardID >= len(chNames) {
 			log.Error("import task returns invalid shard ID",
+				zap.Int64("task ID", importTaskID),
 				zap.Int("shard ID", shardID),
-				zap.Int("# of channels", len(req.GetImportTask().GetChannelNames())),
-				zap.Strings("channel names", req.GetImportTask().GetChannelNames()),
+				zap.Int("# of channels", len(chNames)),
+				zap.Strings("channel names", chNames),
 			)
 			return fmt.Errorf("syncSegmentID Failed: invalid shard ID %d", shardID)
 		}
@@ -1090,175 +1111,32 @@ func importFlushReqFunc(node *DataNode, req *datapb.ImportTaskRequest, res *root
 		tr := timerecord.NewTimeRecorder("import callback function")
 		defer tr.Elapse("finished")
 
-		// use the first field's row count as segment row count
-		// all the fileds row count are same, checked by ImportWrapper
 		var rowNum int
 		for _, field := range fields {
 			rowNum = field.RowNum()
 			break
 		}
-
-		// ask DataCoord to alloc a new segment
-		log.Info("import task flush segment",
-			zap.Any("channel names", req.GetImportTask().GetChannelNames()),
-			zap.Int("shard ID", shardID))
-		segReqs := []*datapb.SegmentIDRequest{
-			{
-				ChannelName:  req.ImportTask.ChannelNames[shardID],
-				Count:        uint32(rowNum),
-				CollectionID: req.GetImportTask().GetCollectionId(),
-				PartitionID:  req.GetImportTask().GetPartitionId(),
-				IsImport:     true,
-			},
-		}
-		segmentIDReq := &datapb.AssignSegmentIDRequest{
-			NodeID:            0,
-			PeerRole:          typeutil.ProxyRole,
-			SegmentIDRequests: segReqs,
-		}
-
+		colID := req.GetImportTask().GetCollectionId()
+		partID := req.GetImportTask().GetPartitionId()
+		segmentIDReq := composeAssignSegmentIDRequest(rowNum, shardID, chNames, colID, partID)
+		targetChName := segmentIDReq.GetSegmentIDRequests()[0].GetChannelName()
+		log.Info("target channel for the import task",
+			zap.Int64("task ID", importTaskID),
+			zap.String("target channel name", targetChName))
 		resp, err := node.dataCoord.AssignSegmentID(context.Background(), segmentIDReq)
 		if err != nil {
 			return fmt.Errorf("syncSegmentID Failed:%w", err)
 		}
-
 		if resp.Status.ErrorCode != commonpb.ErrorCode_Success {
 			return fmt.Errorf("syncSegmentID Failed:%s", resp.Status.Reason)
 		}
 		segmentID := resp.SegIDAssignments[0].SegID
 
-		// TODO: this code block is long and tedious, maybe split it into separate functions.
-		tsFieldData := make([]int64, rowNum)
-		for i := range tsFieldData {
-			tsFieldData[i] = int64(ts)
-		}
-		fields[common.TimeStampField] = &storage.Int64FieldData{
-			Data:    tsFieldData,
-			NumRows: []int64{int64(rowNum)},
-		}
-
-		if status, _ := node.dataCoord.UpdateSegmentStatistics(context.TODO(), &datapb.UpdateSegmentStatisticsRequest{
-			Stats: []*datapb.SegmentStats{{
-				SegmentID: segmentID,
-				NumRows:   int64(rowNum),
-			}},
-		}); status.GetErrorCode() != commonpb.ErrorCode_Success {
-			// TODO: reportImport the failure.
-			return fmt.Errorf(status.GetReason())
-		}
-
-		data := BufferData{buffer: &InsertData{
-			Data: fields,
-		}}
-		data.updateSize(int64(rowNum))
-		meta := &etcdpb.CollectionMeta{
-			ID:     req.GetImportTask().GetCollectionId(),
-			Schema: schema,
-		}
-		inCodec := storage.NewInsertCodec(meta)
-
-		binLogs, statsBinlogs, err := inCodec.Serialize(req.GetImportTask().GetPartitionId(), segmentID, data.buffer)
+		fieldInsert, fieldStats, err := createBinLogs(rowNum, schema, ts, fields, node, segmentID, colID, partID)
 		if err != nil {
 			return err
 		}
 
-		var alloc allocatorInterface = newAllocator(node.rootCoord)
-		start, _, err := alloc.allocIDBatch(uint32(len(binLogs)))
-		if err != nil {
-			return err
-		}
-
-		field2Insert := make(map[UniqueID]*datapb.Binlog, len(binLogs))
-		kvs := make(map[string][]byte, len(binLogs))
-		field2Logidx := make(map[UniqueID]UniqueID, len(binLogs))
-		for idx, blob := range binLogs {
-			fieldID, err := strconv.ParseInt(blob.GetKey(), 10, 64)
-			if err != nil {
-				log.Error("Flush failed ... cannot parse string to fieldID ..", zap.Error(err))
-				return err
-			}
-
-			logidx := start + int64(idx)
-
-			// no error raise if alloc=false
-			k := JoinIDPath(req.GetImportTask().GetCollectionId(), req.GetImportTask().GetPartitionId(), segmentID, fieldID, logidx)
-
-			key := path.Join(node.chunkManager.RootPath(), common.SegmentInsertLogPath, k)
-			kvs[key] = blob.Value[:]
-			field2Insert[fieldID] = &datapb.Binlog{
-				EntriesNum:    data.size,
-				TimestampFrom: ts,
-				TimestampTo:   ts,
-				LogPath:       key,
-				LogSize:       int64(len(blob.Value)),
-			}
-			field2Logidx[fieldID] = logidx
-		}
-
-		field2Stats := make(map[UniqueID]*datapb.Binlog)
-		// write stats binlog
-		for _, blob := range statsBinlogs {
-			fieldID, err := strconv.ParseInt(blob.GetKey(), 10, 64)
-			if err != nil {
-				log.Error("Flush failed ... cannot parse string to fieldID ..", zap.Error(err))
-				return err
-			}
-
-			logidx := field2Logidx[fieldID]
-
-			// no error raise if alloc=false
-			k := JoinIDPath(req.GetImportTask().GetCollectionId(), req.GetImportTask().GetPartitionId(), segmentID, fieldID, logidx)
-
-			key := path.Join(node.chunkManager.RootPath(), common.SegmentStatslogPath, k)
-			kvs[key] = blob.Value
-			field2Stats[fieldID] = &datapb.Binlog{
-				EntriesNum:    data.size,
-				TimestampFrom: ts,
-				TimestampTo:   ts,
-				LogPath:       key,
-				LogSize:       int64(len(blob.Value)),
-			}
-		}
-
-		err = node.chunkManager.MultiWrite(kvs)
-		if err != nil {
-			return err
-		}
-		var (
-			fieldInsert []*datapb.FieldBinlog
-			fieldStats  []*datapb.FieldBinlog
-		)
-
-		for k, v := range field2Insert {
-			fieldInsert = append(fieldInsert, &datapb.FieldBinlog{FieldID: k, Binlogs: []*datapb.Binlog{v}})
-		}
-		for k, v := range field2Stats {
-			fieldStats = append(fieldStats, &datapb.FieldBinlog{FieldID: k, Binlogs: []*datapb.Binlog{v}})
-		}
-
-		// Fetch the flow graph on the given v-channel.
-		var ds *dataSyncService
-		// Retry in case the channel hasn't been watched yet.
-		err = retry.Do(context.Background(), func() error {
-			var ok bool
-			ds, ok = node.flowgraphManager.getFlowgraphService(segReqs[0].GetChannelName())
-			if !ok {
-				return errors.New("channel not found")
-			}
-			return nil
-		}, retry.Attempts(getFlowGraphServiceAttempts))
-		if err != nil {
-			log.Error("channel not found in current DataNode",
-				zap.Error(err),
-				zap.String("channel name", segReqs[0].GetChannelName()),
-				zap.Int64("node ID", Params.DataNodeCfg.GetNodeID()))
-			return err
-		}
-		// Get the current dml channel position ID, that will be used in segments start positions and end positions.
-		posID, err := ds.getDmlChannelPositionByBroadcast(context.Background(), segReqs[0].GetChannelName(), req.GetBase().GetTimestamp())
-		if err != nil {
-			return errors.New("failed to get channel position")
-		}
 		log.Info("adding segment to the correct DataNode flow graph and saving binlog paths",
 			zap.Int64("segment ID", segmentID),
 			zap.Uint64("ts", ts))
@@ -1271,17 +1149,15 @@ func importFlushReqFunc(node *DataNode, req *datapb.ImportTaskRequest, res *root
 					Timestamp: ts,
 				},
 				SegmentId:    segmentID,
-				ChannelName:  segReqs[0].GetChannelName(),
+				ChannelName:  targetChName,
 				CollectionId: req.GetImportTask().GetCollectionId(),
 				PartitionId:  req.GetImportTask().GetPartitionId(),
 				RowNum:       int64(rowNum),
-				// Pass the DML position ID downstream.
-				DmlPositionId: posID,
 				SaveBinlogPathReq: &datapb.SaveBinlogPathsRequest{
 					Base: &commonpb.MsgBase{
 						MsgType:   0,
 						MsgID:     0,
-						Timestamp: 0,
+						Timestamp: ts,
 						SourceID:  Params.DataNodeCfg.GetNodeID(),
 					},
 					SegmentID:           segmentID,
@@ -1292,8 +1168,7 @@ func importFlushReqFunc(node *DataNode, req *datapb.ImportTaskRequest, res *root
 					StartPositions: []*datapb.SegmentStartPosition{
 						{
 							StartPosition: &internalpb.MsgPosition{
-								ChannelName: segReqs[0].GetChannelName(),
-								MsgID:       posID,
+								ChannelName: targetChName,
 								Timestamp:   ts,
 							},
 							SegmentID: segmentID,
@@ -1322,6 +1197,139 @@ func importFlushReqFunc(node *DataNode, req *datapb.ImportTaskRequest, res *root
 		res.RowCount += int64(rowNum)
 		return nil
 	}
+}
+
+func composeAssignSegmentIDRequest(rowNum int, shardID int, chNames []string,
+	collID int64, partID int64) *datapb.AssignSegmentIDRequest {
+	// use the first field's row count as segment row count
+	// all the fields row count are same, checked by ImportWrapper
+	// ask DataCoord to alloc a new segment
+	log.Info("import task flush segment",
+		zap.Any("channel names", chNames),
+		zap.Int("shard ID", shardID))
+	segReqs := []*datapb.SegmentIDRequest{
+		{
+			ChannelName:  chNames[shardID],
+			Count:        uint32(rowNum),
+			CollectionID: collID,
+			PartitionID:  partID,
+			IsImport:     true,
+		},
+	}
+	segmentIDReq := &datapb.AssignSegmentIDRequest{
+		NodeID:            0,
+		PeerRole:          typeutil.ProxyRole,
+		SegmentIDRequests: segReqs,
+	}
+	return segmentIDReq
+}
+
+func createBinLogs(rowNum int, schema *schemapb.CollectionSchema, ts Timestamp,
+	fields map[storage.FieldID]storage.FieldData, node *DataNode, segmentID, colID, partID UniqueID) ([]*datapb.FieldBinlog, []*datapb.FieldBinlog, error) {
+	tsFieldData := make([]int64, rowNum)
+	for i := range tsFieldData {
+		tsFieldData[i] = int64(ts)
+	}
+	fields[common.TimeStampField] = &storage.Int64FieldData{
+		Data:    tsFieldData,
+		NumRows: []int64{int64(rowNum)},
+	}
+
+	if status, _ := node.dataCoord.UpdateSegmentStatistics(context.TODO(), &datapb.UpdateSegmentStatisticsRequest{
+		Stats: []*datapb.SegmentStats{{
+			SegmentID: segmentID,
+			NumRows:   int64(rowNum),
+		}},
+	}); status.GetErrorCode() != commonpb.ErrorCode_Success {
+		return nil, nil, fmt.Errorf(status.GetReason())
+	}
+
+	data := BufferData{buffer: &InsertData{
+		Data: fields,
+	}}
+	data.updateSize(int64(rowNum))
+	meta := &etcdpb.CollectionMeta{
+		ID:     colID,
+		Schema: schema,
+	}
+	binLogs, statsBinLogs, err := storage.NewInsertCodec(meta).Serialize(partID, segmentID, data.buffer)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var alloc allocatorInterface = newAllocator(node.rootCoord)
+	start, _, err := alloc.allocIDBatch(uint32(len(binLogs)))
+	if err != nil {
+		return nil, nil, err
+	}
+
+	field2Insert := make(map[UniqueID]*datapb.Binlog, len(binLogs))
+	kvs := make(map[string][]byte, len(binLogs))
+	field2Logidx := make(map[UniqueID]UniqueID, len(binLogs))
+	for idx, blob := range binLogs {
+		fieldID, err := strconv.ParseInt(blob.GetKey(), 10, 64)
+		if err != nil {
+			log.Error("Flush failed ... cannot parse string to fieldID ..", zap.Error(err))
+			return nil, nil, err
+		}
+
+		logidx := start + int64(idx)
+
+		// no error raise if alloc=false
+		k := JoinIDPath(colID, partID, segmentID, fieldID, logidx)
+
+		key := path.Join(node.chunkManager.RootPath(), common.SegmentInsertLogPath, k)
+		kvs[key] = blob.Value[:]
+		field2Insert[fieldID] = &datapb.Binlog{
+			EntriesNum:    data.size,
+			TimestampFrom: ts,
+			TimestampTo:   ts,
+			LogPath:       key,
+			LogSize:       int64(len(blob.Value)),
+		}
+		field2Logidx[fieldID] = logidx
+	}
+
+	field2Stats := make(map[UniqueID]*datapb.Binlog)
+	// write stats binlog
+	for _, blob := range statsBinLogs {
+		fieldID, err := strconv.ParseInt(blob.GetKey(), 10, 64)
+		if err != nil {
+			log.Error("Flush failed ... cannot parse string to fieldID ..", zap.Error(err))
+			return nil, nil, err
+		}
+
+		logidx := field2Logidx[fieldID]
+
+		// no error raise if alloc=false
+		k := JoinIDPath(colID, partID, segmentID, fieldID, logidx)
+
+		key := path.Join(node.chunkManager.RootPath(), common.SegmentStatslogPath, k)
+		kvs[key] = blob.Value
+		field2Stats[fieldID] = &datapb.Binlog{
+			EntriesNum:    data.size,
+			TimestampFrom: ts,
+			TimestampTo:   ts,
+			LogPath:       key,
+			LogSize:       int64(len(blob.Value)),
+		}
+	}
+
+	err = node.chunkManager.MultiWrite(kvs)
+	if err != nil {
+		return nil, nil, err
+	}
+	var (
+		fieldInsert []*datapb.FieldBinlog
+		fieldStats  []*datapb.FieldBinlog
+	)
+	for k, v := range field2Insert {
+		fieldInsert = append(fieldInsert, &datapb.FieldBinlog{FieldID: k, Binlogs: []*datapb.Binlog{v}})
+	}
+	for k, v := range field2Stats {
+		fieldStats = append(fieldStats, &datapb.FieldBinlog{FieldID: k, Binlogs: []*datapb.Binlog{v}})
+	}
+	return fieldInsert, fieldStats, nil
 }
 
 func logDupFlush(cID, segID int64) {

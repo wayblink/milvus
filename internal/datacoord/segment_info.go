@@ -214,12 +214,12 @@ func (s *SegmentInfo) Clone(opts ...SegmentInfoOption) *SegmentInfo {
 // ShadowClone shadow clone the segment and return a new instance
 func (s *SegmentInfo) ShadowClone(opts ...SegmentInfoOption) *SegmentInfo {
 	cloned := &SegmentInfo{
-		SegmentInfo:   s.SegmentInfo,
-		currRows:      s.currRows,
-		allocations:   s.allocations,
-		lastFlushTime: s.lastFlushTime,
-		isCompacting:  s.isCompacting,
-		size:          s.size,
+		SegmentInfo:     s.SegmentInfo,
+		currRows:        s.currRows,
+		allocations:     s.allocations,
+		lastFlushTime:   s.lastFlushTime,
+		isCompacting:    s.isCompacting,
+		size:            s.size,
 		lastWrittenTime: s.lastWrittenTime,
 	}
 

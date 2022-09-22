@@ -30,15 +30,15 @@ func (_m *DataNode) EXPECT() *DataNode_Expecter {
 }
 
 // AddImportSegment provides a mock function with given fields: ctx, req
-func (_m *DataNode) AddImportSegment(ctx context.Context, req *datapb.AddImportSegmentRequest) (*commonpb.Status, error) {
+func (_m *DataNode) AddImportSegment(ctx context.Context, req *datapb.AddImportSegmentRequest) (*datapb.AddImportSegmentResponse, error) {
 	ret := _m.Called(ctx, req)
 
-	var r0 *commonpb.Status
-	if rf, ok := ret.Get(0).(func(context.Context, *datapb.AddImportSegmentRequest) *commonpb.Status); ok {
+	var r0 *datapb.AddImportSegmentResponse
+	if rf, ok := ret.Get(0).(func(context.Context, *datapb.AddImportSegmentRequest) *datapb.AddImportSegmentResponse); ok {
 		r0 = rf(ctx, req)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*commonpb.Status)
+			r0 = ret.Get(0).(*datapb.AddImportSegmentResponse)
 		}
 	}
 
@@ -71,7 +71,7 @@ func (_c *DataNode_AddImportSegment_Call) Run(run func(ctx context.Context, req 
 	return _c
 }
 
-func (_c *DataNode_AddImportSegment_Call) Return(_a0 *commonpb.Status, _a1 error) *DataNode_AddImportSegment_Call {
+func (_c *DataNode_AddImportSegment_Call) Return(_a0 *datapb.AddImportSegmentResponse, _a1 error) *DataNode_AddImportSegment_Call {
 	_c.Call.Return(_a0, _a1)
 	return _c
 }

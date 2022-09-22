@@ -391,6 +391,7 @@ func (dsService *dataSyncService) getSegmentInfos(segmentIDs []int64) ([]*datapb
 	return infoResp.Infos, nil
 }
 
+// TODO(@wayblink): Use GetLatestMsgID rather than by broadcasting?
 func (dsService *dataSyncService) getDmlChannelPositionByBroadcast(ctx context.Context, channelName string, ts uint64) ([]byte, error) {
 	msgPack := msgstream.MsgPack{}
 	baseMsg := msgstream.BaseMsg{

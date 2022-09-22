@@ -83,7 +83,7 @@ service DataNode {
 
   rpc ResendSegmentStats(ResendSegmentStatsRequest) returns(ResendSegmentStatsResponse) {}
 
-  rpc AddImportSegment(AddImportSegmentRequest) returns(common.Status) {}
+  rpc AddImportSegment(AddImportSegmentRequest) returns(AddImportSegmentResponse) {}
 }
 
 message FlushRequest {
@@ -565,7 +565,11 @@ message AddImportSegmentRequest {
   int64 partition_id = 5;
   int64 row_num = 6;
   repeated FieldBinlog stats_log = 7;
-  bytes dml_position_id = 8;
+}
+
+message AddImportSegmentResponse {
+  common.Status status = 1;
+  bytes channel_pos = 2;
 }
 
 message SaveImportSegmentRequest {

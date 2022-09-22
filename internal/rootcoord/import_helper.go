@@ -6,21 +6,26 @@ import (
 	"github.com/milvus-io/milvus/api/commonpb"
 	"github.com/milvus-io/milvus/internal/log"
 	"github.com/milvus-io/milvus/internal/proto/datapb"
+	"github.com/milvus-io/milvus/internal/proto/indexpb"
 	"go.uber.org/zap"
 )
 
 type GetCollectionNameFunc func(collID, partitionID UniqueID) (string, string, error)
 type IDAllocator func(count uint32) (UniqueID, UniqueID, error)
 type ImportFunc func(ctx context.Context, req *datapb.ImportTaskRequest) (*datapb.ImportTaskResponse, error)
-type UnsetImportingFunc func(ctx context.Context, segIDs []int64) (*commonpb.Status, error)
 type MarkSegmentsDroppedFunc func(ctx context.Context, segIDs []int64) (*commonpb.Status, error)
+type DescribeIndexFunc func(ctx context.Context, colID UniqueID) (*indexpb.DescribeIndexResponse, error)
+type GetSegmentIndexStateFunc func(ctx context.Context, collID UniqueID, indexName string, segIDs []UniqueID) ([]*indexpb.SegmentIndexState, error)
+type UnsetIsImportingStateFunc func(context.Context, *datapb.UnsetIsImportingStateRequest) (*commonpb.Status, error)
 
 type ImportFactory interface {
 	NewGetCollectionNameFunc() GetCollectionNameFunc
 	NewIDAllocator() IDAllocator
 	NewImportFunc() ImportFunc
-	NewUnsetImportingFunc() UnsetImportingFunc
 	NewMarkSegmentsDroppedFunc() MarkSegmentsDroppedFunc
+	NewDescribeIndexFunc() DescribeIndexFunc
+	NewGetSegmentIndexStateFunc() GetSegmentIndexStateFunc
+	NewUnsetIsImportingStateFunc() UnsetIsImportingStateFunc
 }
 
 type ImportFactoryImpl struct {
@@ -39,12 +44,20 @@ func (f ImportFactoryImpl) NewImportFunc() ImportFunc {
 	return ImportFuncWithCore(f.c)
 }
 
-func (f ImportFactoryImpl) NewUnsetImportingFunc() UnsetImportingFunc {
-	return UnsetImportingFuncWithCore(f.c)
-}
-
 func (f ImportFactoryImpl) NewMarkSegmentsDroppedFunc() MarkSegmentsDroppedFunc {
 	return MarkSegmentsDroppedWithCore(f.c)
+}
+
+func (f ImportFactoryImpl) NewDescribeIndexFunc() DescribeIndexFunc {
+	return DescribeIndexWithCore(f.c)
+}
+
+func (f ImportFactoryImpl) NewGetSegmentIndexStateFunc() GetSegmentIndexStateFunc {
+	return GetSegmentIndexStateWithCore(f.c)
+}
+
+func (f ImportFactoryImpl) NewUnsetIsImportingStateFunc() UnsetIsImportingStateFunc {
+	return UnsetIsImportingStateWithCore(f.c)
 }
 
 func NewImportFactory(c *Core) ImportFactory {
@@ -81,18 +94,28 @@ func ImportFuncWithCore(c *Core) ImportFunc {
 	}
 }
 
-func UnsetImportingFuncWithCore(c *Core) UnsetImportingFunc {
-	return func(ctx context.Context, segIDs []int64) (*commonpb.Status, error) {
-		return c.broker.UnsetIsImportingState(ctx, &datapb.UnsetIsImportingStateRequest{
-			SegmentIds: segIDs,
-		})
-	}
-}
-
 func MarkSegmentsDroppedWithCore(c *Core) MarkSegmentsDroppedFunc {
 	return func(ctx context.Context, segIDs []int64) (*commonpb.Status, error) {
 		return c.broker.MarkSegmentsDropped(ctx, &datapb.MarkSegmentsDroppedRequest{
 			SegmentIds: segIDs,
 		})
+	}
+}
+
+func DescribeIndexWithCore(c *Core) DescribeIndexFunc {
+	return func(ctx context.Context, colID UniqueID) (*indexpb.DescribeIndexResponse, error) {
+		return c.broker.DescribeIndex(ctx, colID)
+	}
+}
+
+func GetSegmentIndexStateWithCore(c *Core) GetSegmentIndexStateFunc {
+	return func(ctx context.Context, collID UniqueID, indexName string, segIDs []UniqueID) ([]*indexpb.SegmentIndexState, error) {
+		return c.broker.GetSegmentIndexState(ctx, collID, indexName, segIDs)
+	}
+}
+
+func UnsetIsImportingStateWithCore(c *Core) UnsetIsImportingStateFunc {
+	return func(ctx context.Context, req *datapb.UnsetIsImportingStateRequest) (*commonpb.Status, error) {
+		return c.broker.UnsetIsImportingState(ctx, req)
 	}
 }

@@ -72,7 +72,9 @@ type insertBufferNode struct {
 
 	lastTimestamp Timestamp
 
-	operated bool
+	operated  bool
+	operated2 bool
+	operated3 bool
 }
 
 type timeTickLogger struct {
@@ -179,7 +181,7 @@ func (ibNode *insertBufferNode) Close() {
 func (ibNode *insertBufferNode) Operate(in []Msg) []Msg {
 	// log.Debug("InsertBufferNode Operating")
 	if !ibNode.operated {
-		log.Debug("InsertBufferNode first operate", zap.String("channel", ibNode.channelName))
+		log.Debug("wayblink InsertBufferNode first operate", zap.String("channel", ibNode.channelName))
 		ibNode.operated = true
 	}
 	if len(in) != 1 {
@@ -473,14 +475,28 @@ func (ibNode *insertBufferNode) Operate(in []Msg) []Msg {
 //  If the segment doesn't exist, a new segment will be created.
 //  The segment number of rows will be updated in mem, waiting to be uploaded to DataCoord.
 func (ibNode *insertBufferNode) updateSegStatesInReplica(insertMsgs []*msgstream.InsertMsg, startPos, endPos *internalpb.MsgPosition) (seg2Upload []UniqueID, err error) {
+	if !ibNode.operated2 {
+		log.Debug("wayblink InsertBufferNode first updateSegStatesInReplica", zap.String("channel", ibNode.channelName))
+		ibNode.operated2 = true
+	}
 	uniqueSeg := make(map[UniqueID]int64)
 	for _, msg := range insertMsgs {
-
+		if !ibNode.operated3 {
+			log.Debug("wayblink InsertBufferNode first insertMsgs to create segment", zap.String("channel", ibNode.channelName))
+			ibNode.operated3 = true
+		}
 		currentSegID := msg.GetSegmentID()
 		collID := msg.GetCollectionID()
 		partitionID := msg.GetPartitionID()
 
 		if !ibNode.replica.hasSegment(currentSegID, true) {
+			log.Debug("wayblink addNewSegment",
+				zap.Int64("segID", currentSegID),
+				zap.Int64("collID", collID),
+				zap.Int64("partID", partitionID),
+				zap.String("chanName", msg.GetShardName()),
+				zap.Any("startPos", startPos),
+				zap.Any("endPos", endPos))
 			err = ibNode.replica.addNewSegment(currentSegID, collID, partitionID, msg.GetShardName(),
 				startPos, endPos)
 			if err != nil {

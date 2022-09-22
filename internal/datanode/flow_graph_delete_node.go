@@ -124,7 +124,7 @@ func (dn *deleteNode) showDelBuf(segIDs []UniqueID, ts Timestamp) {
 func (dn *deleteNode) Operate(in []Msg) []Msg {
 	//log.Debug("deleteNode Operating")
 	if !dn.operated {
-		log.Debug("deleteNode first operate", zap.String("channel", dn.channelName))
+		log.Debug("wayblink deleteNode first operate", zap.String("channel", dn.channelName))
 		dn.operated = true
 	}
 

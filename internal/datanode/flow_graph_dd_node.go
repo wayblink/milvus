@@ -87,7 +87,7 @@ func (ddn *ddNode) Operate(in []Msg) []Msg {
 	}
 
 	if !ddn.operated {
-		log.Debug("ddNode first operate", zap.String("channel", ddn.vChannelName))
+		log.Debug("wayblink ddNode first operate", zap.String("channel", ddn.vChannelName))
 		ddn.operated = true
 	}
 
@@ -128,6 +128,9 @@ func (ddn *ddNode) Operate(in []Msg) []Msg {
 
 	var forwardMsgs []msgstream.TsMsg
 	for _, msg := range msMsg.TsMessages() {
+		if !ddn.operated {
+			log.Debug("ddNode consume", zap.String("type", string(msg.Type())))
+		}
 		switch msg.Type() {
 		case commonpb.MsgType_DropCollection:
 			if msg.(*msgstream.DropCollectionMsg).GetCollectionID() == ddn.collectionID {
@@ -208,6 +211,10 @@ func (ddn *ddNode) Operate(in []Msg) []Msg {
 
 	for _, sp := range spans {
 		sp.Finish()
+	}
+
+	if !ddn.operated {
+		ddn.operated = true
 	}
 
 	return []Msg{&fgMsg}

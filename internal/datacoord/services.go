@@ -1339,6 +1339,7 @@ func (s *Server) MarkSegmentsDropped(ctx context.Context, req *datapb.MarkSegmen
 		zap.Int64s("segments", req.GetSegmentIds()))
 	failure := false
 	for _, segID := range req.GetSegmentIds() {
+		log.Debug("Set segment dropped", zap.Int64("id", segID))
 		if err := s.meta.SetState(segID, commonpb.SegmentState_Dropped); err != nil {
 			// Fail-open.
 			log.Error("failed to set segment state as dropped", zap.Int64("segment ID", segID))

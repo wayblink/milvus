@@ -397,6 +397,7 @@ func (m *meta) UpdateFlushSegmentsInfo(
 		modSegments[segmentID] = clonedSegment
 	}
 	if dropped {
+		log.Debug("Set segment dropped", zap.Int64("id", clonedSegment.GetID()))
 		clonedSegment.State = commonpb.SegmentState_Dropped
 		clonedSegment.DroppedAt = uint64(time.Now().UnixNano())
 		modSegments[segmentID] = clonedSegment
@@ -527,6 +528,7 @@ func (m *meta) UpdateDropChannelSegmentInfo(channel string, segments []*SegmentI
 		// seg inf mod segments are all in dropped state
 		if !ok {
 			clonedSeg := seg.Clone()
+			log.Debug("Set segment dropped", zap.Int64("id", clonedSeg.GetID()))
 			clonedSeg.State = commonpb.SegmentState_Dropped
 			modSegments[seg.ID] = clonedSeg
 			originSegments[seg.GetID()] = seg
@@ -564,6 +566,7 @@ func (m *meta) mergeDropSegment(seg2Drop *SegmentInfo) *SegmentInfo {
 	}
 
 	clonedSegment := segment.Clone()
+	log.Debug("Set segment dropped", zap.Int64("id", segment.GetID()))
 	clonedSegment.State = commonpb.SegmentState_Dropped
 
 	currBinlogs := clonedSegment.GetBinlogs()
@@ -874,6 +877,7 @@ func (m *meta) GetCompleteCompactionMeta(compactionLogs []*datapb.CompactionSegm
 			oldSegments = append(oldSegments, segment.Clone().SegmentInfo)
 
 			cloned := segment.Clone()
+			log.Debug("Set segment dropped", zap.Int64("id", segment.GetID()))
 			cloned.State = commonpb.SegmentState_Dropped
 			cloned.DroppedAt = uint64(time.Now().UnixNano())
 			modSegments = append(modSegments, cloned)

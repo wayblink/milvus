@@ -352,6 +352,10 @@ func (t *compactionTrigger) handleGlobalSignal(signal *compactionSignal) {
 		}
 
 		plans := t.generatePlans(group.segments, signal.isForce, ct)
+		log.Debug("generate compaction plan",
+			zap.Bool("force", signal.isForce),
+			zap.Bool("global", signal.isGlobal),
+			zap.Any("plan_length", len(plans)))
 		for _, plan := range plans {
 			if !signal.isForce && t.compactionHandler.isFull() {
 				log.Warn("compaction plan skipped due to handler full", zap.Int64("collection", signal.collectionID), zap.Int64("planID", plan.PlanID))

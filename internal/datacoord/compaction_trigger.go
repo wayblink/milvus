@@ -427,6 +427,10 @@ func (t *compactionTrigger) handleSignal(signal *compactionSignal) {
 	}
 
 	plans := t.generatePlans(segments, signal.isForce, ct)
+	log.Debug("generate compaction plan",
+		zap.Bool("force", signal.isForce),
+		zap.Bool("global", signal.isGlobal),
+		zap.Any("plan_length", len(plans)))
 	for _, plan := range plans {
 		if t.compactionHandler.isFull() {
 			log.Warn("compaction plan skipped due to handler full", zap.Int64("collection", signal.collectionID), zap.Int64("planID", plan.PlanID))
@@ -451,6 +455,7 @@ func (t *compactionTrigger) generatePlans(segments []*SegmentInfo, force bool, c
 	var smallCandidates []*SegmentInfo
 
 	// TODO, currently we lack of the measurement of data distribution, there should be another compaction help on redistributing segment based on scalar/vector field distribution
+	log.Info("generate plan input segments", zap.Int("length", len(segments)), zap.Any("segments", segments))
 	for _, segment := range segments {
 		segment := segment.ShadowClone()
 		// TODO should we trigger compaction periodically even if the segment has no obvious reason to be compacted?
@@ -481,6 +486,7 @@ func (t *compactionTrigger) generatePlans(segments []*SegmentInfo, force bool, c
 	// we must ensure all prioritized candidates is in a plan
 	//TODO the compaction policy should consider segment with similar timestamp together so timetravel and data expiration could work better.
 	//TODO the compaction selection policy should consider if compaction workload is high
+	log.Info("generate plan prioritizedCandidates", zap.Int("length", len(prioritizedCandidates)))
 	for len(prioritizedCandidates) > 0 {
 		var bucket []*SegmentInfo
 		// pop out the first element
@@ -515,6 +521,7 @@ func (t *compactionTrigger) generatePlans(segments []*SegmentInfo, force bool, c
 	}
 
 	// check if there are small candidates left can be merged into large segments
+	log.Info("generate plan small candidates", zap.Int("length", len(smallCandidates)))
 	for len(smallCandidates) > 0 {
 		var bucket []*SegmentInfo
 		// pop out the first element

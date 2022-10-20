@@ -283,6 +283,10 @@ func (t *compactionTrigger) handleSignal(signal *compactionSignal) {
 	partitionID := segment.GetPartitionID()
 	segments := t.getCandidateSegments(channel, partitionID)
 	plans := t.generatePlans(segments, signal.isForce, signal.compactTime)
+	log.Debug("generate compaction plan",
+		zap.Bool("force", signal.isForce),
+		zap.Bool("global", signal.isGlobal),
+		zap.Any("plan_length", len(plans)))
 	for _, plan := range plans {
 		if t.compactionHandler.isFull() {
 			log.Warn("compaction plan skipped due to handler full", zap.Int64("collection", signal.collectionID), zap.Int64("planID", plan.PlanID))
@@ -305,7 +309,7 @@ func (t *compactionTrigger) generatePlans(segments []*SegmentInfo, force bool, c
 	// TODO add low priority candidates, for example if the segment is smaller than full 0.9 * max segment size but larger than small segment boundary, we only execute compaction when there are no compaction running actively
 	var prioritizedCandidates []*SegmentInfo
 	var smallCandidates []*SegmentInfo
-
+	log.Info("generate plan input segments", zap.Int("length", len(segments)), zap.Any("segments", segments))
 	// TODO, currently we lack of the measurement of data distribution, there should be another compaction help on redistributing segment based on scalar/vector field distribution
 	for _, segment := range segments {
 		segment := segment.ShadowClone()
@@ -337,6 +341,7 @@ func (t *compactionTrigger) generatePlans(segments []*SegmentInfo, force bool, c
 	// we must ensure all prioritized candidates is in a plan
 	//TODO the compaction policy should consider segment with similar timestamp together so timetravel and data expiration could work better.
 	//TODO the compaction selection policy should consider if compaction workload is high
+	log.Info("generate plan prioritizedCandidates", zap.Int("length", len(prioritizedCandidates)))
 	for len(prioritizedCandidates) > 0 {
 		var bucket []*SegmentInfo
 		// pop out the first element
@@ -371,6 +376,7 @@ func (t *compactionTrigger) generatePlans(segments []*SegmentInfo, force bool, c
 	}
 
 	// check if there are small candidates left can be merged into large segments
+	log.Info("generate plan small candidates", zap.Int("length", len(smallCandidates)))
 	for len(smallCandidates) > 0 {
 		var bucket []*SegmentInfo
 		// pop out the first element
@@ -392,6 +398,9 @@ func (t *compactionTrigger) generatePlans(segments []*SegmentInfo, force bool, c
 			size += s.getSegmentSize()
 			targetRow += s.GetNumOfRows()
 		}
+		log.Info("small candidates",
+			zap.Bool("condition1", len(bucket) >= Params.DataCoordCfg.MinSegmentToMerge),
+			zap.Bool("conditions", targetRow > int64(float64(segment.GetMaxRowNum())*Params.DataCoordCfg.SegmentSmallProportion)))
 		// only merge if candidate number is large than MinSegmentToMerge or if target row is large enough
 		if len(bucket) >= Params.DataCoordCfg.MinSegmentToMerge || targetRow > int64(float64(segment.GetMaxRowNum())*Params.DataCoordCfg.SegmentSmallProportion) {
 			plan := segmentsToPlan(bucket, compactTime)

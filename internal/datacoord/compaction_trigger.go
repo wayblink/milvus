@@ -399,8 +399,12 @@ func (t *compactionTrigger) generatePlans(segments []*SegmentInfo, force bool, c
 			targetRow += s.GetNumOfRows()
 		}
 		log.Info("small candidates",
+			zap.Int("length", len(bucket)),
+			zap.Int("MinSegmentToMerge", Params.DataCoordCfg.MinSegmentToMerge),
+			zap.Int64("targetRow", targetRow),
+			zap.Int64("threshold", int64(float64(segment.GetMaxRowNum())*Params.DataCoordCfg.SegmentSmallProportion)),
 			zap.Bool("condition1", len(bucket) >= Params.DataCoordCfg.MinSegmentToMerge),
-			zap.Bool("conditions", targetRow > int64(float64(segment.GetMaxRowNum())*Params.DataCoordCfg.SegmentSmallProportion)))
+			zap.Bool("condition2", targetRow > int64(float64(segment.GetMaxRowNum())*Params.DataCoordCfg.SegmentSmallProportion)))
 		// only merge if candidate number is large than MinSegmentToMerge or if target row is large enough
 		if len(bucket) >= Params.DataCoordCfg.MinSegmentToMerge || targetRow > int64(float64(segment.GetMaxRowNum())*Params.DataCoordCfg.SegmentSmallProportion) {
 			plan := segmentsToPlan(bucket, compactTime)
@@ -455,12 +459,19 @@ func reverseGreedySelect(candidates []*SegmentInfo, free int64, maxSegment int) 
 
 	for i := len(candidates) - 1; i >= 0; i-- {
 		candidate := candidates[i]
+		log.Debug("reverseGreedySelect",
+			zap.Int("candidates_length", len(candidates)),
+			zap.Int("result_length", len(result)),
+			zap.Int("maxSegment", maxSegment),
+			zap.Int64("GetNumOfRows", candidate.GetNumOfRows()),
+			zap.Int64("free", free))
 		if (len(result) < maxSegment) && (candidate.GetNumOfRows() < free) {
 			result = append(result, candidate)
 			free -= candidate.GetNumOfRows()
 			candidates = append(candidates[:i], candidates[i+1:]...)
 		}
 	}
+	log.Debug("reverseGreedySelect", zap.Int("candidates_length", len(candidates)))
 	return candidates, result, free
 }
 

@@ -605,12 +605,19 @@ func reverseGreedySelect(candidates []*SegmentInfo, free int64, maxSegment int) 
 
 	for i := len(candidates) - 1; i >= 0; i-- {
 		candidate := candidates[i]
+		log.Debug("reverseGreedySelect",
+			zap.Int("candidates_length", len(candidates)),
+			zap.Int("result_length", len(result)),
+			zap.Int("maxSegment", maxSegment),
+			zap.Int64("GetNumOfRows", candidate.GetNumOfRows()),
+			zap.Int64("free", free))
 		if (len(result) < maxSegment) && (candidate.GetNumOfRows() < free) {
 			result = append(result, candidate)
 			free -= candidate.GetNumOfRows()
 			candidates = append(candidates[:i], candidates[i+1:]...)
 		}
 	}
+	log.Debug("reverseGreedySelect", zap.Int("candidates_length", len(candidates)))
 	return candidates, result, free
 }
 

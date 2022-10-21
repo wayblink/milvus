@@ -547,6 +547,9 @@ func (t *compactionTrigger) generatePlans(segments []*SegmentInfo, force bool, c
 		for _, s := range bucket {
 			size += s.getSegmentSize()
 			targetRow += s.GetNumOfRows()
+			log.Info("reverseGreedySelect",
+				zap.Int64("size", s.getSegmentSize()),
+				zap.Int64("targetRow", s.GetNumOfRows()))
 		}
 		log.Info("small candidates",
 			zap.Int("length", len(bucket)),

@@ -531,6 +531,10 @@ func (t *compactionTrigger) generatePlans(segments []*SegmentInfo, force bool, c
 
 		var result []*SegmentInfo
 		free := segment.GetMaxRowNum() - segment.GetNumOfRows()
+		log.Info("reverseGreedySelect",
+			zap.Int64("max", segment.GetMaxRowNum()),
+			zap.Int64("segment", segment.GetNumOfRows()),
+			zap.Int64("free", free))
 		// for small segment merge, we pick one largest segment and merge as much as small segment together with it
 		// Why reverse?	 try to merge as many segments as expected.
 		// for instance, if a 255M and 255M is the largest small candidates, they will never be merged because of the MinSegmentToMerge limit.
@@ -617,7 +621,7 @@ func reverseGreedySelect(candidates []*SegmentInfo, free int64, maxSegment int) 
 			candidates = append(candidates[:i], candidates[i+1:]...)
 		}
 	}
-	log.Debug("reverseGreedySelect", zap.Int("candidates_length", len(candidates)))
+	log.Debug("reverseGreedySelect", zap.Int("candidates_length", len(candidates)), zap.Int("result_length", len(result)))
 	return candidates, result, free
 }
 

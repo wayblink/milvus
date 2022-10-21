@@ -534,7 +534,8 @@ func (t *compactionTrigger) generatePlans(segments []*SegmentInfo, force bool, c
 		log.Info("reverseGreedySelect",
 			zap.Int64("max", segment.GetMaxRowNum()),
 			zap.Int64("segment", segment.GetNumOfRows()),
-			zap.Int64("free", free))
+			zap.Int64("free", free),
+			zap.Float64("Params.DataCoordCfg.SegmentSmallProportion", Params.DataCoordCfg.SegmentSmallProportion))
 		// for small segment merge, we pick one largest segment and merge as much as small segment together with it
 		// Why reverse?	 try to merge as many segments as expected.
 		// for instance, if a 255M and 255M is the largest small candidates, they will never be merged because of the MinSegmentToMerge limit.

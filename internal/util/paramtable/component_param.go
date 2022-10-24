@@ -1229,7 +1229,7 @@ func (p *dataCoordConfig) initEnableAutoCompaction() {
 }
 
 func (p *dataCoordConfig) initCompactionMinSegment() {
-	p.MinSegmentToMerge = p.Base.ParseIntWithDefault("dataCoord.compaction.min.segment", 4)
+	p.MinSegmentToMerge = p.Base.ParseIntWithDefault("dataCoord.compaction.min.segment", 3)
 }
 
 func (p *dataCoordConfig) initCompactionMaxSegment() {

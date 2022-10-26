@@ -161,6 +161,7 @@ type commonConfig struct {
 
 	SessionTTL        int64
 	SessionRetryTimes int64
+	MemPurgeRatio     float64
 }
 
 func (p *commonConfig) init(base *BaseTable) {
@@ -210,6 +211,7 @@ func (p *commonConfig) init(base *BaseTable) {
 
 	p.initSessionTTL()
 	p.initSessionRetryTimes()
+	p.initMemoryPurgeRatio()
 }
 
 func (p *commonConfig) initClusterPrefix() {
@@ -454,6 +456,11 @@ func (p *commonConfig) initSessionRetryTimes() {
 }
 
 // /////////////////////////////////////////////////////////////////////////////
+func (p *commonConfig) initMemoryPurgeRatio() {
+	p.MemPurgeRatio = p.Base.ParseFloatWithDefault("common.mem_purge_ratio", 0.2)
+}
+
+///////////////////////////////////////////////////////////////////////////////
 // --- rootcoord ---
 type rootCoordConfig struct {
 	Base *BaseTable

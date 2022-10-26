@@ -75,12 +75,12 @@ if ( LINUX OR APPLE)
     add_subdirectory( marisa )
 endif()
 
-# ******************************* Thirdparty jemalloc ********************************
-if ( LINUX )
-    add_subdirectory( jemalloc )
-endif()
-
-# ******************************* Thirdparty rapidxml ********************************
+# ******************************* Thridparty jemalloc ********************************
 #if ( LINUX )
-#    add_subdirectory( rapidxml )
+#    add_subdirectory( jemalloc )
 #endif()
+
+# ******************************* Thridparty rapidxml ********************************
+if ( LINUX )
+    add_subdirectory( rapidxml )
+endif()

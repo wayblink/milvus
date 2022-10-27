@@ -21,8 +21,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/milvus-io/milvus/api/commonpb"
-	"github.com/milvus-io/milvus/api/schemapb"
+	"github.com/milvus-io/milvus-proto/go-api/commonpb"
+	"github.com/milvus-io/milvus-proto/go-api/schemapb"
 	"github.com/milvus-io/milvus/internal/util/tsoutil"
 	"github.com/milvus-io/milvus/internal/util/typeutil"
 )
@@ -42,6 +42,22 @@ func calBySchemaPolicy(schema *schemapb.CollectionSchema) (int, error) {
 		return -1, errors.New("zero size record schema found")
 	}
 	threshold := Params.DataCoordCfg.SegmentMaxSize * 1024 * 1024
+	return int(threshold / float64(sizePerRecord)), nil
+}
+
+func calBySchemaPolicyWithDiskIndex(schema *schemapb.CollectionSchema) (int, error) {
+	if schema == nil {
+		return -1, errors.New("nil schema")
+	}
+	sizePerRecord, err := typeutil.EstimateSizePerRecord(schema)
+	if err != nil {
+		return -1, err
+	}
+	// check zero value, preventing panicking
+	if sizePerRecord == 0 {
+		return -1, errors.New("zero size record schema found")
+	}
+	threshold := Params.DataCoordCfg.DiskSegmentMaxSize * 1024 * 1024
 	return int(threshold / float64(sizePerRecord)), nil
 }
 
@@ -96,7 +112,7 @@ func getSegmentCapacityPolicy(sizeFactor float64) segmentSealPolicy {
 		for _, allocation := range segment.allocations {
 			allocSize += allocation.NumOfRows
 		}
-		return float64(segment.currRows) >= sizeFactor*float64(segment.GetMaxRowNum())
+		return float64(segment.currRows) >= (0.9*sizeFactor)*float64(segment.GetMaxRowNum())
 	}
 }
 

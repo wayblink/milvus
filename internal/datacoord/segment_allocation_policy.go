@@ -112,7 +112,7 @@ func getSegmentCapacityPolicy(sizeFactor float64) segmentSealPolicy {
 		for _, allocation := range segment.allocations {
 			allocSize += allocation.NumOfRows
 		}
-		return float64(segment.currRows) >= sizeFactor*float64(segment.GetMaxRowNum())
+		return float64(segment.currRows) >= (0.9*sizeFactor)*float64(segment.GetMaxRowNum())
 	}
 }
 

@@ -66,15 +66,15 @@ VectorMemIndex::Load(const BinarySet& binary_set, const Config& config) {
     index_->Load(binary_set);
     auto& map_ = binary_set.binary_map_;
     // copy RAW_DATA after index->Load(), since assemble is performed inside.
-    for (auto it = map_.begin(); it != map_.end(); ++it) {
-        if (it->first == RAW_DATA) {
-            raw_data_.clear();
-            auto data_size = it->second->size;
-            raw_data_.resize(data_size);
+//    for (auto it = map_.begin(); it != map_.end(); ++it) {
+//        if (it->first == RAW_DATA) {
+//            raw_data_.clear();
+//            auto data_size = it->second->size;
+//            raw_data_.resize(data_size);
 //            memcpy(raw_data_.data(), it->second->data.get(), data_size);
-            break;
-        }
-    }
+//            break;
+//        }
+//    }
     SetDim(index_->Dim());
 }
 

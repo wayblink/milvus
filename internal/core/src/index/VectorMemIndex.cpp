@@ -71,7 +71,7 @@ VectorMemIndex::Load(const BinarySet& binary_set, const Config& config) {
             raw_data_.clear();
             auto data_size = it->second->size;
             raw_data_.resize(data_size);
-            memcpy(raw_data_.data(), it->second->data.get(), data_size);
+//            memcpy(raw_data_.data(), it->second->data.get(), data_size);
             break;
         }
     }

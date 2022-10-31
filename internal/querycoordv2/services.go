@@ -108,7 +108,9 @@ func (s *Server) ShowPartitions(ctx context.Context, req *querypb.ShowPartitions
 		zap.Int64("collectionID", req.GetCollectionID()),
 	)
 
-	log.Info("show partitions request received", zap.Int64s("partitions", req.GetPartitionIDs()))
+	log.Info("show partitions request received",
+		zap.Int64s("partitions", req.GetPartitionIDs()),
+		zap.Any("loadtype", s.meta.GetLoadType(req.GetCollectionID())))
 
 	if s.status.Load() != commonpb.StateCode_Healthy {
 		msg := "failed to show partitions"
@@ -123,6 +125,7 @@ func (s *Server) ShowPartitions(ctx context.Context, req *querypb.ShowPartitions
 	partitions := req.GetPartitionIDs()
 	percentages := make([]int64, 0)
 	isReleased := false
+
 	switch s.meta.GetLoadType(req.GetCollectionID()) {
 	case querypb.LoadType_LoadCollection:
 		percentage := s.meta.GetLoadPercentage(req.GetCollectionID())
@@ -172,6 +175,12 @@ func (s *Server) ShowPartitions(ctx context.Context, req *querypb.ShowPartitions
 			Status: utils.WrapStatus(commonpb.ErrorCode_UnexpectedError, msg),
 		}, nil
 	}
+
+	log.Info("show partitions response",
+		zap.Int64("collectionID", req.GetCollectionID()),
+		zap.Int64s("partitions", req.GetPartitionIDs()),
+		zap.Int64s("partitions", partitions),
+		zap.Int64s("percentages", percentages))
 
 	return &querypb.ShowPartitionsResponse{
 		Status:              successStatus,

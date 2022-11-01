@@ -284,6 +284,7 @@ func (t *searchTask) PreExecute(ctx context.Context) error {
 		return err
 	}
 
+	log.Debug("pre checkIfLoaded", zap.String("collectionName", collectionName), zap.Int64s("partitions", t.SearchRequest.GetPartitionIDs()))
 	// check if collection/partitions are loaded into query node
 	loaded, err := checkIfLoaded(ctx, t.qc, collectionName, t.SearchRequest.GetPartitionIDs())
 	if err != nil {
@@ -550,12 +551,15 @@ func (t *searchTask) collectSearchResults(ctx context.Context) error {
 func checkIfLoaded(ctx context.Context, qc types.QueryCoord, collectionName string, searchPartitionIDs []UniqueID) (bool, error) {
 	info, err := globalMetaCache.GetCollectionInfo(ctx, collectionName)
 	if err != nil {
+		log.Debug("wayblink 1")
 		return false, fmt.Errorf("GetCollectionInfo failed, collection = %s, err = %s", collectionName, err)
 	}
 	if info.isLoaded {
+		log.Debug("wayblink 2")
 		return true, nil
 	}
 	if len(searchPartitionIDs) == 0 {
+		log.Debug("wayblink 3")
 		return false, nil
 	}
 
@@ -569,17 +573,21 @@ func checkIfLoaded(ctx context.Context, qc types.QueryCoord, collectionName stri
 		PartitionIDs: searchPartitionIDs,
 	})
 	if err != nil {
+		log.Debug("wayblink 4")
 		return false, fmt.Errorf("showPartitions failed, collection = %s, partitionIDs = %v, err = %s", collectionName, searchPartitionIDs, err)
 	}
 	if resp.Status.ErrorCode != commonpb.ErrorCode_Success {
+		log.Debug("wayblink 5")
 		return false, fmt.Errorf("showPartitions failed, collection = %s, partitionIDs = %v, reason = %s", collectionName, searchPartitionIDs, resp.GetStatus().GetReason())
 	}
 
 	for _, persent := range resp.InMemoryPercentages {
 		if persent < 100 {
 			return false, nil
+			log.Debug("wayblink 6")
 		}
 	}
+	log.Debug("wayblink 7")
 	return true, nil
 }
 

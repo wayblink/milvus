@@ -48,9 +48,8 @@ VectorMemIndex::Serialize(const Config& config) {
     if (is_in_nm_list(index_type)) {
         auto deleter = [&](uint8_t*) {};  // avoid repeated deconstruction
         auto raw_data = std::shared_ptr<uint8_t[]>(static_cast<uint8_t*>(raw_data_.data()), deleter);
-
-        //        std::shared_ptr<uint8_t[]> raw_data(new uint8_t[raw_data_.size()], std::default_delete<uint8_t[]>());
-        //        memcpy(raw_data.get(), raw_data_.data(), raw_data_.size());
+//        std::shared_ptr<uint8_t[]> raw_data(new uint8_t[raw_data_.size()], std::default_delete<uint8_t[]>());
+//        memcpy(raw_data.get(), raw_data_.data(), raw_data_.size());
         ret.Append(RAW_DATA, raw_data, raw_data_.size());
         // Disassemble will only divide the raw vectors, other keys were already divided
     }
@@ -64,7 +63,7 @@ VectorMemIndex::Load(const BinarySet& binary_set, const Config& config) {
     milvus::Assemble(const_cast<BinarySet&>(binary_set));
 
     index_->Load(binary_set);
-    auto& map_ = binary_set.binary_map_;
+//    auto& map_ = binary_set.binary_map_;
 //    // copy RAW_DATA after index->Load(), since assemble is performed inside.
 //    for (auto it = map_.begin(); it != map_.end(); ++it) {
 //        if (it->first == RAW_DATA) {
@@ -111,12 +110,12 @@ VectorMemIndex::Query(const DatasetPtr dataset, const SearchInfo& search_info, c
     //    AssertInfo(GetMetricType() == search_info.metric_type_,
     //               "Metric type of field index isn't the same with search info");
 
-    auto load_raw_data_closure = [&]() { LoadRawData(); };  // hide this pointer
+//    auto load_raw_data_closure = [&]() { LoadRawData(); };  // hide this pointer
     auto index_type = GetIndexType();
 
-    if (is_in_nm_list(index_type)) {
-        std::call_once(raw_data_loaded_, load_raw_data_closure);
-    }
+//    if (is_in_nm_list(index_type)) {
+//        std::call_once(raw_data_loaded_, load_raw_data_closure);
+//    }
 
     auto num_queries = knowhere::GetDatasetRows(dataset);
     Config search_conf = search_info.search_params_;

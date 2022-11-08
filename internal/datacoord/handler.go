@@ -258,22 +258,6 @@ func toMsgPosition(channel string, startPositions []*commonpb.KeyDataPair) *inte
 	return nil
 }
 
-// trimSegmentInfo returns a shallow copy of datapb.SegmentInfo and sets ALL binlog info to nil
-func trimSegmentInfo(info *datapb.SegmentInfo) *datapb.SegmentInfo {
-	return &datapb.SegmentInfo{
-		ID:             info.ID,
-		CollectionID:   info.CollectionID,
-		PartitionID:    info.PartitionID,
-		InsertChannel:  info.InsertChannel,
-		NumOfRows:      info.NumOfRows,
-		State:          info.State,
-		MaxRowNum:      info.MaxRowNum,
-		LastExpireTime: info.LastExpireTime,
-		StartPosition:  info.StartPosition,
-		DmlPosition:    info.DmlPosition,
-	}
-}
-
 // GetCollection returns collection info with specified collection id
 func (h *ServerHandler) GetCollection(ctx context.Context, collectionID UniqueID) (*collectionInfo, error) {
 	coll := h.s.meta.GetCollection(collectionID)

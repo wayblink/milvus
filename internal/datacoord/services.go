@@ -502,6 +502,11 @@ func (s *Server) DropVirtualChannel(ctx context.Context, req *datapb.DropVirtual
 			DmlPosition:   seg2Drop.GetCheckPoint(),
 			NumOfRows:     seg2Drop.GetNumOfRows(),
 		}
+		log.Debug("wayblink DropVirtualChannel",
+			zap.Int64("collectionId", info.GetCollectionID()),
+			zap.Int64("segmentId", info.GetID()),
+			zap.Int64("numRows", info.GetNumOfRows()),
+			zap.String("segmentState", info.GetState().String()))
 		segment := NewSegmentInfo(info)
 		segments = append(segments, segment)
 	}
@@ -672,6 +677,11 @@ func (s *Server) GetRecoveryInfo(ctx context.Context, req *datapb.GetRecoveryInf
 		}
 
 		segmentsNumOfRows[id] = segment.NumOfRows
+		log.Debug("wayblink GetRecoveryInfo",
+			zap.Int64("collectionId", segment.GetCollectionID()),
+			zap.Int64("segmentId", segment.GetID()),
+			zap.Int64("numRows", segment.GetNumOfRows()),
+			zap.String("segmentState", segment.GetState().String()))
 
 		statsBinlogs := segment.GetStatslogs()
 		field2StatsBinlog := make(map[UniqueID][]*datapb.Binlog)

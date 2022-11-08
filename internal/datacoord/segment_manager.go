@@ -355,6 +355,12 @@ func (s *SegmentManager) openNewSegment(ctx context.Context, collectionID Unique
 		MaxRowNum:      int64(maxNumOfRows),
 		LastExpireTime: 0,
 	}
+	log.Debug("wayblink openNewSegment",
+		zap.Int64("collectionId", segmentInfo.GetCollectionID()),
+		zap.Int64("segmentId", segmentInfo.GetID()),
+		zap.Int64("numRows", segmentInfo.GetNumOfRows()),
+		zap.String("segmentState", segmentInfo.GetState().String()))
+
 	if segmentState == commonpb.SegmentState_Importing {
 		segmentInfo.IsImporting = true
 	}

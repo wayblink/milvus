@@ -17,6 +17,8 @@
 package datacoord
 
 import (
+	"github.com/milvus-io/milvus/internal/log"
+	"go.uber.org/zap"
 	"time"
 
 	"github.com/golang/protobuf/proto"
@@ -236,6 +238,11 @@ type SegmentInfoOption func(segment *SegmentInfo)
 func SetRowCount(rowCount int64) SegmentInfoOption {
 	return func(segment *SegmentInfo) {
 		segment.NumOfRows = rowCount
+		log.Debug("wayblink SetRowCount",
+			zap.Int64("collectionId", segment.GetCollectionID()),
+			zap.Int64("segmentId", segment.GetID()),
+			zap.Int64("numRows", segment.GetNumOfRows()),
+			zap.String("segmentState", segment.GetState().String()))
 	}
 }
 

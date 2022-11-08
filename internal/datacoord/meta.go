@@ -89,6 +89,11 @@ func (m *meta) reloadFromKV() error {
 	numStoredRows := int64(0)
 	for _, segment := range segments {
 		m.segments.SetSegment(segment.ID, NewSegmentInfo(segment))
+		log.Debug("wayblink reloadFromKV",
+			zap.Int64("collectionId", segment.GetCollectionID()),
+			zap.Int64("segmentId", segment.GetID()),
+			zap.Int64("numRows", segment.GetNumOfRows()),
+			zap.String("segmentState", segment.GetState().String()))
 		metrics.DataCoordNumSegments.WithLabelValues(segment.State.String()).Inc()
 		if segment.State == commonpb.SegmentState_Flushed {
 			numStoredRows += segment.NumOfRows
@@ -192,8 +197,14 @@ func (m *meta) GetNumRowsOfCollection(collectionID UniqueID) int64 {
 	for _, segment := range segments {
 		if isSegmentHealthy(segment) && segment.GetCollectionID() == collectionID {
 			ret += segment.GetNumOfRows()
+			log.Debug("wayblink GetNumRowsOfCollection",
+				zap.Int64("collectionId", collectionID),
+				zap.Int64("segmentId", segment.GetID()),
+				zap.Int64("numRows", segment.GetNumOfRows()),
+				zap.String("segmentState", segment.GetState().String()))
 		}
 	}
+
 	return ret
 }
 
@@ -480,6 +491,12 @@ func (m *meta) UpdateFlushSegmentsInfo(
 
 		s.DmlPosition = cp.GetPosition()
 		s.NumOfRows = cp.GetNumOfRows()
+		log.Debug("wayblink UpdateFlushSegmentsInfo",
+			zap.Int64("collectionId", s.GetCollectionID()),
+			zap.Int64("segmentId", s.GetID()),
+			zap.Int64("numRows", s.GetNumOfRows()),
+			zap.String("segmentState", s.GetState().String()))
+
 		modSegments[cp.GetSegmentID()] = s
 	}
 	segments := make([]*datapb.SegmentInfo, 0, len(modSegments))
@@ -759,6 +776,12 @@ func (m *meta) GetNumRowsOfPartition(collectionID UniqueID, partitionID UniqueID
 	for _, segment := range segments {
 		if isSegmentHealthy(segment) && segment.CollectionID == collectionID && segment.PartitionID == partitionID {
 			ret += segment.NumOfRows
+			log.Debug("wayblink GetNumRowsOfPartition",
+				zap.Int64("collectionId", collectionID),
+				zap.Int64("partitionID", partitionID),
+				zap.Int64("segmentId", segment.GetID()),
+				zap.Int64("numRows", segment.GetNumOfRows()),
+				zap.String("segmentState", segment.GetState().String()))
 		}
 	}
 	return ret
@@ -944,6 +967,11 @@ func (m *meta) PrepareCompleteCompactionMutation(compactionLogs []*datapb.Compac
 		CompactionFrom:      compactionFrom,
 	}
 	segment := NewSegmentInfo(segmentInfo)
+	log.Debug("wayblink PrepareCompleteCompactionMutation",
+		zap.Int64("collectionId", segmentInfo.GetCollectionID()),
+		zap.Int64("segmentId", segmentInfo.GetID()),
+		zap.Int64("numRows", segmentInfo.GetNumOfRows()),
+		zap.String("segmentState", segmentInfo.GetState().String()))
 
 	log.Info("meta update: prepare for complete compaction mutation - complete",
 		zap.Int64("collection ID", segment.GetCollectionID()),
@@ -1089,6 +1117,11 @@ func buildSegment(collectionID UniqueID, partitionID UniqueID, segmentID UniqueI
 		State:         commonpb.SegmentState_Growing,
 		IsImporting:   isImporting,
 	}
+	log.Debug("wayblink buildSegment",
+		zap.Int64("collectionId", info.GetCollectionID()),
+		zap.Int64("segmentId", info.GetID()),
+		zap.Int64("numRows", info.GetNumOfRows()),
+		zap.String("segmentState", info.GetState().String()))
 	return NewSegmentInfo(info)
 }
 

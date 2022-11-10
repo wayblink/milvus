@@ -227,7 +227,7 @@ func (t *compactionTask) merge(
 	partID UniqueID,
 	meta *etcdpb.CollectionMeta,
 	delta map[interface{}]Timestamp) ([]*datapb.FieldBinlog, []*datapb.FieldBinlog, int64, error) {
-	log := log.With(zap.Int64("planID", t.getPlanID()))
+	log := log.With(zap.Int64("planID", t.getPlanID()), zap.Int64("targetRowNum", t.plan.GetTargetRowNum()))
 	mergeStart := time.Now()
 
 	var (
@@ -237,6 +237,7 @@ func (t *compactionTask) merge(
 		numRows          int64 // the number of rows uploaded
 		expired          int64 // the number of expired entity
 		err              error
+		deleted          int64
 
 		// statslog generation
 		pkID   UniqueID
@@ -337,6 +338,7 @@ func (t *compactionTask) merge(
 			}
 
 			if isDeletedValue(v) {
+				deleted++
 				continue
 			}
 
@@ -378,6 +380,7 @@ func (t *compactionTask) merge(
 				numBinlogs++
 			}
 		}
+		log.Debug("finish merge", zap.Strings("path", path), zap.Int("currentRows", currentRows), zap.Int64("numRows", numRows))
 	}
 	if currentRows != 0 {
 		uploadInsertStart := time.Now()
@@ -408,6 +411,9 @@ func (t *compactionTask) merge(
 		zap.Float64("upload insert log elapse in ms", nano2Milli(uploadInsertTimeCost)),
 		zap.Float64("merge elapse in ms", nano2Milli(time.Since(mergeStart))))
 
+	if t.plan.TargetRowNum != numRows {
+		log.Warn("wayblink compact rownum mismatch", zap.Int64("TargetRowNum", t.plan.TargetRowNum), zap.Int64("ActualRowNum", numRows))
+	}
 	return insertPaths, statPaths, numRows, nil
 }
 

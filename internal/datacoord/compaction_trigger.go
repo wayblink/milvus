@@ -512,6 +512,7 @@ func (t *compactionTrigger) generatePlans(segments []*SegmentInfo, force bool, c
 		}
 		log.Info("generate a plan for priority candidates", zap.Any("plan", plan),
 			zap.Int64("target segment row", row), zap.Int64("target segment size", size))
+		plan.TargetRowNum = row
 		plans = append(plans, plan)
 	}
 
@@ -542,6 +543,7 @@ func (t *compactionTrigger) generatePlans(segments []*SegmentInfo, force bool, c
 			plan := segmentsToPlan(bucket, compactTime)
 			log.Info("generate a plan for small candidates", zap.Any("plan", plan),
 				zap.Int64("target segment row", targetRow), zap.Int64("target segment size", size))
+			plan.TargetRowNum = targetRow
 			plans = append(plans, plan)
 		}
 	}

@@ -31,6 +31,7 @@ class TestAllCollection(TestcaseBase):
         collection_w = self.init_collection_wrap(name=name, active_trace=True)
         tt = time.time() - t0
         assert collection_w.name == name
+        collection_w.compact()
         entities = collection_w.num_entities
         log.info(f"assert create collection: {tt}, init_entities: {entities}")
 

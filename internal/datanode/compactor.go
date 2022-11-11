@@ -409,10 +409,12 @@ func (t *compactionTask) merge(
 		zap.Int64("expired entities", expired), zap.Int("binlog file number", numBinlogs),
 		zap.Float64("download insert log elapse in ms", nano2Milli(downloadTimeCost)),
 		zap.Float64("upload insert log elapse in ms", nano2Milli(uploadInsertTimeCost)),
-		zap.Float64("merge elapse in ms", nano2Milli(time.Since(mergeStart))))
+		zap.Float64("merge elapse in ms", nano2Milli(time.Since(mergeStart))),
+		zap.Int64("delete", deleted))
 
 	if t.plan.TargetRowNum != numRows {
 		log.Warn("wayblink compact rownum mismatch", zap.Int64("TargetRowNum", t.plan.TargetRowNum), zap.Int64("ActualRowNum", numRows))
+		log.Warn("wayblink", zap.Any("delta", delta))
 	}
 	return insertPaths, statPaths, numRows, nil
 }

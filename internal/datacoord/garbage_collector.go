@@ -100,8 +100,8 @@ func (gc *garbageCollector) work() {
 	for {
 		select {
 		case <-ticker:
-			gc.clearEtcd()
-			gc.scan()
+			//gc.clearEtcd()
+			//gc.scan()
 		case <-gc.closeCh:
 			log.Warn("garbage collector quit")
 			return

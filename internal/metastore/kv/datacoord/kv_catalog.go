@@ -498,6 +498,10 @@ func buildSegmentAndBinlogsKvs(segment *datapb.SegmentInfo) (map[string]string, 
 
 func buildBinlogKeys(segment *datapb.SegmentInfo) []string {
 	var keys []string
+	log.Debug("buildBinlogKeys",
+		zap.Int("binlog num", len(segment.Binlogs[0].Binlogs)),
+		zap.Int("deltalogs num", len(segment.Deltalogs[0].Binlogs)),
+		zap.Int("statslogs num", len(segment.Statslogs[0].Binlogs)))
 	// binlog
 	for _, binlog := range segment.Binlogs {
 		key := buildFieldBinlogPath(segment.CollectionID, segment.PartitionID, segment.ID, binlog.FieldID)
@@ -522,6 +526,10 @@ func buildBinlogKvs(collectionID, partitionID, segmentID typeutil.UniqueID, binl
 	kv := make(map[string]string)
 
 	// binlog kv
+	log.Debug("buildBinlogKvs",
+		zap.Int("binlog num", len(binlogs[0].Binlogs)),
+		zap.Int("deltalogs num", len(deltalogs[0].Binlogs)),
+		zap.Int("statslogs num", len(statslogs[0].Binlogs)))
 	for _, binlog := range binlogs {
 		binlogBytes, err := proto.Marshal(binlog)
 		if err != nil {

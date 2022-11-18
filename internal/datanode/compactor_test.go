@@ -836,10 +836,8 @@ func TestCompactorInterfaceMethods(t *testing.T) {
 }
 
 type mockFlushManager struct {
-	sleepSeconds     int32
-	returnError      bool
-	recordFlushedSeg bool
-	flushedSegIDs    []UniqueID
+	sleepSeconds int32
+	returnError  bool
 }
 
 var _ flushManager = (*mockFlushManager)(nil)
@@ -854,9 +852,6 @@ func (mfm *mockFlushManager) flushBufferData(data *BufferData, segmentID UniqueI
 func (mfm *mockFlushManager) flushDelData(data *DelDataBuf, segmentID UniqueID, pos *internalpb.MsgPosition) error {
 	if mfm.returnError {
 		return fmt.Errorf("mock error")
-	}
-	if mfm.recordFlushedSeg {
-		mfm.flushedSegIDs = append(mfm.flushedSegIDs, segmentID)
 	}
 	return nil
 }

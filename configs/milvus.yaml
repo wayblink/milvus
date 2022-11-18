@@ -289,7 +289,6 @@ dataNode:
     # The period to sync segments if buffer is not empty.
     syncPeriod: 600 # Seconds, 10min
 
-
 # Configures the system log output.
 log:
   level: debug # Only supports debug, info, warn, error, panic, or fatal. Default 'info'.

@@ -17,7 +17,6 @@
 package datanode
 
 import (
-	"container/heap"
 	"context"
 	"fmt"
 	"testing"
@@ -359,13 +358,8 @@ func TestFlowGraphDeleteNode_Operate(t *testing.T) {
 		msg.deleteMessages = []*msgstream.DeleteMsg{}
 		msg.segmentsToSync = []UniqueID{compactedSegment}
 
-		bufItem := &Item{memorySize: 0}
-		delNode.delBufferManager.Store(compactedSegment,
-			&DelDataBuf{delData: &DeleteData{}, item: bufItem})
-		heap.Push(delNode.delBufferManager.delBufHeap, bufItem)
-
-		delNode.flushManager = NewRendezvousFlushManager(&allocator{}, cm, channel,
-			func(*segmentFlushPack) {}, emptyFlushAndDropFunc)
+		delNode.delBuf.Store(compactedSegment, &DelDataBuf{delData: &DeleteData{}})
+		delNode.flushManager = NewRendezvousFlushManager(&allocator{}, cm, channel, func(*segmentFlushPack) {}, emptyFlushAndDropFunc)
 
 		var fgMsg flowgraph.Msg = &msg
 		setFlowGraphRetryOpt(retry.Attempts(1))
@@ -373,92 +367,10 @@ func TestFlowGraphDeleteNode_Operate(t *testing.T) {
 			delNode.Operate([]flowgraph.Msg{fgMsg})
 		})
 
-		_, ok := delNode.delBufferManager.Load(100)
+		_, ok := delNode.delBuf.Load(100)
 		assert.False(t, ok)
-		_, ok = delNode.delBufferManager.Load(compactedSegment)
+		_, ok = delNode.delBuf.Load(compactedSegment)
 		assert.False(t, ok)
-	})
-
-	t.Run("Test deleteNode auto flush function", func(t *testing.T) {
-		//for issue
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-
-		chanName := "datanode-test-FlowGraphDeletenode-autoflush"
-		testPath := "/test/datanode/root/meta"
-		assert.NoError(t, clearEtcd(testPath))
-		Params.EtcdCfg.MetaRootPath = testPath
-
-		c := &nodeConfig{
-			channel:      channel,
-			allocator:    NewAllocatorFactory(),
-			vChannelName: chanName,
-		}
-		mockFlushManager := &mockFlushManager{
-			recordFlushedSeg: true,
-		}
-		delNode, err := newDeleteNode(ctx, mockFlushManager, make(chan string, 1), c)
-		assert.Nil(t, err)
-
-		//2. here we set flushing segments inside fgmsg to empty
-		//in order to verify the validity of auto flush function
-		msg := genFlowGraphDeleteMsg(int64Pks, chanName)
-		msg.segmentsToSync = []UniqueID{}
-
-		var fgMsg flowgraph.Msg = &msg
-		//1. here we set buffer bytes to a relatively high level
-		//and the sum of memory consumption in this case is 208
-		//so no segments will be flushed
-		Params.DataNodeCfg.FlushDeleteBufferBytes = 300
-		delNode.Operate([]flowgraph.Msg{fgMsg})
-		assert.Equal(t, 0, len(mockFlushManager.flushedSegIDs))
-		assert.Equal(t, int64(208), delNode.delBufferManager.delMemorySize)
-		assert.Equal(t, 5, delNode.delBufferManager.delBufHeap.Len())
-
-		//3. note that the whole memory size used by 5 segments will be 208
-		//so when setting delete buffer size equal to 200
-		//there will only be one segment to be flushed then the
-		//memory consumption will be reduced to 160(under 200)
-		msg.deleteMessages = []*msgstream.DeleteMsg{}
-		msg.segmentsToSync = []UniqueID{}
-		Params.DataNodeCfg.FlushDeleteBufferBytes = 200
-		delNode.Operate([]flowgraph.Msg{fgMsg})
-		assert.Equal(t, 1, len(mockFlushManager.flushedSegIDs))
-		assert.Equal(t, int64(160), delNode.delBufferManager.delMemorySize)
-		assert.Equal(t, 4, delNode.delBufferManager.delBufHeap.Len())
-
-		//4. there is no new delete msg and delBufferSize is still 200
-		//we expect there will not be any auto flush del
-		delNode.Operate([]flowgraph.Msg{fgMsg})
-		assert.Equal(t, 1, len(mockFlushManager.flushedSegIDs))
-		assert.Equal(t, int64(160), delNode.delBufferManager.delMemorySize)
-		assert.Equal(t, 4, delNode.delBufferManager.delBufHeap.Len())
-
-		//5. we reset buffer bytes to 150, then we expect there would be one more
-		//segment which is 48 in size to be flushed, so the remained del memory size
-		//will be 112
-		Params.DataNodeCfg.FlushDeleteBufferBytes = 150
-		delNode.Operate([]flowgraph.Msg{fgMsg})
-		assert.Equal(t, 2, len(mockFlushManager.flushedSegIDs))
-		assert.Equal(t, int64(112), delNode.delBufferManager.delMemorySize)
-		assert.Equal(t, 3, delNode.delBufferManager.delBufHeap.Len())
-
-		//6. we reset buffer bytes to 60, then most of the segments will be flushed
-		//except for the smallest entry with size equaling to 32
-		Params.DataNodeCfg.FlushDeleteBufferBytes = 60
-		delNode.Operate([]flowgraph.Msg{fgMsg})
-		assert.Equal(t, 4, len(mockFlushManager.flushedSegIDs))
-		assert.Equal(t, int64(32), delNode.delBufferManager.delMemorySize)
-		assert.Equal(t, 1, delNode.delBufferManager.delBufHeap.Len())
-
-		//7. we reset buffer bytes to 20, then as all segment-memory consumption
-		//is more than 20, so all five segments will be flushed and the remained
-		//del memory will be lowered to zero
-		Params.DataNodeCfg.FlushDeleteBufferBytes = 20
-		delNode.Operate([]flowgraph.Msg{fgMsg})
-		assert.Equal(t, 5, len(mockFlushManager.flushedSegIDs))
-		assert.Equal(t, int64(0), delNode.delBufferManager.delMemorySize)
-		assert.Equal(t, 0, delNode.delBufferManager.delBufHeap.Len())
 	})
 }
 
@@ -498,99 +410,9 @@ func TestFlowGraphDeleteNode_showDelBuf(t *testing.T) {
 
 	for _, test := range tests {
 		delBuf := newDelDataBuf()
-		delBuf.accumulateEntriesNum(test.numRows)
-		delNode.delBufferManager.Store(test.seg, delBuf)
-		heap.Push(delNode.delBufferManager.delBufHeap, delBuf.item)
+		delBuf.updateSize(test.numRows)
+		delNode.delBuf.Store(test.seg, delBuf)
 	}
 
 	delNode.showDelBuf([]UniqueID{111, 112, 113}, 100)
-}
-
-func TestFlowGraphDeleteNode_updateCompactedSegments(t *testing.T) {
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	cm := storage.NewLocalChunkManager(storage.RootPath(deleteNodeTestDir))
-	defer cm.RemoveWithPrefix(ctx, "")
-
-	fm := NewRendezvousFlushManager(NewAllocatorFactory(), cm, nil, func(*segmentFlushPack) {}, emptyFlushAndDropFunc)
-
-	chanName := "datanode-test-FlowGraphDeletenode-showDelBuf"
-	testPath := "/test/datanode/root/meta"
-	assert.NoError(t, clearEtcd(testPath))
-	Params.EtcdCfg.MetaRootPath = testPath
-
-	channel := ChannelMeta{
-		segments: make(map[UniqueID]*Segment),
-	}
-
-	c := &nodeConfig{
-		channel:      &channel,
-		allocator:    NewAllocatorFactory(),
-		vChannelName: chanName,
-	}
-	delNode, err := newDeleteNode(ctx, fm, make(chan string, 1), c)
-	require.NoError(t, err)
-
-	tests := []struct {
-		description    string
-		compactToExist bool
-
-		compactedToIDs   []UniqueID
-		compactedFromIDs []UniqueID
-
-		expectedSegsRemain []UniqueID
-	}{
-		{"zero segments", false,
-			[]UniqueID{}, []UniqueID{}, []UniqueID{}},
-		{"segment no compaction", false,
-			[]UniqueID{}, []UniqueID{}, []UniqueID{100, 101}},
-		{"segment compacted", true,
-			[]UniqueID{200}, []UniqueID{103}, []UniqueID{100, 101}},
-		{"segment compacted 100>201", true,
-			[]UniqueID{201}, []UniqueID{100}, []UniqueID{101, 201}},
-		{"segment compacted 100+101>201", true,
-			[]UniqueID{201, 201}, []UniqueID{100, 101}, []UniqueID{201}},
-		{"segment compacted 100>201, 101>202", true,
-			[]UniqueID{201, 202}, []UniqueID{100, 101}, []UniqueID{201, 202}},
-		// false
-		{"segment compacted 100>201", false,
-			[]UniqueID{201}, []UniqueID{100}, []UniqueID{101}},
-		{"segment compacted 100+101>201", false,
-			[]UniqueID{201, 201}, []UniqueID{100, 101}, []UniqueID{}},
-		{"segment compacted 100>201, 101>202", false,
-			[]UniqueID{201, 202}, []UniqueID{100, 101}, []UniqueID{}},
-	}
-
-	for _, test := range tests {
-		t.Run(test.description, func(t *testing.T) {
-			if test.compactToExist {
-				for _, segID := range test.compactedToIDs {
-					seg := Segment{
-						segmentID: segID,
-						numRows:   10,
-					}
-					seg.setType(datapb.SegmentType_Flushed)
-					channel.segments[segID] = &seg
-				}
-			} else { // clear all segments in channel
-				channel.segments = make(map[UniqueID]*Segment)
-			}
-
-			for i, segID := range test.compactedFromIDs {
-				seg := Segment{
-					segmentID:   segID,
-					compactedTo: test.compactedToIDs[i],
-				}
-				seg.setType(datapb.SegmentType_Compacted)
-				channel.segments[segID] = &seg
-			}
-
-			delNode.updateCompactedSegments()
-
-			for _, remain := range test.expectedSegsRemain {
-				delNode.channel.hasSegment(remain, true)
-			}
-		})
-	}
 }

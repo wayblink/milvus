@@ -351,7 +351,7 @@ func newBufferData(collSchema *schemapb.CollectionSchema) (*BufferData, error) {
 	}
 
 	limit := Params.DataNodeCfg.FlushInsertBufferSize / (int64(dimension) * 4)
-
+	log.Info("Buffer limit", zap.Int64("limit", limit), zap.Int64("FlushInsertBufferSize", Params.DataNodeCfg.FlushInsertBufferSize))
 	//TODO::xige-16 eval vec and string field
 	return &BufferData{
 		buffer: &InsertData{Data: make(map[UniqueID]storage.FieldData)},

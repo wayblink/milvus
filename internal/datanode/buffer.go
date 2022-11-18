@@ -245,7 +245,7 @@ func (bd *BufferData) effectiveCap() int64 {
 }
 
 func (bd *BufferData) updateSize(no int64) {
-	bd.size += no
+	bd.size = no
 }
 
 // updateTimeRange update BufferData tsFrom, tsTo range according to input time range

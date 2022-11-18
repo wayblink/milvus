@@ -85,10 +85,12 @@ func (h *ServerHandler) GetDataVChanPositions(channel *channel, partitionID Uniq
 		}
 	}
 
+	seekPosition := h.GetChannelSeekPosition(channel, partitionID)
+	log.Debug("GetDataVChanPositions", zap.Any("seekPosition", seekPosition))
 	return &datapb.VchannelInfo{
 		CollectionID:        channel.CollectionID,
 		ChannelName:         channel.Name,
-		SeekPosition:        h.GetChannelSeekPosition(channel, partitionID),
+		SeekPosition:        seekPosition,
 		FlushedSegmentIds:   flushedIDs.Collect(),
 		UnflushedSegmentIds: unflushedIDs.Collect(),
 		DroppedSegmentIds:   droppedIDs.Collect(),
@@ -148,10 +150,12 @@ func (h *ServerHandler) GetQueryVChanPositions(channel *channel, partitionID Uni
 		}
 	}
 
+	seekPosition := h.GetChannelSeekPosition(channel, partitionID)
+	log.Debug("GetQueryVChanPositions", zap.Any("seekPosition", seekPosition))
 	return &datapb.VchannelInfo{
 		CollectionID:        channel.CollectionID,
 		ChannelName:         channel.Name,
-		SeekPosition:        h.GetChannelSeekPosition(channel, partitionID),
+		SeekPosition:        seekPosition,
 		FlushedSegmentIds:   indexedIDs.Collect(),
 		UnflushedSegmentIds: unIndexedIDs.Collect(),
 		DroppedSegmentIds:   droppedIDs.Collect(),

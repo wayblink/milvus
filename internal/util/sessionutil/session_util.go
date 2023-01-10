@@ -750,7 +750,21 @@ func (s *Session) ProcessActiveStandBy(activateFunc ActivateFunc) error {
 			log.Error("json marshal error", zap.Error(err))
 			return false, -1, err
 		}
-		txnResp, err := s.etcdCli.Txn(s.ctx).If(clientv3.Compare(clientv3.Version(s.activeKey), "=", 0)).
+		getResp, err := s.etcdCli.Get(s.ctx, s.activeKey)
+		if err != nil {
+			log.Error("get session activeKey failed", zap.Error(err))
+			return false, -1, err
+		}
+		if len(getResp.Kvs) > 0 {
+			log.Info("activeKey",
+				zap.Any("key", getResp.Kvs[0].Key),
+				zap.Any("value", getResp.Kvs[0].Value),
+				zap.Any("version", getResp.Kvs[0].Version),
+				zap.Any("CreateRevision", getResp.Kvs[0].CreateRevision),
+				zap.Any("ModRevision", getResp.Kvs[0].ModRevision))
+		}
+		txnResp, err := s.etcdCli.Txn(s.ctx).
+			If(clientv3.Compare(clientv3.Version(s.activeKey), "=", 0)).
 			Then(clientv3.OpPut(s.activeKey, string(sessionJSON), clientv3.WithLease(*s.leaseID))).Commit()
 		log.Info("registerActiveKey Tnx Resp", zap.Int64("ServerID", s.ServerID), zap.String("activeKey", s.activeKey), zap.Any("resp", txnResp))
 		if err != nil {

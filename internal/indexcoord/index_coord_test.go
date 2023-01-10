@@ -101,7 +101,8 @@ func TestMockEtcd(t *testing.T) {
 
 func testIndexCoord(t *testing.T) {
 	ctx := context.Background()
-	Params.EtcdCfg.MetaRootPath = "indexcoord-ut"
+	testPath := fmt.Sprintf("/test/datanode/root/indexcoord-ut-%d", time.Now().Unix())
+	Params.BaseTable.Save("etcd.rootPath", testPath)
 
 	// first start an IndexNode
 	inm0 := indexnode.NewIndexNodeMock()
@@ -192,10 +193,10 @@ func testIndexCoord(t *testing.T) {
 	}
 	assert.NoError(t, err)
 
-	err = ic.Register()
+	err = ic.Start()
 	assert.NoError(t, err)
 
-	err = ic.Start()
+	err = ic.Register()
 	assert.NoError(t, err)
 
 	ic.UpdateStateCode(commonpb.StateCode_Healthy)

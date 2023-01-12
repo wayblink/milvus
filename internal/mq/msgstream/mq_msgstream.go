@@ -650,6 +650,7 @@ func (ms *MqTtMsgStream) AsConsumer(channels []string, subName string, position 
 			errMsg := "Failed to create consumer " + channel + ", error = " + err.Error()
 			panic(errMsg)
 		}
+		log.Info("Successfully create consumer", zap.String("channel", channel), zap.String("subname", subName))
 	}
 }
 

@@ -1310,7 +1310,7 @@ func (p *dataCoordConfig) init(base *BaseTable) {
 }
 
 func (p *dataCoordConfig) initMaxWatchDuration() {
-	p.MaxWatchDuration = time.Duration(p.Base.ParseInt64WithDefault("dataCoord.channel.maxWatchDuration", 60)) * time.Second
+	p.MaxWatchDuration = time.Duration(p.Base.ParseInt64WithDefault("dataCoord.channel.maxWatchDuration", 300)) * time.Second
 }
 
 func (p *dataCoordConfig) initSegmentMaxSize() {

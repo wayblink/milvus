@@ -270,7 +270,7 @@ dataCoord:
   enableActiveStandby: false  # Enable active-standby
 
   channel:
-    maxWatchDuration: 60 # Timeout on watching channels (in seconds). Default 60 seconds.
+    maxWatchDuration: 300 # Timeout on watching channels (in seconds). Default 60 seconds.
 
   segment:
     maxSize: 512 # Maximum size of a segment in MB

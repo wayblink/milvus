@@ -449,7 +449,7 @@ func (c *ChannelManager) fillChannelWatchInfo(op *ChannelOp) {
 			Vchan:     vcInfo,
 			StartTs:   time.Now().Unix(),
 			State:     datapb.ChannelWatchState_Uncomplete,
-			TimeoutTs: time.Now().Add(Params.DataCoordCfg.MaxWatchDuration).UnixNano(),
+			TimeoutTs: time.Now().Add(600).UnixNano(),
 			Schema:    ch.Schema,
 		}
 		op.ChannelWatchInfos = append(op.ChannelWatchInfos, info)
@@ -460,7 +460,7 @@ func (c *ChannelManager) fillChannelWatchInfo(op *ChannelOp) {
 func (c *ChannelManager) fillChannelWatchInfoWithState(op *ChannelOp, state datapb.ChannelWatchState) []string {
 	var channelsWithTimer = []string{}
 	startTs := time.Now().Unix()
-	timeoutTs := time.Now().Add(Params.DataCoordCfg.MaxWatchDuration).UnixNano()
+	timeoutTs := time.Now().Add(600).UnixNano()
 	for _, ch := range op.Channels {
 		vcInfo := c.h.GetDataVChanPositions(ch, allPartitionID)
 		info := &datapb.ChannelWatchInfo{

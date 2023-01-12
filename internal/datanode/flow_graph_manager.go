@@ -64,6 +64,7 @@ func (fm *flowgraphManager) release(vchanName string) {
 		fg.(*dataSyncService).close()
 		metrics.DataNodeNumFlowGraphs.WithLabelValues(fmt.Sprint(Params.DataNodeCfg.GetNodeID())).Dec()
 	}
+
 	rateCol.removeFlowGraphChannel(vchanName)
 }
 

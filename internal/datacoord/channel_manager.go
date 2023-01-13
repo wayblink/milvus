@@ -605,6 +605,7 @@ func (c *ChannelManager) updateWithTimer(updates ChannelOpSet, state datapb.Chan
 		}
 	}
 
+	logutil.Logger(c.ctx).Info("wayblink updateWithTimer", zap.String("state", state.String()), zap.Any("updates", updates))
 	err := c.store.Update(updates)
 	if err != nil {
 		log.Warn("fail to update", zap.Array("updates", updates), zap.Error(err))

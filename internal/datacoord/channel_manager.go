@@ -443,13 +443,14 @@ func (c *ChannelManager) Watch(ch *channel) error {
 
 // fillChannelWatchInfo updates the channel op by filling in channel watch info.
 func (c *ChannelManager) fillChannelWatchInfo(op *ChannelOp) {
+	log.Info("wayblink MaxWatchDuration", zap.Any("MaxWatchDuration", Params.DataCoordCfg.MaxWatchDuration))
 	for _, ch := range op.Channels {
 		vcInfo := c.h.GetDataVChanPositions(ch, allPartitionID)
 		info := &datapb.ChannelWatchInfo{
 			Vchan:     vcInfo,
 			StartTs:   time.Now().Unix(),
 			State:     datapb.ChannelWatchState_Uncomplete,
-			TimeoutTs: time.Now().Add(600).UnixNano(),
+			TimeoutTs: time.Now().Add(Params.DataCoordCfg.MaxWatchDuration).UnixNano(),
 			Schema:    ch.Schema,
 		}
 		op.ChannelWatchInfos = append(op.ChannelWatchInfos, info)
@@ -460,7 +461,10 @@ func (c *ChannelManager) fillChannelWatchInfo(op *ChannelOp) {
 func (c *ChannelManager) fillChannelWatchInfoWithState(op *ChannelOp, state datapb.ChannelWatchState) []string {
 	var channelsWithTimer = []string{}
 	startTs := time.Now().Unix()
-	timeoutTs := time.Now().Add(600).UnixNano()
+	timeoutTs := time.Now().Add(Params.DataCoordCfg.MaxWatchDuration).UnixNano()
+	log.Info("wayblink MaxWatchDuration",
+		zap.Int64("timeoutTs", timeoutTs),
+		zap.Any("MaxWatchDuration", Params.DataCoordCfg.MaxWatchDuration))
 	for _, ch := range op.Channels {
 		vcInfo := c.h.GetDataVChanPositions(ch, allPartitionID)
 		info := &datapb.ChannelWatchInfo{

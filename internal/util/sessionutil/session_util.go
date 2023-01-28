@@ -79,9 +79,10 @@ type Session struct {
 	TriggerKill bool
 	Version     semver.Version `json:"Version,omitempty"`
 
-	liveCh  <-chan bool
-	etcdCli *clientv3.Client
-	leaseID *clientv3.LeaseID
+	liveCh            <-chan bool
+	etcdCli           *clientv3.Client
+	leaseID           *clientv3.LeaseID
+	watchSessionKeyCh clientv3.WatchChan
 
 	metaRoot string
 
@@ -306,12 +307,14 @@ func (s *Session) getCompleteKey() string {
 // RegisterService will save a key-value in etcd
 // key: metaRootPath + "/services" + "/ServerName-ServerID"
 // value: json format
-// {
-//   ServerID   int64  `json:"ServerID,omitempty"`
-//	 ServerName string `json:"ServerName,omitempty"`
-//	 Address    string `json:"Address,omitempty"`
-//   Exclusive  bool   `json:"Exclusive,omitempty"`
-// }
+//
+//	{
+//	  ServerID   int64  `json:"ServerID,omitempty"`
+//		 ServerName string `json:"ServerName,omitempty"`
+//		 Address    string `json:"Address,omitempty"`
+//	  Exclusive  bool   `json:"Exclusive,omitempty"`
+//	}
+//
 // Exclusive means whether this service can exist two at the same time, if so,
 // it is false. Otherwise, set it to true.
 func (s *Session) registerService() (<-chan *clientv3.LeaseKeepAliveResponse, error) {
@@ -330,6 +333,12 @@ func (s *Session) registerService() (<-chan *clientv3.LeaseKeepAliveResponse, er
 	}
 
 	registerFn := func() error {
+		getResp, err := s.etcdCli.Get(s.ctx, completeKey)
+		if err != nil {
+			return err
+		}
+		s.watchSessionKeyCh = s.etcdCli.Watch(s.ctx, completeKey, clientv3.WithRev(getResp.Header.Revision))
+
 		resp, err := s.etcdCli.Grant(s.ctx, ttl)
 		if err != nil {
 			log.Error("register service", zap.Error(err))
@@ -678,6 +687,46 @@ func (s *Session) LivenessCheck(ctx context.Context, callback func()) {
 				s.keepAliveCancel()
 			}
 			return
+		case resp, ok := <-s.watchSessionKeyCh:
+			if !ok {
+				log.Warn("watch session key channel closed")
+				if s.keepAliveCancel != nil {
+					s.keepAliveCancel()
+				}
+				return
+			}
+			if resp.Err() != nil {
+				// if not ErrCompacted, just close the channel
+				if resp.Err() != v3rpc.ErrCompacted {
+					//close event channel
+					log.Warn("Watch service found error", zap.Error(resp.Err()))
+					if s.keepAliveCancel != nil {
+						s.keepAliveCancel()
+					}
+					return
+				}
+				log.Warn("Watch service found compacted error", zap.Error(resp.Err()))
+				getResp, err := s.etcdCli.Get(s.ctx, s.getCompleteKey())
+				if err != nil || len(getResp.Kvs) == 0 {
+					if s.keepAliveCancel != nil {
+						s.keepAliveCancel()
+					}
+					return
+				}
+				s.watchSessionKeyCh = s.etcdCli.Watch(s.ctx, s.getCompleteKey(), clientv3.WithRev(getResp.Header.Revision))
+				continue
+			}
+			for _, event := range resp.Events {
+				switch event.Type {
+				case mvccpb.PUT:
+					log.Info("register session success", zap.String("role", s.ServerName), zap.String("key", string(event.Kv.Key)))
+				case mvccpb.DELETE:
+					log.Info("session key is deleted, exit...", zap.String("role", s.ServerName), zap.String("key", string(event.Kv.Key)))
+					if s.keepAliveCancel != nil {
+						s.keepAliveCancel()
+					}
+				}
+			}
 		}
 	}
 }
@@ -726,7 +775,9 @@ func (s *Session) updateStandby(b bool) {
 // 2, Try to register to active key.
 // 3, If 2. return true, this service becomes ACTIVE. Exit STANDBY mode.
 // 4, If 2. return false, which means an ACTIVE service already exist.
-//    Start watching the active key. Whenever active key disappears, STANDBY node will go backup to 2.
+//
+//	Start watching the active key. Whenever active key disappears, STANDBY node will go backup to 2.
+//
 // activateFunc is the function to re-active the service.
 func (s *Session) ProcessActiveStandBy(activateFunc func()) error {
 	s.activeKey = path.Join(s.metaRoot, DefaultServiceRoot, s.ServerName)

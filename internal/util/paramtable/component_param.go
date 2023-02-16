@@ -1536,6 +1536,17 @@ type dataNodeConfig struct {
 
 	CreatedTime time.Time
 	UpdatedTime time.Time
+
+	// memory management
+	MemoryForceSyncEnable       bool
+	MemoryForceSyncThreshold    float64
+	MemoryForceSyncSegmentRatio float64
+
+	MemoryControlEnable                 bool
+	MemoryControlIntervalSeconds        int
+	MemoryControlForceFlushEnable       bool
+	MemoryControlForceFlushThreshold    float64
+	MemoryControlForceFlushSegmentRatio float64
 }
 
 func (p *dataNodeConfig) init(base *BaseTable) {
@@ -1550,6 +1561,15 @@ func (p *dataNodeConfig) init(base *BaseTable) {
 	p.initIOConcurrency()
 
 	p.initChannelWatchPath()
+	p.initMemoryForceSyncEnable()
+	p.initMemoryForceSyncThreshold()
+	p.initMemoryForceSyncSegmentRatio()
+
+	p.initMemoryControlEnable()
+	p.initMemoryControlIntervalSeconds()
+	p.initMemoryControlForceFlushEnable()
+	p.initMemoryControlForceFlushThreshold()
+	p.initMemoryControlForceFlushSegmentRatio()
 }
 
 // InitAlias init this DataNode alias
@@ -1616,6 +1636,38 @@ func (p *dataNodeConfig) GetNodeID() UniqueID {
 		return val.(UniqueID)
 	}
 	return 0
+}
+
+func (p *dataNodeConfig) initMemoryForceSyncEnable() {
+	p.MemoryForceSyncEnable = p.Base.ParseBool("datanode.memory.forceSyncEnable", true)
+}
+
+func (p *dataNodeConfig) initMemoryForceSyncThreshold() {
+	p.MemoryForceSyncThreshold = p.Base.ParseFloatWithDefault("datanode.memory.forceSyncThreshold", 0.7)
+}
+
+func (p *dataNodeConfig) initMemoryForceSyncSegmentRatio() {
+	p.MemoryForceSyncSegmentRatio = p.Base.ParseFloatWithDefault("datanode.memory.forceSyncSegmentRatio", 0.3)
+}
+
+func (p *dataNodeConfig) initMemoryControlEnable() {
+	p.MemoryControlEnable = p.Base.ParseBool("datanode.memoryControl.enable", true)
+}
+
+func (p *dataNodeConfig) initMemoryControlIntervalSeconds() {
+	p.MemoryControlIntervalSeconds = p.Base.ParseIntWithDefault("datanode.memoryControl.intervalSeconds", 30)
+}
+
+func (p *dataNodeConfig) initMemoryControlForceFlushEnable() {
+	p.MemoryControlForceFlushEnable = p.Base.ParseBool("datanode.memoryControl.forceFlushEnable", true)
+}
+
+func (p *dataNodeConfig) initMemoryControlForceFlushThreshold() {
+	p.MemoryControlForceFlushThreshold = p.Base.ParseFloatWithDefault("datanode.memoryControl.forceFlushThreshold", 0.8)
+}
+
+func (p *dataNodeConfig) initMemoryControlForceFlushSegmentRatio() {
+	p.MemoryControlForceFlushSegmentRatio = p.Base.ParseFloatWithDefault("datanode.memoryControl.forceFlushSegmentRatio", 0.3)
 }
 
 // /////////////////////////////////////////////////////////////////////////////

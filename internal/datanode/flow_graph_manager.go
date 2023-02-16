@@ -115,7 +115,7 @@ func (fm *flowgraphManager) resendTT() []UniqueID {
 	var unFlushedSegments []UniqueID
 	fm.flowgraphs.Range(func(key, value interface{}) bool {
 		fg := value.(*dataSyncService)
-		segIDs := fg.channel.listNotFlushedSegmentIDs()
+		segIDs, _ := fg.channel.listNotFlushedSegmentIDs()
 		if len(segIDs) > 0 {
 			log.Info("un-flushed segments found, stats will be resend",
 				zap.Int64s("segment IDs", segIDs))

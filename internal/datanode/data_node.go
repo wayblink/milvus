@@ -107,10 +107,10 @@ type DataNode struct {
 	ctx              context.Context
 	cancel           context.CancelFunc
 	Role             string
-	State            atomic.Value // commonpb.StateCode_Initializing
 	stateCode        atomic.Value // commonpb.StateCode_Initializing
 	flowgraphManager *flowgraphManager
 	eventManagerMap  sync.Map // vchannel name -> channelEventManager
+	memoryManager    *memoryManager
 
 	clearSignal        chan string // vchannel name
 	segmentCache       *Cache
@@ -519,6 +519,11 @@ func (node *DataNode) Start() error {
 	// Start node watch node
 	go node.StartWatchChannels(node.ctx)
 
+	if Params.DataNodeCfg.MemoryControlEnable {
+		node.memoryManager = newMemoryManager(node)
+		go node.memoryManager.start(node.ctx)
+	}
+
 	Params.DataNodeCfg.CreatedTime = time.Now()
 	Params.DataNodeCfg.UpdatedTime = time.Now()
 
@@ -701,6 +706,10 @@ func (node *DataNode) Stop() error {
 	node.UpdateStateCode(commonpb.StateCode_Abnormal)
 
 	node.cancel()
+	if node.memoryManager != nil {
+		node.memoryManager.Stop()
+	}
+
 	node.flowgraphManager.dropAll()
 
 	if node.rowIDAllocator != nil {

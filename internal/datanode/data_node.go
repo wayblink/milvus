@@ -22,6 +22,7 @@ package datanode
 import (
 	"context"
 	"fmt"
+	"github.com/milvus-io/milvus/pkg/util/memorypool"
 	"io"
 	"math/rand"
 	"os"
@@ -128,6 +129,8 @@ type DataNode struct {
 
 	dispClient msgdispatcher.Client
 	factory    dependency.Factory
+
+	memoryPool *memorypool.GlobalMemoryPool
 }
 
 // NewDataNode will return a DataNode with abnormal state.
@@ -148,6 +151,7 @@ func NewDataNode(ctx context.Context, factory dependency.Factory) *DataNode {
 		eventManagerMap:  typeutil.NewConcurrentMap[string, *channelEventManager](),
 		flowgraphManager: newFlowgraphManager(),
 		clearSignal:      make(chan string, 100),
+		memoryPool:       memorypool.Get(),
 	}
 	node.UpdateStateCode(commonpb.StateCode_Abnormal)
 	return node

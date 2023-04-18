@@ -58,6 +58,7 @@ func (c *compactionExecutor) toCompleteState(task compactor) {
 	task.complete()
 	c.executing.Delete(task.getPlanID())
 }
+
 func (c *compactionExecutor) injectDone(planID UniqueID) {
 	c.completed.Delete(planID)
 	task, loaded := c.completedCompactor.LoadAndDelete(planID)

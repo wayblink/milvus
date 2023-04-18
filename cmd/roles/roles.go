@@ -19,6 +19,7 @@ package roles
 import (
 	"context"
 	"fmt"
+	"github.com/milvus-io/milvus/pkg/util/memorypool"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -248,6 +249,7 @@ func (mr *MilvusRoles) Run(local bool, alias string) {
 
 		paramtable.Init()
 		params := paramtable.Get()
+		memorypool.Init()
 		if params.EtcdCfg.UseEmbedEtcd.GetAsBool() {
 			// Start etcd server.
 			etcd.InitEtcdServer(
@@ -264,6 +266,7 @@ func (mr *MilvusRoles) Run(local bool, alias string) {
 			log.Error("Failed to set deploy mode: ", zap.Error(err))
 		}
 		paramtable.Init()
+		memorypool.Init()
 	}
 
 	http.ServeHTTP()

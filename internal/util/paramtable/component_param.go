@@ -12,6 +12,7 @@
 package paramtable
 
 import (
+	"github.com/milvus-io/milvus/internal/util/memorypool"
 	"math"
 	"os"
 	"runtime"
@@ -77,6 +78,7 @@ type ComponentParam struct {
 // InitOnce initialize once
 func (p *ComponentParam) InitOnce() {
 	p.once.Do(func() {
+		memorypool.Init()
 		p.Init()
 	})
 }

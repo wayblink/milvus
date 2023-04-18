@@ -36,6 +36,7 @@ type PrimaryKey interface {
 	SetValue(interface{}) error
 	GetValue() interface{}
 	Type() schemapb.DataType
+	Size() int64
 }
 
 type Int64PrimaryKey struct {
@@ -150,6 +151,11 @@ func (ip *Int64PrimaryKey) Type() schemapb.DataType {
 
 func (ip *Int64PrimaryKey) GetValue() interface{} {
 	return ip.Value
+}
+
+func (ip *Int64PrimaryKey) Size() int64 {
+	// 8 + reflect.ValueOf(Int64PrimaryKey).Type().Size()
+	return 16
 }
 
 type BaseStringPrimaryKey struct {
@@ -272,6 +278,10 @@ func (vcp *VarCharPrimaryKey) EQ(key PrimaryKey) bool {
 
 func (vcp *VarCharPrimaryKey) Type() schemapb.DataType {
 	return schemapb.DataType_VarChar
+}
+
+func (vcp *VarCharPrimaryKey) Size() int64 {
+	return int64(8*len(vcp.Value) + 8)
 }
 
 func GenPrimaryKeyByRawData(data interface{}, pkType schemapb.DataType) (PrimaryKey, error) {

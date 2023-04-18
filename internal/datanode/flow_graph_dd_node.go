@@ -22,8 +22,6 @@ import (
 	"reflect"
 	"sync/atomic"
 
-	"github.com/milvus-io/milvus/internal/util/timerecord"
-
 	"github.com/golang/protobuf/proto"
 	"github.com/opentracing/opentracing-go"
 	"go.uber.org/zap"
@@ -38,8 +36,10 @@ import (
 	"github.com/milvus-io/milvus/internal/util/commonpbutil"
 	"github.com/milvus-io/milvus/internal/util/flowgraph"
 	"github.com/milvus-io/milvus/internal/util/funcutil"
+	"github.com/milvus-io/milvus/internal/util/memorypool"
 	"github.com/milvus-io/milvus/internal/util/metricsinfo"
 	"github.com/milvus-io/milvus/internal/util/retry"
+	"github.com/milvus-io/milvus/internal/util/timerecord"
 	"github.com/milvus-io/milvus/internal/util/trace"
 	"github.com/milvus-io/milvus/internal/util/tsoutil"
 )
@@ -207,7 +207,10 @@ func (ddn *ddNode) Operate(in []Msg) []Msg {
 				WithLabelValues(fmt.Sprint(Params.DataNodeCfg.GetNodeID()), metrics.InsertLabel, fmt.Sprint(ddn.collectionID)).
 				Inc()
 
+			memoryPool.Acquire(int64(imsg.XXX_Size()), memorypool.MemoryCategory_Insert)
+
 			log.Debug("DDNode receive insert messages",
+				zap.Int("msgSize", imsg.XXX_Size()),
 				zap.Int("numRows", len(imsg.GetRowIDs())),
 				zap.String("vChannelName", ddn.vChannelName))
 			fgMsg.insertMessages = append(fgMsg.insertMessages, imsg)

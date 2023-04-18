@@ -106,8 +106,9 @@ type CompactionType int32
 
 const (
 	CompactionType_UndefinedCompaction CompactionType = 0
-	CompactionType_MergeCompaction     CompactionType = 2
-	CompactionType_MixCompaction       CompactionType = 3
+	// deprecated
+	CompactionType_MergeCompaction CompactionType = 2
+	CompactionType_MixCompaction   CompactionType = 3
 )
 
 var CompactionType_name = map[int32]string{

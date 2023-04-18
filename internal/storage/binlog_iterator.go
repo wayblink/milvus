@@ -18,6 +18,10 @@ package storage
 
 import (
 	"errors"
+	"github.com/milvus-io/milvus/internal/log"
+	"github.com/milvus-io/milvus/internal/util/memorypool"
+	"go.uber.org/zap"
+	"runtime"
 	"sync/atomic"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
@@ -65,6 +69,15 @@ func NewInsertBinlogIterator(blobs []*Blob, PKfieldID UniqueID, pkType schemapb.
 	reader := NewInsertCodec(nil)
 
 	_, _, serData, err := reader.Deserialize(blobs)
+	memoryPool := memorypool.Get()
+	id, err := memoryPool.Acquire(serData.MemorySize(), memorypool.MemoryCategory_Compact)
+	if err != nil {
+		return nil, err
+	}
+	runtime.SetFinalizer(serData, func() {
+		log.Debug("Release down bolb memory", zap.Int64("size", serData.MemorySize()), zap.Int64("id", id))
+		memoryPool.Release(id)
+	})
 
 	if err != nil {
 		return nil, err

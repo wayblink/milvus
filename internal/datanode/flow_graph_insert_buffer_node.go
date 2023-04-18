@@ -19,6 +19,7 @@ package datanode
 import (
 	"context"
 	"fmt"
+	"github.com/milvus-io/milvus/internal/util/memorypool"
 	"math"
 	"reflect"
 	"sync"
@@ -599,6 +600,9 @@ func (ibNode *insertBufferNode) bufferInsertMsg(msg *msgstream.InsertMsg, startP
 		log.Warn("failed to transfer insert msg to insert data", zap.Error(err))
 		return err
 	}
+
+	memoryPool.Acquire(addedBuffer.MemorySize(), memorypool.MemoryCategory_Insert)
+	log.Debug("acquire memory", zap.Int64("size", addedBuffer.MemorySize()))
 
 	addedPfData, err := storage.GetPkFromInsertData(collSchema, addedBuffer)
 	if err != nil {

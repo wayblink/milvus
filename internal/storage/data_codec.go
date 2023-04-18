@@ -287,6 +287,27 @@ type InsertData struct {
 	Infos []BlobInfo
 }
 
+func (iData *InsertData) IsEmpty() bool {
+	if iData == nil {
+		return true
+	}
+
+	timeFieldData, ok := iData.Data[common.TimeStampField]
+	return (!ok) || (timeFieldData.RowNum() <= 0)
+}
+
+func (iData *InsertData) MemorySize() int64 {
+	if iData == nil {
+		return 0
+	}
+
+	var totalSize int64 = 0
+	for _, v := range iData.Data {
+		totalSize = totalSize + int64(v.GetMemorySize())
+	}
+	return totalSize
+}
+
 // InsertCodec serializes and deserializes the insert data
 // Blob key example:
 // ${tenant}/insert_log/${collection_id}/${partition_id}/${segment_id}/${field_id}/${log_idx}
@@ -922,12 +943,14 @@ type DeleteData struct {
 	Pks      []PrimaryKey // primary keys
 	Tss      []Timestamp  // timestamps
 	RowCount int64
+	Memory   int64
 }
 
 // Append append 1 pk&ts pair to DeleteData
 func (data *DeleteData) Append(pk PrimaryKey, ts Timestamp) {
 	data.Pks = append(data.Pks, pk)
 	data.Tss = append(data.Tss, ts)
+	data.Memory = data.Memory + pk.Size() + 8
 	data.RowCount++
 }
 
@@ -1012,7 +1035,7 @@ func (deleteCodec *DeleteCodec) Deserialize(blobs []*Blob) (partitionID UniqueID
 	}
 
 	var pid, sid UniqueID
-	result := &DeleteData{}
+	result := &DeleteData{Memory: 0}
 	for _, blob := range blobs {
 		binlogReader, err := NewBinlogReader(blob.Value)
 		if err != nil {
@@ -1064,13 +1087,14 @@ func (deleteCodec *DeleteCodec) Deserialize(blobs []*Blob) (partitionID UniqueID
 
 			result.Pks = append(result.Pks, deleteLog.Pk)
 			result.Tss = append(result.Tss, deleteLog.Ts)
+			result.Memory = result.Memory + deleteLog.Pk.Size() + 8
+
 		}
 		eventReader.Close()
 		binlogReader.Close()
 
 	}
 	result.RowCount = int64(len(result.Pks))
-
 	return pid, sid, result, nil
 }
 

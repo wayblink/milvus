@@ -455,6 +455,7 @@ message ChannelWatchInfo {
 enum CompactionType {
   UndefinedCompaction = 0;
   reserved 1;
+  // deprecated
   MergeCompaction = 2;
   MixCompaction = 3;
 }

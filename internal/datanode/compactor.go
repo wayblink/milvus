@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"math"
 	"path"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,6 +36,7 @@ import (
 	"github.com/milvus-io/milvus/internal/proto/etcdpb"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/util/funcutil"
+	"github.com/milvus-io/milvus/internal/util/memorypool"
 	"github.com/milvus-io/milvus/internal/util/metautil"
 	"github.com/milvus-io/milvus/internal/util/timerecord"
 	"github.com/milvus-io/milvus/internal/util/tsoutil"
@@ -47,12 +49,12 @@ import (
 var (
 	errCompactionTypeUndifined = errors.New("compaction type undefined")
 	errIllegalCompactionPlan   = errors.New("compaction plan illegal")
-	errTransferType            = errors.New("transfer intferface to type wrong")
-	errUnknownDataType         = errors.New("unknown shema DataType")
+	errTransferType            = errors.New("transfer interface to type wrong")
+	errUnknownDataType         = errors.New("unknown schema DataType")
 	errContext                 = errors.New("context done or timeout")
 )
 
-type iterator = storage.Iterator
+var memoryPool = memorypool.Get()
 
 type compactor interface {
 	complete()
@@ -319,6 +321,20 @@ func (t *compactionTask) merge(
 	for _, path := range unMergedInsertlogs {
 		downloadStart := time.Now()
 		data, err := t.download(ctxTimeout, path)
+		// memory
+		var memorySize int64
+		for _, bolb := range data {
+			memorySize += bolb.Size
+		}
+		id, err := memoryPool.Acquire(memorySize, memorypool.MemoryCategory_Compact)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		runtime.SetFinalizer(data, func() {
+			log.Debug("Release down bolb memory", zap.Int64("size", memorySize), zap.Int64("id", id))
+			memoryPool.Release(id)
+		})
+
 		if err != nil {
 			log.Warn("download insertlogs wrong", zap.Error(err))
 			return nil, nil, 0, err
@@ -569,11 +585,12 @@ func (t *compactionTask) compact() (*datapb.CompactionResult, error) {
 
 	var (
 		// SegmentID to deltaBlobs
-		dblobs = make(map[UniqueID][]*Blob)
-		dmu    sync.Mutex
+		dblobs       = make(map[UniqueID][]*Blob)
+		memoryAllocs = make([]int64, 0)
+		dmu          sync.Mutex
 	)
 
-	allPs := make([][]string, 0)
+	unMergedInsertlogs := make([][]string, 0)
 
 	downloadStart := time.Now()
 	g, gCtx := errgroup.WithContext(ctxTimeout)
@@ -598,7 +615,7 @@ func (t *compactionTask) compact() (*datapb.CompactionResult, error) {
 			for _, f := range s.GetFieldBinlogs() {
 				ps = append(ps, f.GetBinlogs()[idx].GetLogPath())
 			}
-			allPs = append(allPs, ps)
+			unMergedInsertlogs = append(unMergedInsertlogs, ps)
 		}
 
 		segID := s.GetSegmentID()
@@ -606,7 +623,14 @@ func (t *compactionTask) compact() (*datapb.CompactionResult, error) {
 			for _, l := range d.GetBinlogs() {
 				path := l.GetLogPath()
 				g.Go(func() error {
+					deltaLogSize := l.GetLogSize()
+					memoryID, err := memoryPool.Acquire(deltaLogSize, memorypool.MemoryCategory_Compact)
+					if err != nil {
+						log.Warn("acquire memory failed")
+						return err
+					}
 					bs, err := t.download(gCtx, []string{path})
+					log.Debug("memory test", zap.Int64("meta", deltaLogSize), zap.Int64("real", int64(len(bs))))
 					if err != nil {
 						log.Warn("download deltalogs wrong")
 						return err
@@ -614,6 +638,7 @@ func (t *compactionTask) compact() (*datapb.CompactionResult, error) {
 
 					dmu.Lock()
 					dblobs[segID] = append(dblobs[segID], bs...)
+					memoryAllocs = append(memoryAllocs, memoryID)
 					dmu.Unlock()
 
 					return nil
@@ -621,6 +646,11 @@ func (t *compactionTask) compact() (*datapb.CompactionResult, error) {
 			}
 		}
 	}
+	defer func() {
+		for _, memoryID := range memoryAllocs {
+			memoryPool.Release(memoryID)
+		}
+	}()
 
 	err = g.Wait()
 	downloadEnd := time.Now()
@@ -634,11 +664,20 @@ func (t *compactionTask) compact() (*datapb.CompactionResult, error) {
 	}
 
 	deltaPk2Ts, deltaBuf, err := t.mergeDeltalogs(dblobs, t.plan.GetTimetravel())
+	log.Debug("wayblink deltabuf",
+		zap.Int64("memorySize", deltaBuf.GetMemorySize()),
+		zap.Int64("delDataMemory", deltaBuf.delData.Memory),
+		zap.Int64("logSize", deltaBuf.GetLogSize()))
+	memoryID, err := memoryPool.Acquire(deltaBuf.delData.Memory, memorypool.MemoryCategory_Compact)
+	defer func() {
+		memoryPool.Release(memoryID)
+	}()
+
 	if err != nil {
 		return nil, err
 	}
 
-	inPaths, statsPaths, numRows, err := t.merge(ctxTimeout, allPs, targetSegID, partID, meta, deltaPk2Ts)
+	inPaths, statsPaths, numRows, err := t.merge(ctxTimeout, unMergedInsertlogs, targetSegID, partID, meta, deltaPk2Ts)
 	if err != nil {
 		log.Error("compact wrong", zap.Int64("planID", t.plan.GetPlanID()), zap.Error(err))
 		return nil, err
@@ -874,7 +913,7 @@ func (t *compactionTask) getSegmentMeta(segID UniqueID) (UniqueID, UniqueID, *et
 	}
 
 	// TODO current compaction timestamp replace zero? why?
-	//  Bad desgin of describe collection.
+	// Bad design of describe collection.
 	sch, err := t.getCollectionSchema(collID, 0)
 	if err != nil {
 		return -1, -1, nil, err

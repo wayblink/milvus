@@ -829,6 +829,7 @@ bool MsgType_IsValid(int value) {
     case 300:
     case 301:
     case 302:
+    case 303:
     case 400:
     case 401:
     case 402:

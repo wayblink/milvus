@@ -1,0 +1,34 @@
+diff --git a/internal/datanode/data_node.go b/internal/datanode/data_node.go
+index 59707bf26..07fdac0d9 100644
+--- a/internal/datanode/data_node.go
++++ b/internal/datanode/data_node.go
+@@ -1138,7 +1138,16 @@ func (node *DataNode) AddImportSegment(ctx context.Context, req *datapb.AddImpor
+ 		}, nil
+ 	}
+ 	// Get the current dml channel position ID, that will be used in segments start positions and end positions.
+-	posID, err := ds.getChannelLatestMsgID(context.Background(), req.GetChannelName(), req.GetSegmentId())
++	var posID []byte
++	err = retry.Do(ctx, func() error {
++		id, innerError := ds.getChannelLatestMsgID(context.Background(), req.GetChannelName(), req.GetSegmentId())
++		posID = id
++		if err != nil {
++			return innerError
++		}
++		return nil
++	}, retry.Attempts(30))
++
+ 	if err != nil {
+ 		return &datapb.AddImportSegmentResponse{
+ 			Status: &commonpb.Status{
+diff --git a/internal/datanode/data_sync_service.go b/internal/datanode/data_sync_service.go
+index 67a02ae90..472525b29 100644
+--- a/internal/datanode/data_sync_service.go
++++ b/internal/datanode/data_sync_service.go
+@@ -415,6 +415,7 @@ func (dsService *dataSyncService) getChannelLatestMsgID(ctx context.Context, cha
+ 	pChannelName := funcutil.ToPhysicalChannel(channelName)
+ 	dmlStream, err := dsService.msFactory.NewMsgStream(ctx)
+ 	if err != nil {
++		log.Error("fail to create msg stream", zap.String("pChannel", pChannelName), zap.Error(err))
+ 		return nil, err
+ 	}
+ 	defer dmlStream.Close()

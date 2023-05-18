@@ -17,8 +17,6 @@ import (
 	"time"
 )
 
-//var _ SessionManager = (*EtcdSessionManager)(nil)
-
 type EtcdSessionManager struct {
 	ctx               context.Context
 	etcdCli           *clientv3.Client
@@ -31,8 +29,30 @@ type EtcdSessionManager struct {
 
 	registerSessions   map[*Session]*EtcdSessionRegister
 	preemptiveSessions map[*Session]*EtcdSessionRegister
-	//competeRegisterSessions map[string]Session
-	watchSessions map[string]*EtcdSessionWatcher
+	watchSessions      map[string]*EtcdSessionWatcher
+}
+
+type EtcdSessionRegister struct {
+	Key     string
+	EventCh chan SessionEEvent
+
+	leaseID          *clientv3.LeaseID
+	leaseKeepAliveCh <-chan *clientv3.LeaseKeepAliveResponse
+
+	keepAliveCtx *context.Context
+	CancelFunc   *context.CancelFunc
+
+	//mockCh chan bool
+}
+
+type EtcdSessionWatcher struct {
+	Key        string
+	WithPrefix bool
+	EventCh    chan SessionEEvent
+
+	watchCh    clientv3.WatchChan
+	watchCtx   *context.Context
+	cancelFunc *context.CancelFunc
 }
 
 func NewEtcdSessionManager(
@@ -46,7 +66,7 @@ func NewEtcdSessionManager(
 	session := &EtcdSessionManager{
 		ctx:                ctx,
 		metaRoot:           metaRoot,
-		sessionTTL:         60,
+		sessionTTL:         30,
 		sessionRetryTimes:  30,
 		registerSessions:   make(map[*Session]*EtcdSessionRegister, 0),
 		preemptiveSessions: make(map[*Session]*EtcdSessionRegister, 0),
@@ -77,22 +97,6 @@ func NewEtcdSessionManager(
 	}
 	log.Debug("Session connect to etcd success")
 	return session
-}
-
-type EtcdSessionRegister struct {
-	Key string
-
-	leaseID          *clientv3.LeaseID
-	leaseKeepAliveCh <-chan *clientv3.LeaseKeepAliveResponse
-
-	preemptive bool
-	// combine
-	keepAliveCtx *context.Context
-	CancelFunc   *context.CancelFunc
-
-	EventCh chan SessionEEvent
-
-	//mockCh chan bool
 }
 
 func (e *EtcdSessionManager) NewSession(serverName, address string, exclusive bool, triggerKill bool, enableActiveStandBy bool) (*Session, error) {
@@ -126,11 +130,20 @@ func (e *EtcdSessionManager) Register(session *Session) (*EtcdSessionRegister, e
 		e.registerSessions[session] = &EtcdSessionRegister{
 			Key:     e.getSessionKey(session),
 			EventCh: make(chan SessionEEvent, 1),
-			//mockCh:    make(chan bool, 1),
 		}
 	}
 	register := e.registerSessions[session]
 
+	succeed, err := e.doRegister(register, isRetry, uint(e.sessionRetryTimes), session)
+	if succeed {
+		log.Info("Register succeed", zap.String("key", register.Key))
+	} else {
+		log.Error("Register failed", zap.String("key", register.Key))
+	}
+	return register, err
+}
+
+func (e *EtcdSessionManager) doRegister(register *EtcdSessionRegister, isRetry bool, retryTimes uint, session *Session) (bool, error) {
 	registerFn := func() error {
 		resp, err := e.etcdCli.Grant(e.ctx, e.sessionTTL)
 		if err != nil {
@@ -148,7 +161,7 @@ func (e *EtcdSessionManager) Register(session *Session) (*EtcdSessionRegister, e
 			txnResp, err := e.etcdCli.Txn(e.ctx).
 				Then(clientv3.OpPut(register.Key, string(sessionJSON), clientv3.WithLease(resp.ID))).Commit()
 			if err != nil {
-				log.Warn("retry register session error", zap.String("Prefix", register.Key), zap.Error(err))
+				log.Warn("retry register session error", zap.String("Key", register.Key), zap.Error(err))
 				return err
 			}
 			if !txnResp.Succeeded {
@@ -163,26 +176,26 @@ func (e *EtcdSessionManager) Register(session *Session) (*EtcdSessionRegister, e
 				Then(clientv3.OpPut(register.Key, string(sessionJSON), clientv3.WithLease(resp.ID))).Commit()
 
 			if err != nil {
-				log.Warn("compare and swap error, maybe the Prefix has already been registered", zap.Error(err))
+				log.Warn("compare and swap error, maybe the Key has already been registered", zap.Error(err))
 				return err
 			}
 
 			if !txnResp.Succeeded {
-				return fmt.Errorf("function CompareAndSwap error for compare is false for Prefix: %s", session.ServerName)
+				return fmt.Errorf("function CompareAndSwap error for compare is false for Key: %s", session.ServerName)
 			}
 		}
 
 		if isRetry {
 			register.EventCh <- SessionEEvent{
-				EventType: SessionEvent_Reregister,
+				EventType: SessionReAddEvent,
 			}
 		} else {
 			register.EventCh <- SessionEEvent{
-				EventType: SessionEvent_ADD,
+				EventType: SessionAddEvent,
 			}
 		}
-		log.Debug("Successfully put session Prefix into etcd",
-			zap.String("Prefix", register.Key),
+		log.Debug("Successfully put session Key into etcd",
+			zap.String("Key", register.Key),
 			zap.String("value", string(sessionJSON)),
 			zap.Int64("leaseID", int64(*register.leaseID)))
 
@@ -197,10 +210,14 @@ func (e *EtcdSessionManager) Register(session *Session) (*EtcdSessionRegister, e
 		return nil
 	}
 
-	err := retry.Do(e.ctx, registerFn, retry.Attempts(uint(e.sessionRetryTimes)))
+	var err error
+	if retryTimes == 0 {
+		err = registerFn()
+	} else {
+		err = retry.Do(e.ctx, registerFn, retry.Attempts(retryTimes))
+	}
 	if err != nil {
-		log.Debug("Session registered failed", zap.Error(err))
-		return nil, err
+		return false, err
 	}
 
 	go func() {
@@ -208,13 +225,13 @@ func (e *EtcdSessionManager) Register(session *Session) (*EtcdSessionRegister, e
 			select {
 			case <-e.ctx.Done():
 				register.EventCh <- SessionEEvent{
-					EventType: SessionEvent_Lost,
+					EventType: SessionDelEvent,
 				}
 				return
 			case <-(*register.keepAliveCtx).Done():
 				log.Warn("session keepalive ctx done, supposed to be killed by milvus inside logic")
 				register.EventCh <- SessionEEvent{
-					EventType: SessionEvent_CtxDone,
+					EventType: SessionCtxDoneEvent,
 				}
 				return
 			case resp, ok := <-register.leaseKeepAliveCh:
@@ -225,46 +242,30 @@ func (e *EtcdSessionManager) Register(session *Session) (*EtcdSessionRegister, e
 						log.Warn("session keepalive response failed")
 					}
 					register.EventCh <- SessionEEvent{
-						EventType: SessionEvent_TemporaryLost,
+						EventType: SessionKeepAliveLostEvent,
 					}
 					// re-register
-					_, err := e.Register(session)
+					_, err := e.doRegister(register, true, retryTimes, session)
 					if err != nil {
 						log.Error("re-register after keepalive channel close failed", zap.Error(err))
 						register.EventCh <- SessionEEvent{
-							EventType: SessionEvent_Lost,
+							EventType: SessionDelEvent,
 						}
 						return
 					}
 				}
-				//case v := <-register.mockCh:
-				//	if v {
-				//		register.EventCh <- SessionEEvent{
-				//			EventType: SessionEvent_TemporaryLost,
-				//		}
-				//		// re-register
-				//		log.Info("start re-register the session")
-				//		_, err := e.Register(session)
-				//		if err != nil {
-				//			log.Error("re-register after keepalive channel close failed", zap.Error(err))
-				//			register.EventCh <- SessionEEvent{
-				//				EventType: SessionEvent_Lost,
-				//			}
-				//		}
-				//		return
-				//	}
 			}
 		}
 	}()
 
 	log.Info("Session registered successfully",
-		zap.String("key", register.Key),
+		zap.String("Key", register.Key),
 		zap.String("ServerName", session.ServerName),
 		zap.Int64("serverID", session.ServerID))
-	return register, nil
+	return true, nil
 }
 
-func (e *EtcdSessionManager) Unregister(session *Session) (bool, error) {
+func (e *EtcdSessionManager) UnRegister(session *Session) (bool, error) {
 	if register, exist := e.registerSessions[session]; exist {
 		(*register.CancelFunc)()
 		e.etcdCli.Revoke(e.ctx, *register.leaseID)
@@ -276,17 +277,31 @@ func (e *EtcdSessionManager) Unregister(session *Session) (bool, error) {
 	return false, errors.New(fmt.Sprintf("Registered session not found: %s", session.String()))
 }
 
-func (e EtcdSessionManager) Get(key string, isPrefix bool) (map[string]*Session, error) {
-	res, _, err := e.getSessions(key, isPrefix)
+func (e *EtcdSessionManager) UnWatch(key string, withPrefix bool) (bool, error) {
+	cacheKey := key
+	if withPrefix {
+		cacheKey = cacheKey + "*"
+	}
+	if watcher, exist := e.watchSessions[cacheKey]; exist {
+		(*watcher.cancelFunc)()
+		delete(e.watchSessions, cacheKey)
+		return true, nil
+	}
+
+	return false, errors.New(fmt.Sprintf("Watcher to key: %s withprefix: %s not found.", key, withPrefix))
+}
+
+func (e EtcdSessionManager) Get(key string, withPrefix bool) (map[string]*Session, error) {
+	res, _, err := e.getSessions(key, withPrefix)
 	return res, err
 }
 
-func (e EtcdSessionManager) getSessions(key string, isPrefix bool) (map[string]*Session, int64, error) {
+func (e EtcdSessionManager) getSessions(key string, withPrefix bool) (map[string]*Session, int64, error) {
 	res := make(map[string]*Session)
 	completeKey := path.Join(e.metaRoot, DefaultServiceRoot, key)
 	var resp *clientv3.GetResponse
 	var err error
-	if isPrefix {
+	if withPrefix {
 		resp, err = e.etcdCli.Get(e.ctx, completeKey, clientv3.WithPrefix(),
 			clientv3.WithSort(clientv3.SortByKey, clientv3.SortAscend))
 	} else {
@@ -303,30 +318,41 @@ func (e EtcdSessionManager) getSessions(key string, isPrefix bool) (map[string]*
 			return nil, 0, err
 		}
 		_, mapKey := path.Split(string(kv.Key))
-		log.Debug("SessionUtil GetSessions ", zap.Any("Prefix", completeKey),
-			zap.String("Prefix", mapKey),
+		log.Debug("SessionUtil GetSessions ", zap.Any("Key", completeKey),
+			zap.String("Key", mapKey),
 			zap.Any("value", kv.Value))
 		res[mapKey] = session
 	}
 	return res, resp.Header.Revision, nil
 }
 
-func (e *EtcdSessionManager) Watch(prefix string) (*EtcdSessionWatcher, error) {
+func (e *EtcdSessionManager) Watch(key string, withPrefix bool) (*EtcdSessionWatcher, error) {
+	cacheKey := key
+	if withPrefix {
+		cacheKey = cacheKey + "*"
+	}
 
 	// if not exist create one registry, if exists, use the old one, this means re-register happens
-	if _, exist := e.watchSessions[prefix]; !exist {
-		e.watchSessions[prefix] = &EtcdSessionWatcher{
-			Prefix:  prefix,
-			EventCh: make(chan SessionEEvent, 1),
+	if _, exist := e.watchSessions[cacheKey]; !exist {
+		e.watchSessions[key] = &EtcdSessionWatcher{
+			Key:        key,
+			WithPrefix: withPrefix,
+			EventCh:    make(chan SessionEEvent, 1),
 			//mockCh:    make(chan bool, 1),
 		}
 	}
-	watcher := e.watchSessions[prefix]
+	watcher := e.watchSessions[cacheKey]
 
 	watchCtx, cancelFunc := context.WithCancel(e.ctx)
 	watcher.cancelFunc = &cancelFunc
 	watcher.watchCtx = &watchCtx
-	watchCh := e.etcdCli.Watch(watchCtx, prefix, clientv3.WithPrefix(), clientv3.WithPrevKV())
+	var watchCh clientv3.WatchChan
+	if withPrefix {
+		watchCh = e.etcdCli.Watch(watchCtx, watcher.Key, clientv3.WithPrefix(), clientv3.WithPrevKV())
+	} else {
+		watchCh = e.etcdCli.Watch(watchCtx, watcher.Key, clientv3.WithPrevKV())
+	}
+
 	watcher.watchCh = watchCh
 
 	go func() {
@@ -334,13 +360,13 @@ func (e *EtcdSessionManager) Watch(prefix string) (*EtcdSessionWatcher, error) {
 			select {
 			case <-e.ctx.Done():
 				watcher.EventCh <- SessionEEvent{
-					EventType: SessionEvent_CtxDone,
+					EventType: SessionCtxDoneEvent,
 				}
 				return
 			case <-(*watcher.watchCtx).Done():
 				log.Warn("watcher ctx done, supposed to be killed by milvus inside logic")
 				watcher.EventCh <- SessionEEvent{
-					EventType: SessionEvent_CtxDone,
+					EventType: SessionCtxDoneEvent,
 				}
 				return
 			case wresp, ok := <-watcher.watchCh:
@@ -354,7 +380,7 @@ func (e *EtcdSessionManager) Watch(prefix string) (*EtcdSessionWatcher, error) {
 		}
 	}()
 
-	log.Info("Start watcher to monitor", zap.String("prefix", prefix))
+	log.Info("Start watcher to monitor", zap.String("Key", key), zap.Bool("withPrefix", withPrefix))
 	return watcher, nil
 }
 
@@ -369,10 +395,11 @@ func (e *EtcdSessionManager) handleWatchResponse(watcher *EtcdSessionWatcher, wr
 	}
 	for _, ev := range wresp.Events {
 		session := &Session{}
-		var eventType SessionEEventType
+		var eventType SessionEventType
 		switch ev.Type {
 		case mvccpb.PUT:
 			log.Debug("watch services",
+				zap.String("watcher key", watcher.Key),
 				zap.Any("add kv", ev.Kv))
 			err := json.Unmarshal(ev.Kv.Value, session)
 			if err != nil {
@@ -380,23 +407,25 @@ func (e *EtcdSessionManager) handleWatchResponse(watcher *EtcdSessionWatcher, wr
 				continue
 			}
 			if session.Stopping {
-				eventType = SessionEvent_Update
+				eventType = SessionUpdateEvent
 			} else {
-				eventType = SessionEvent_ADD
+				eventType = SessionAddEvent
 			}
 		case mvccpb.DELETE:
 			log.Debug("watch services",
-				zap.Any("delete kv", ev.PrevKv))
+				zap.String("delete key", string(ev.PrevKv.Key)),
+				zap.Any("delete value", ev.PrevKv.Value))
 			err := json.Unmarshal(ev.PrevKv.Value, session)
 			if err != nil {
 				log.Error("watch services", zap.Error(err))
 				continue
 			}
-			eventType = SessionEvent_Del
+			eventType = SessionDelEvent
 		}
-		log.Debug("WatchService", zap.String("key", watcher.Prefix), zap.Any("event type", eventType))
+		log.Debug("WatchService", zap.String("Key", watcher.Key), zap.Any("event type", eventType))
 		watcher.EventCh <- SessionEEvent{
 			EventType: eventType,
+			Session:   session,
 		}
 	}
 }
@@ -410,25 +439,79 @@ func (e *EtcdSessionManager) handleWatchErr(watcher *EtcdSessionWatcher, err err
 		return err
 	}
 
-	_, revision, err := e.getSessions(watcher.Prefix, true)
+	_, revision, err := e.getSessions(watcher.Key, watcher.WithPrefix)
 	if err != nil {
-		log.Warn("GetSession before rewatch failed", zap.String("Prefix", watcher.Prefix), zap.Error(err))
+		log.Warn("GetSession before rewatch failed", zap.String("Key", watcher.Key), zap.Error(err))
 		close(watcher.EventCh)
 		return err
 	}
 
-	watcher.watchCh = e.etcdCli.Watch(e.ctx, path.Join(e.metaRoot, DefaultServiceRoot, watcher.Prefix), clientv3.WithPrefix(), clientv3.WithPrevKV(), clientv3.WithRev(revision))
+	if watcher.WithPrefix {
+		watcher.watchCh = e.etcdCli.Watch(e.ctx, path.Join(e.metaRoot, DefaultServiceRoot, watcher.Key), clientv3.WithPrefix(), clientv3.WithPrevKV(), clientv3.WithRev(revision))
+	} else {
+		watcher.watchCh = e.etcdCli.Watch(e.ctx, path.Join(e.metaRoot, DefaultServiceRoot, watcher.Key), clientv3.WithPrevKV(), clientv3.WithRev(revision))
+	}
 	return nil
 }
 
-type EtcdSessionWatcher struct {
-	Prefix  string
-	watchCh clientv3.WatchChan
+func (e EtcdSessionManager) RegisterActive(session *Session) error {
+	key := e.getActiveKey(session)
 
-	watchCtx   *context.Context
-	cancelFunc *context.CancelFunc
+	isRetry := false
+	// if not exist create one registry, if exists, use the old one, this means re-register happens
+	if _, exist := e.preemptiveSessions[session]; exist {
+		isRetry = true
+	} else {
+		e.preemptiveSessions[session] = &EtcdSessionRegister{
+			Key:     key,
+			EventCh: make(chan SessionEEvent, 1),
+			//mockCh:    make(chan bool, 1),
+		}
+	}
+	register := e.preemptiveSessions[session]
 
-	EventCh chan SessionEEvent
+	session.updateStandby(true)
+	log.Info(fmt.Sprintf("serverName: %v id: %d enter STANDBY mode", session.ServerName, session.ServerID))
+	go func() {
+		for session.isStandby.Load().(bool) {
+			log.Info(fmt.Sprintf("serverName: %v id: %d is in STANDBY ...", session.ServerName, session.ServerID))
+			time.Sleep(10 * time.Second)
+		}
+	}()
+
+	for {
+		succeed, err := e.doRegister(register, isRetry, 0, session)
+		if succeed {
+			break
+		} else {
+			time.Sleep(time.Second * 1)
+			continue
+		}
+
+		watcher, err := e.Watch(key, false)
+		if err != nil {
+			log.Error("fail to watch session in RegisterActive")
+			return err
+		}
+
+		select {
+		case <-e.ctx.Done():
+			(*watcher.cancelFunc)()
+		case event, ok := <-watcher.EventCh:
+			if !ok {
+				log.Warn("session watch channel closed")
+			}
+			switch event.EventType {
+			case SessionDelEvent:
+				(*watcher.cancelFunc)()
+			}
+		}
+		log.Info(fmt.Sprintf("stop watching ACTIVE Key %v", key))
+	}
+
+	session.updateStandby(false)
+	log.Info(fmt.Sprintf("serverName: %v id: %d quit STANDBY mode, this node will become ACTIVE", session.ServerName, session.ServerID))
+	return nil
 }
 
 func (e *EtcdSessionManager) getServerID() (int64, error) {
@@ -481,44 +564,14 @@ func (e *EtcdSessionManager) getServerIDWithKey(key string) (int64, error) {
 	}
 }
 
-// todo split session and etcd operations
-func (e EtcdSessionManager) RegisterPreemptive(session *Session) error {
-	watcher, err := e.Watch(e.getRoleKey(session))
-	if err != nil {
-		log.Error("fail to watch session in RegisterPreemptive")
-		return err
+func (e *EtcdSessionManager) getSessionKey(session *Session) string {
+	key := session.ServerName
+	if !session.Exclusive || session.enableActiveStandBy {
+		key = fmt.Sprintf("%s-%d", key, session.ServerID)
 	}
+	return path.Join(e.metaRoot, DefaultServiceRoot, key)
+}
 
-	_, err = e.Register(session)
-	if err == nil {
-		return nil
-	}
-
-	ticker := time.NewTicker(time.Second * 3)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-e.ctx.Done():
-			ticker.Stop()
-		case event, ok := <-watcher.EventCh:
-			if !ok {
-				log.Warn("session watch channel closed")
-			}
-			switch event.EventType {
-			case SessionEvent_Lost:
-			case SessionEvent_Del:
-				_, err = e.Register(session)
-				if err == nil {
-					return nil
-				}
-			default:
-				continue
-			}
-		case <-ticker.C:
-			log.Debug("key is standing by", zap.String("key", watcher.Prefix))
-		}
-	}
-
-	return nil
+func (e *EtcdSessionManager) getActiveKey(session *Session) string {
+	return path.Join(e.metaRoot, DefaultServiceRoot, session.ServerName)
 }

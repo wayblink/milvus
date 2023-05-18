@@ -25,7 +25,7 @@ import (
 const (
 	// DefaultServiceRoot default root path used in kv by Session
 	DefaultServiceRoot = "session/"
-	// DefaultIDKey default id key for Session
+	// DefaultIDKey default id Key for Session
 	DefaultIDKey = "id"
 )
 
@@ -61,6 +61,12 @@ const (
 	SessionDelEvent
 	// SessionUpdateEvent event type for a Session stopping
 	SessionUpdateEvent
+	// SessionReAddEvent event type for a Session Added again
+	SessionReAddEvent
+	// SessionCtxDoneEvent event type for a session manage ctx done
+	SessionCtxDoneEvent
+	// SessionKeepAliveLostEvent event type for a session manage ctx done
+	SessionKeepAliveLostEvent
 )
 
 // Session is a struct to store service's session, including ServerID, ServerName,
@@ -279,11 +285,11 @@ func (s *Session) getServerIDWithKey(key string) (int64, error) {
 	for {
 		getResp, err := s.etcdCli.Get(s.ctx, path.Join(s.metaRoot, DefaultServiceRoot, key))
 		if err != nil {
-			log.Warn("Session get etcd key error", zap.String("key", key), zap.Error(err))
+			log.Warn("Session get etcd Key error", zap.String("Key", key), zap.Error(err))
 			return -1, err
 		}
 		if getResp.Count <= 0 {
-			log.Warn("Session there is no value", zap.String("key", key))
+			log.Warn("Session there is no value", zap.String("Key", key))
 			continue
 		}
 		value := string(getResp.Kvs[0].Value)
@@ -299,15 +305,15 @@ func (s *Session) getServerIDWithKey(key string) (int64, error) {
 				value)).
 			Then(clientv3.OpPut(path.Join(s.metaRoot, DefaultServiceRoot, key), strconv.FormatInt(valueInt+1, 10))).Commit()
 		if err != nil {
-			log.Warn("Session Txn failed", zap.String("key", key), zap.Error(err))
+			log.Warn("Session Txn failed", zap.String("Key", key), zap.Error(err))
 			return -1, err
 		}
 
 		if !txnResp.Succeeded {
-			log.Warn("Session Txn unsuccessful", zap.String("key", key))
+			log.Warn("Session Txn unsuccessful", zap.String("Key", key))
 			continue
 		}
-		log.Info("Session get serverID success", zap.String("key", key), zap.Int64("ServerId", valueInt))
+		log.Info("Session get serverID success", zap.String("Key", key), zap.Int64("ServerId", valueInt))
 		return valueInt, nil
 	}
 }
@@ -338,8 +344,8 @@ func (s *Session) initWatchSessionCh() {
 
 // registerService registers the service to etcd so that other services
 // can find that the service is online and issue subsequent operations
-// RegisterService will save a key-value in etcd
-// key: metaRootPath + "/services" + "/ServerName-ServerID"
+// RegisterService will save a Key-value in etcd
+// Key: metaRootPath + "/services" + "/ServerName-ServerID"
 // value: json format
 //
 //	{
@@ -387,14 +393,14 @@ func (s *Session) registerService() (<-chan *clientv3.LeaseKeepAliveResponse, er
 			Then(clientv3.OpPut(completeKey, string(sessionJSON), clientv3.WithLease(resp.ID))).Commit()
 
 		if err != nil {
-			log.Warn("compare and swap error, maybe the key has already been registered", zap.Error(err))
+			log.Warn("compare and swap error, maybe the Key has already been registered", zap.Error(err))
 			return err
 		}
 
 		if !txnResp.Succeeded {
-			return fmt.Errorf("function CompareAndSwap error for compare is false for key: %s", s.ServerName)
+			return fmt.Errorf("function CompareAndSwap error for compare is false for Key: %s", s.ServerName)
 		}
-		log.Info("put session key into etcd", zap.String("key", completeKey), zap.String("value", string(sessionJSON)))
+		log.Info("put session Key into etcd", zap.String("Key", completeKey), zap.String("value", string(sessionJSON)))
 
 		keepAliveCtx, keepAliveCancel := context.WithCancel(context.Background())
 		s.keepAliveCancel = func() {
@@ -449,7 +455,7 @@ func (s *Session) processKeepAliveResponse(ch <-chan *clientv3.LeaseKeepAliveRes
 }
 
 // GetSessions will get all sessions registered in etcd.
-// Revision is returned for WatchServices to prevent key events from being missed.
+// Revision is returned for WatchServices to prevent Key events from being missed.
 func (s *Session) GetSessions(prefix string) (map[string]*Session, int64, error) {
 	res := make(map[string]*Session)
 	key := path.Join(s.metaRoot, DefaultServiceRoot, prefix)
@@ -466,7 +472,7 @@ func (s *Session) GetSessions(prefix string) (map[string]*Session, int64, error)
 		}
 		_, mapKey := path.Split(string(kv.Key))
 		log.Info("SessionUtil GetSessions ", zap.Any("prefix", prefix),
-			zap.String("key", mapKey),
+			zap.String("Key", mapKey),
 			zap.Any("address", session.Address))
 		res[mapKey] = session
 	}
@@ -495,7 +501,7 @@ func (s *Session) GetSessionsWithVersionRange(prefix string, r semver.Range) (ma
 		}
 		_, mapKey := path.Split(string(kv.Key))
 		log.Info("SessionUtil GetSessions ", zap.String("prefix", prefix),
-			zap.String("key", mapKey),
+			zap.String("Key", mapKey),
 			zap.String("address", session.Address))
 		res[mapKey] = session
 	}
@@ -514,7 +520,7 @@ func (s *Session) GoingStop() error {
 	completeKey := s.getCompleteKey()
 	resp, err := s.etcdCli.Get(s.ctx, completeKey, clientv3.WithCountOnly())
 	if err != nil {
-		log.Error("fail to get the session", zap.String("key", completeKey), zap.Error(err))
+		log.Error("fail to get the session", zap.String("Key", completeKey), zap.Error(err))
 		return err
 	}
 	if resp.Count == 0 {
@@ -523,12 +529,12 @@ func (s *Session) GoingStop() error {
 	s.Stopping = true
 	sessionJSON, err := json.Marshal(s)
 	if err != nil {
-		log.Error("fail to marshal the session", zap.String("key", completeKey))
+		log.Error("fail to marshal the session", zap.String("Key", completeKey))
 		return err
 	}
 	_, err = s.etcdCli.Put(s.ctx, completeKey, string(sessionJSON), clientv3.WithLease(*s.leaseID))
 	if err != nil {
-		log.Error("fail to update the session to stopping state", zap.String("key", completeKey))
+		log.Error("fail to update the session to stopping state", zap.String("Key", completeKey))
 		return err
 	}
 	return nil
@@ -573,7 +579,7 @@ func (w *sessionWatcher) start() {
 // eventChannel.
 // prefix is a parameter to know which service to watch and can be obtained in
 // typeutil.type.go.
-// revision is a etcd reversion to prevent missing key events and can be obtained
+// revision is a etcd reversion to prevent missing Key events and can be obtained
 // in GetSessions.
 // If a server up, an event will be add to channel with eventType SessionAddType.
 // If a server down, an event will be add to channel with eventType SessionDelType.
@@ -593,7 +599,7 @@ func (s *Session) WatchServices(prefix string, revision int64, rewatch Rewatch) 
 // WatchServicesWithVersionRange watches the service's up and down in etcd, and sends event to event Channel.
 // Acts like WatchServices but with extra version range check.
 // prefix is a parameter to know which service to watch and can be obtained in type util.type.go.
-// revision is a etcd reversion to prevent missing key events and can be obtained in GetSessions.
+// revision is a etcd reversion to prevent missing Key events and can be obtained in GetSessions.
 // If a server up, an event will be add to channel with eventType SessionAddType.
 // If a server down, an event will be add to channel with eventType SessionDelType.
 func (s *Session) WatchServicesWithVersionRange(prefix string, r semver.Range, revision int64, rewatch Rewatch) (eventChannel <-chan *SessionEvent) {
@@ -722,7 +728,7 @@ func (s *Session) LivenessCheck(ctx context.Context, callback func()) {
 				return
 			case resp, ok := <-s.watchSessionKeyCh:
 				if !ok {
-					log.Warn("watch session key channel closed")
+					log.Warn("watch session Key channel closed")
 					if s.keepAliveCancel != nil {
 						s.keepAliveCancel()
 					}
@@ -752,9 +758,9 @@ func (s *Session) LivenessCheck(ctx context.Context, callback func()) {
 				for _, event := range resp.Events {
 					switch event.Type {
 					case mvccpb.PUT:
-						log.Info("register session success", zap.String("role", s.ServerName), zap.String("key", string(event.Kv.Key)))
+						log.Info("register session success", zap.String("role", s.ServerName), zap.String("Key", string(event.Kv.Key)))
 					case mvccpb.DELETE:
-						log.Info("session key is deleted, exit...", zap.String("role", s.ServerName), zap.String("key", string(event.Kv.Key)))
+						log.Info("session Key is deleted, exit...", zap.String("role", s.ServerName), zap.String("Key", string(event.Kv.Key)))
 						if s.keepAliveCancel != nil {
 							s.keepAliveCancel()
 						}
@@ -773,7 +779,7 @@ func (s *Session) Stop() {
 	s.wg.Wait()
 }
 
-// Revoke revokes the internal leaseID for the session key
+// Revoke revokes the internal leaseID for the session Key
 func (s *Session) Revoke(timeout time.Duration) {
 	if s == nil {
 		return
@@ -826,7 +832,7 @@ func (s *Session) updateStandby(b bool) {
 }
 
 func (s *Session) ProcessActiveStandByNew(activateFunc func() error) error {
-	err := s.sessionManager.RegisterPreemptive(s)
+	err := s.sessionManager.RegisterActive(s)
 	if err != nil {
 		return err
 	}
@@ -837,10 +843,10 @@ func (s *Session) ProcessActiveStandByNew(activateFunc func() error) error {
 // coordinator enabled active-standby will first call Register and then call ProcessActiveStandBy.
 // steps:
 // 1, Enter STANDBY mode
-// 2, Try to register to active key.
+// 2, Try to register to active Key.
 // 3, If 2. return true, this service becomes ACTIVE. Exit STANDBY mode.
 // 4, If 2. return false, which means an ACTIVE service already exist.
-//    Start watching the active key. Whenever active key disappears, STANDBY node will go backup to 2.
+//    Start watching the active Key. Whenever active Key disappears, STANDBY node will go backup to 2.
 //
 // activateFunc is the function to re-active the service.
 func (s *Session) ProcessActiveStandBy(activateFunc func() error) error {
@@ -865,7 +871,7 @@ func (s *Session) ProcessActiveStandBy(activateFunc func() error) error {
 				0)).
 			Then(clientv3.OpPut(s.activeKey, string(sessionJSON), clientv3.WithLease(*s.leaseID))).Commit()
 		if err != nil {
-			log.Error("register active key to etcd failed", zap.Error(err))
+			log.Error("register active Key to etcd failed", zap.Error(err))
 			return false, -1, err
 		}
 		doRegistered := txnResp.Succeeded
@@ -895,7 +901,7 @@ func (s *Session) ProcessActiveStandBy(activateFunc func() error) error {
 		if registered {
 			break
 		}
-		log.Info(fmt.Sprintf("%s start to watch ACTIVE key %s", s.ServerName, s.activeKey))
+		log.Info(fmt.Sprintf("%s start to watch ACTIVE Key %s", s.ServerName, s.activeKey))
 		ctx, cancel := context.WithCancel(s.ctx)
 		watchChan := s.etcdCli.Watch(ctx, s.activeKey, clientv3.WithPrevKV(), clientv3.WithRev(revision))
 		select {
@@ -911,15 +917,15 @@ func (s *Session) ProcessActiveStandBy(activateFunc func() error) error {
 			for _, event := range wresp.Events {
 				switch event.Type {
 				case mvccpb.PUT:
-					log.Info("watch the ACTIVE key", zap.Any("ADD", event.Kv))
+					log.Info("watch the ACTIVE Key", zap.Any("ADD", event.Kv))
 				case mvccpb.DELETE:
-					log.Info("watch the ACTIVE key", zap.Any("DELETE", event.Kv))
+					log.Info("watch the ACTIVE Key", zap.Any("DELETE", event.Kv))
 					cancel()
 				}
 			}
 		}
 		cancel()
-		log.Info(fmt.Sprintf("stop watching ACTIVE key %v", s.activeKey))
+		log.Info(fmt.Sprintf("stop watching ACTIVE Key %v", s.activeKey))
 	}
 
 	s.updateStandby(false)

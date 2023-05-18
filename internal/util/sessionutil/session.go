@@ -1,10 +1,5 @@
 package sessionutil
 
-import (
-	"fmt"
-	"path"
-)
-
 //type Session struct {
 //	ServerID    int64  `json:"ServerID,omitempty"`
 //	ServerName  string `json:"ServerName,omitempty"`
@@ -23,7 +18,8 @@ import (
 //}
 
 type SessionEEvent struct {
-	EventType SessionEEventType
+	EventType SessionEventType
+	Session   *Session
 }
 
 type SessionEEventType string
@@ -64,24 +60,12 @@ const (
 //	CompeteRegister(session *Session) (*EtcdSessionRegister, error)
 //
 //	// Get registered services from service discovery
-//	Get(key string, isPrefix bool) (map[string]*Session, error)
+//	Get(Key string, isPrefix bool) (map[string]*Session, error)
 //
 //	// Watch the updates of a certain session
 //	// return:
 //	// 	 	chan to inform caller the updates of this session,
 //	//		cancel function to stop the keepalive,
 //	//      error if happens
-//	Watch(key string) (*EtcdSessionWatcher, error)
+//	Watch(Key string) (*EtcdSessionWatcher, error)
 //}
-
-func (e *EtcdSessionManager) getSessionKey(session *Session) string {
-	key := session.ServerName
-	if !session.Exclusive || session.enableActiveStandBy {
-		key = fmt.Sprintf("%s-%d", key, session.ServerID)
-	}
-	return path.Join(e.metaRoot, DefaultServiceRoot, key)
-}
-
-func (e *EtcdSessionManager) getRoleKey(session *Session) string {
-	return path.Join(e.metaRoot, DefaultServiceRoot, session.ServerName)
-}

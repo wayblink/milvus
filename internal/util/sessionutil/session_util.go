@@ -509,7 +509,7 @@ func (s *Session) GetSessionsWithVersionRange(prefix string, r semver.Range) (ma
 }
 
 func (s *Session) GoingStop() error {
-	if s == nil || s.etcdCli == nil || s.leaseID == nil {
+	if s == nil || s.etcdCli == nil {
 		return errors.New("the session hasn't been init")
 	}
 
@@ -532,7 +532,7 @@ func (s *Session) GoingStop() error {
 		log.Error("fail to marshal the session", zap.String("Key", completeKey))
 		return err
 	}
-	_, err = s.etcdCli.Put(s.ctx, completeKey, string(sessionJSON), clientv3.WithLease(*s.leaseID))
+	_, err = s.etcdCli.Put(s.ctx, completeKey, string(sessionJSON))
 	if err != nil {
 		log.Error("fail to update the session to stopping state", zap.String("Key", completeKey))
 		return err
@@ -784,17 +784,18 @@ func (s *Session) Revoke(timeout time.Duration) {
 	if s == nil {
 		return
 	}
-	if s.etcdCli == nil || s.leaseID == nil {
+	if s.etcdCli == nil {
 		return
 	}
 	if s.Disconnected() {
 		return
 	}
 	// can NOT use s.ctx, it may be Done here
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
+	//ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	//defer cancel()
 	// ignores resp & error, just do best effort to revoke
-	_, _ = s.etcdCli.Revoke(ctx, *s.leaseID)
+	//_, _ = s.etcdCli.Revoke(ctx, *s.leaseID)
+	s.sessionManager.UnRegister(s)
 }
 
 // UpdateRegistered update the state of registered.

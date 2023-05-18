@@ -29,7 +29,7 @@ type EtcdSessionManager struct {
 
 	registerSessions   map[*Session]*EtcdSessionRegister
 	preemptiveSessions map[*Session]*EtcdSessionRegister
-	watchSessions      map[string]*EtcdSessionWatcher
+	//watchSessions      map[string]*EtcdSessionWatcher
 }
 
 type EtcdSessionRegister struct {
@@ -70,7 +70,7 @@ func NewEtcdSessionManager(
 		sessionRetryTimes:  30,
 		registerSessions:   make(map[*Session]*EtcdSessionRegister, 0),
 		preemptiveSessions: make(map[*Session]*EtcdSessionRegister, 0),
-		watchSessions:      make(map[string]*EtcdSessionWatcher, 0),
+		//watchSessions:      make(map[string]*EtcdSessionWatcher, 0),
 	}
 	// integration test create cluster with different nodeId in one process
 	//if paramtable.Get().IntegrationTestCfg.IntegrationMode.GetAsBool() {
@@ -117,9 +117,7 @@ func (e *EtcdSessionManager) NewSession(serverName, address string, exclusive bo
 	return s, nil
 }
 
-// Register 会注册session到etcd中，返回一个EtcdSessionRegister，用于向外通知seesion注册状况。
-// 设计这是一个幂等操作，多次注册会更新内部的leaseID和keepAliveChannel，但不会修改eventChan
-// 要保证和Watch，UnRegister操作没用同步问题
+// Register
 func (e *EtcdSessionManager) Register(session *Session) (*EtcdSessionRegister, error) {
 
 	isRetry := false
@@ -277,19 +275,20 @@ func (e *EtcdSessionManager) UnRegister(session *Session) (bool, error) {
 	return false, errors.New(fmt.Sprintf("Registered session not found: %s", session.String()))
 }
 
-func (e *EtcdSessionManager) UnWatch(key string, withPrefix bool) (bool, error) {
-	cacheKey := key
-	if withPrefix {
-		cacheKey = cacheKey + "*"
-	}
-	if watcher, exist := e.watchSessions[cacheKey]; exist {
-		(*watcher.cancelFunc)()
-		delete(e.watchSessions, cacheKey)
-		return true, nil
-	}
-
-	return false, errors.New(fmt.Sprintf("Watcher to key: %s withprefix: %s not found.", key, withPrefix))
-}
+//
+//func (e *EtcdSessionManager) UnWatch(key string, withPrefix bool) (bool, error) {
+//	cacheKey := key
+//	if withPrefix {
+//		cacheKey = cacheKey + "*"
+//	}
+//	if watcher, exist := e.watchSessions[cacheKey]; exist {
+//		(*watcher.cancelFunc)()
+//		delete(e.watchSessions, cacheKey)
+//		return true, nil
+//	}
+//
+//	return false, errors.New(fmt.Sprintf("Watcher to key: %s withprefix: %s not found.", key, withPrefix))
+//}
 
 func (e EtcdSessionManager) Get(key string, withPrefix bool) (map[string]*Session, error) {
 	res, _, err := e.getSessions(key, withPrefix)
@@ -327,21 +326,27 @@ func (e EtcdSessionManager) getSessions(key string, withPrefix bool) (map[string
 }
 
 func (e *EtcdSessionManager) Watch(key string, withPrefix bool) (*EtcdSessionWatcher, error) {
-	cacheKey := key
-	if withPrefix {
-		cacheKey = cacheKey + "*"
-	}
+	//cacheKey := key
+	//if withPrefix {
+	//	cacheKey = cacheKey + "*"
+	//}
 
 	// if not exist create one registry, if exists, use the old one, this means re-register happens
-	if _, exist := e.watchSessions[cacheKey]; !exist {
-		e.watchSessions[key] = &EtcdSessionWatcher{
-			Key:        key,
-			WithPrefix: withPrefix,
-			EventCh:    make(chan SessionEEvent, 1),
-			//mockCh:    make(chan bool, 1),
-		}
+	//if _, exist := e.watchSessions[cacheKey]; !exist {
+	//	e.watchSessions[key] = &EtcdSessionWatcher{
+	//		Key:        key,
+	//		WithPrefix: withPrefix,
+	//		EventCh:    make(chan SessionEEvent, 1),
+	//		//mockCh:    make(chan bool, 1),
+	//	}
+	//}
+	//watcher := e.watchSessions[cacheKey]
+	watcher := &EtcdSessionWatcher{
+		Key:        key,
+		WithPrefix: withPrefix,
+		EventCh:    make(chan SessionEEvent, 1),
+		//mockCh:    make(chan bool, 1),
 	}
-	watcher := e.watchSessions[cacheKey]
 
 	watchCtx, cancelFunc := context.WithCancel(e.ctx)
 	watcher.cancelFunc = &cancelFunc

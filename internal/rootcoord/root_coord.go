@@ -294,15 +294,16 @@ func (c *Core) SetQueryCoord(s types.QueryCoord) error {
 
 // Register register rootcoord at etcd
 func (c *Core) Register() error {
-	c.session.Register()
+	sessionChan := c.session.RegisterNew()
 	if c.enableActiveStandBy {
-		if err := c.session.ProcessActiveStandBy(c.activateFunc); err != nil {
+		err := c.session.ProcessActiveStandByNew(c.activateFunc)
+		if err != nil {
 			return err
 		}
 	}
 	metrics.NumNodes.WithLabelValues(strconv.FormatInt(c.session.ServerID, 10), typeutil.RootCoordRole).Inc()
 	log.Info("RootCoord Register Finished")
-	c.session.LivenessCheck(c.ctx, func() {
+	callBackFunc := func() {
 		log.Error("Root Coord disconnected from etcd, process will exit", zap.Int64("Server Id", c.session.ServerID))
 		if err := c.Stop(); err != nil {
 			log.Fatal("failed to stop server", zap.Error(err))
@@ -314,8 +315,24 @@ func (c *Core) Register() error {
 				p.Signal(syscall.SIGINT)
 			}
 		}
-	})
+	}
 
+	go func() {
+		for {
+			select {
+			case _, ok := <-*sessionChan:
+				// ok, still alive
+				if ok {
+					continue
+				}
+				// not ok, connection lost
+				log.Warn("connection lost detected, shuting down")
+				c.session.SetDisconnected(true)
+				go callBackFunc()
+				return
+			}
+		}
+	}()
 	return nil
 }
 

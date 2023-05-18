@@ -129,10 +129,10 @@ func NewProxy(ctx context.Context, factory dependency.Factory) (*Proxy, error) {
 
 // Register registers proxy at etcd
 func (node *Proxy) Register() error {
-	node.session.Register()
+	sessionChan := node.session.RegisterNew()
 	metrics.NumNodes.WithLabelValues(strconv.FormatInt(node.session.ServerID, 10), typeutil.ProxyRole).Inc()
 	log.Info("Proxy Register Finished")
-	node.session.LivenessCheck(node.ctx, func() {
+	callBackFunc := func() {
 		log.Error("Proxy disconnected from etcd, process will exit", zap.Int64("Server Id", node.session.ServerID))
 		if err := node.Stop(); err != nil {
 			log.Fatal("failed to stop server", zap.Error(err))
@@ -143,7 +143,24 @@ func (node *Proxy) Register() error {
 				p.Signal(syscall.SIGINT)
 			}
 		}
-	})
+	}
+	go func() {
+		for {
+			select {
+			case _, ok := <-*sessionChan:
+				// ok, still alive
+				if ok {
+					continue
+				}
+				// not ok, connection lost
+				log.Warn("connection lost detected, shuting down")
+				node.session.SetDisconnected(true)
+				go callBackFunc()
+				return
+			}
+		}
+	}()
+
 	// TODO Reset the logger
 	//Params.initLogCfg()
 	return nil

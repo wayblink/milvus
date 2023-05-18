@@ -132,16 +132,16 @@ func NewQueryCoord(ctx context.Context, factory dependency.Factory) (*Server, er
 }
 
 func (s *Server) Register() error {
-	s.session.Register()
+	sessionChan := s.session.RegisterNew()
 	if s.enableActiveStandBy {
-		if err := s.session.ProcessActiveStandBy(s.activateFunc); err != nil {
-			log.Error("failed to activate standby server", zap.Error(err))
+		err := s.session.ProcessActiveStandByNew(s.activateFunc)
+		if err != nil {
 			return err
 		}
 	}
 	metrics.NumNodes.WithLabelValues(strconv.FormatInt(s.session.ServerID, 10), typeutil.QueryCoordRole).Inc()
 	log.Info("QueryCoord Register Finished")
-	s.session.LivenessCheck(s.ctx, func() {
+	callBackFunc := func() {
 		log.Error("QueryCoord disconnected from etcd, process will exit", zap.Int64("serverID", s.session.ServerID))
 		if err := s.Stop(); err != nil {
 			log.Fatal("failed to stop server", zap.Error(err))
@@ -153,7 +153,24 @@ func (s *Server) Register() error {
 				p.Signal(syscall.SIGINT)
 			}
 		}
-	})
+	}
+
+	go func() {
+		for {
+			select {
+			case _, ok := <-*sessionChan:
+				// ok, still alive
+				if ok {
+					continue
+				}
+				// not ok, connection lost
+				log.Warn("connection lost detected, shuting down")
+				s.session.SetDisconnected(true)
+				go callBackFunc()
+				return
+			}
+		}
+	}()
 	return nil
 }
 

@@ -133,7 +133,7 @@ rocksmq:
 rootCoord:
   address: localhost
   port: 53100
-  enableActiveStandby: false  # Enable active-standby
+  enableActiveStandby: true  # Enable active-standby
 
   dmlChannelNum: 16 # The number of dml channels created at system startup
   maxDatabaseNum: 64 # Maximum number of database
@@ -199,7 +199,7 @@ queryCoord:
   checkHandoffInterval: 5000
   taskMergeCap: 8
   taskExecutionCap: 256
-  enableActiveStandby: false  # Enable active-standby
+  enableActiveStandby: true  # Enable active-standby
   refreshTargetsIntervalSeconds: 300
 
 # Related configuration of queryNode, used to run hybrid search between vector and scalar data.
@@ -264,7 +264,7 @@ queryNode:
 indexCoord:
   address: localhost
   port: 31000
-  enableActiveStandby: false  # Enable active-standby
+  enableActiveStandby: true  # Enable active-standby
 
   minSegmentNumRowsToEnableIndex: 1024 # It's a threshold. When the segment num rows is less than this value, the segment will not be indexed
 
@@ -294,7 +294,7 @@ dataCoord:
   port: 13333
   enableCompaction: true # Enable data segment compaction
   enableGarbageCollection: true
-  enableActiveStandby: false  # Enable active-standby
+  enableActiveStandby: true  # Enable active-standby
 
   channel:
     watchTimeoutInterval: 120 # Timeout on watching channels (in seconds). Datanode tickler update watch progress will reset timeout timer.

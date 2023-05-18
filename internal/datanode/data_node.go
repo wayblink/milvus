@@ -178,11 +178,11 @@ func (node *DataNode) SetDataCoord(ds types.DataCoord) error {
 
 // Register register datanode to etcd
 func (node *DataNode) Register() error {
-	node.session.Register()
+	sessionChan := node.session.RegisterNew()
 	metrics.NumNodes.WithLabelValues(strconv.FormatInt(node.session.ServerID, 10), typeutil.DataNodeRole).Inc()
 	log.Info("DataNode Register Finished")
 	// Start liveness check
-	node.session.LivenessCheck(node.ctx, func() {
+	callBackFunc := func() {
 		log.Error("Data Node disconnected from etcd, process will exit", zap.Int64("Server Id", node.session.ServerID))
 		if err := node.Stop(); err != nil {
 			log.Fatal("failed to stop server", zap.Error(err))
@@ -194,7 +194,23 @@ func (node *DataNode) Register() error {
 				p.Signal(syscall.SIGINT)
 			}
 		}
-	})
+	}
+	go func() {
+		for {
+			select {
+			case _, ok := <-*sessionChan:
+				// ok, still alive
+				if ok {
+					continue
+				}
+				// not ok, connection lost
+				log.Warn("connection lost detected, shuting down")
+				node.session.SetDisconnected(true)
+				go callBackFunc()
+				return
+			}
+		}
+	}()
 
 	return nil
 }

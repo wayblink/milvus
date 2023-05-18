@@ -211,11 +211,11 @@ func (node *QueryNode) initSession() error {
 
 // Register register query node at etcd
 func (node *QueryNode) Register() error {
-	node.session.Register()
+	sessionChan := node.session.RegisterNew()
 	metrics.NumNodes.WithLabelValues(strconv.FormatInt(node.session.ServerID, 10), typeutil.QueryNodeRole).Inc()
 	log.Info("QueryNode Register Finished")
 	// start liveness check
-	node.session.LivenessCheck(node.queryNodeLoopCtx, func() {
+	callBackFunc := func() {
 		log.Error("Query Node disconnected from etcd, process will exit", zap.Int64("Server Id", node.session.ServerID))
 		if err := node.Stop(); err != nil {
 			log.Fatal("failed to stop server", zap.Error(err))
@@ -228,7 +228,24 @@ func (node *QueryNode) Register() error {
 				p.Signal(syscall.SIGINT)
 			}
 		}
-	})
+	}
+
+	go func() {
+		for {
+			select {
+			case _, ok := <-*sessionChan:
+				// ok, still alive
+				if ok {
+					continue
+				}
+				// not ok, connection lost
+				log.Warn("connection lost detected, shuting down")
+				node.session.SetDisconnected(true)
+				go callBackFunc()
+				return
+			}
+		}
+	}()
 
 	//TODO Reset the logger
 	//Params.initLogCfg()

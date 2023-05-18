@@ -98,6 +98,8 @@ type Session struct {
 	useCustomConfig   bool
 	sessionTTL        int64
 	sessionRetryTimes int64
+
+	sessionManager *EtcdSessionManager
 }
 
 type SessionOption func(session *Session)
@@ -181,6 +183,8 @@ func (s *Session) MarshalJSON() ([]byte, error) {
 // metaRoot is a path in etcd to save session information.
 // etcdEndpoints is to init etcdCli when NewSession
 func NewSession(ctx context.Context, metaRoot string, client *clientv3.Client, opts ...SessionOption) *Session {
+	manager := NewEtcdSessionManager(ctx, client, metaRoot, opts...)
+	//session := &Session{}
 	session := &Session{
 		ctx:               ctx,
 		metaRoot:          metaRoot,
@@ -188,6 +192,7 @@ func NewSession(ctx context.Context, metaRoot string, client *clientv3.Client, o
 		useCustomConfig:   false,
 		sessionTTL:        60,
 		sessionRetryTimes: 30,
+		sessionManager:    manager,
 	}
 
 	session.apply(opts...)
@@ -245,6 +250,16 @@ func (s *Session) Register() {
 	}
 	s.liveCh = s.processKeepAliveResponse(ch)
 	s.UpdateRegistered(true)
+}
+
+func (s *Session) RegisterNew() *chan SessionEEvent {
+	register, err := s.sessionManager.Register(s)
+	if err != nil {
+		panic(err)
+	}
+	// todo: check if neccesary
+	s.UpdateRegistered(true)
+	return &register.EventCh
 }
 
 func (s *Session) getServerID() (int64, error) {
@@ -808,6 +823,14 @@ func (s *Session) SetEnableActiveStandBy(enable bool) {
 
 func (s *Session) updateStandby(b bool) {
 	s.isStandby.Store(b)
+}
+
+func (s *Session) ProcessActiveStandByNew(activateFunc func() error) error {
+	err := s.sessionManager.RegisterPreemptive(s)
+	if err != nil {
+		return err
+	}
+	return activateFunc()
 }
 
 // ProcessActiveStandBy is used by coordinators to do active-standby mechanism.

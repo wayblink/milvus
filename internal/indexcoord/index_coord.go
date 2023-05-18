@@ -133,13 +133,16 @@ func NewIndexCoord(ctx context.Context, factory dependency.Factory) (*IndexCoord
 
 // Register register IndexCoord role at etcd.
 func (i *IndexCoord) Register() error {
-	i.session.Register()
+	sessionChan := i.session.RegisterNew()
 	if i.enableActiveStandBy {
-		i.session.ProcessActiveStandBy(i.activateFunc)
+		err := i.session.ProcessActiveStandByNew(i.activateFunc)
+		if err != nil {
+			return err
+		}
 	}
 	metrics.NumNodes.WithLabelValues(strconv.FormatInt(i.session.ServerID, 10), typeutil.IndexCoordRole).Inc()
 	log.Info("IndexCoord Register Finished")
-	i.session.LivenessCheck(i.loopCtx, func() {
+	callBackFunc := func() {
 		log.Error("Index Coord disconnected from etcd, process will exit", zap.Int64("Server Id", i.session.ServerID))
 		if err := i.Stop(); err != nil {
 			log.Fatal("failed to stop server", zap.Error(err))
@@ -151,7 +154,23 @@ func (i *IndexCoord) Register() error {
 				p.Signal(syscall.SIGINT)
 			}
 		}
-	})
+	}
+	go func() {
+		for {
+			select {
+			case _, ok := <-*sessionChan:
+				// ok, still alive
+				if ok {
+					continue
+				}
+				// not ok, connection lost
+				log.Warn("connection lost detected, shuting down")
+				i.session.SetDisconnected(true)
+				go callBackFunc()
+				return
+			}
+		}
+	}()
 	return nil
 }
 

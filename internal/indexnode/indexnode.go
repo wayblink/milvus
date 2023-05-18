@@ -126,12 +126,12 @@ func NewIndexNode(ctx context.Context, factory dependency.Factory) (*IndexNode, 
 
 // Register register index node at etcd.
 func (i *IndexNode) Register() error {
-	i.session.Register()
+	sessionChan := i.session.RegisterNew()
 	metrics.NumNodes.WithLabelValues(strconv.FormatInt(i.session.ServerID, 10), typeutil.IndexNodeRole).Inc()
 	log.Info("IndexNode Register Finished")
 
 	//start liveness check
-	i.session.LivenessCheck(i.loopCtx, func() {
+	callBackFunc := func() {
 		log.Error("Index Node disconnected from etcd, process will exit", zap.Int64("Server Id", i.session.ServerID))
 		if err := i.Stop(); err != nil {
 			log.Fatal("failed to stop server", zap.Error(err))
@@ -143,7 +143,23 @@ func (i *IndexNode) Register() error {
 				p.Signal(syscall.SIGINT)
 			}
 		}
-	})
+	}
+	go func() {
+		for {
+			select {
+			case _, ok := <-*sessionChan:
+				// ok, still alive
+				if ok {
+					continue
+				}
+				// not ok, connection lost
+				log.Warn("connection lost detected, shuting down")
+				i.session.SetDisconnected(true)
+				go callBackFunc()
+				return
+			}
+		}
+	}()
 	return nil
 }
 

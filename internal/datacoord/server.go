@@ -220,16 +220,16 @@ func (s *Server) QuitSignal() <-chan struct{} {
 
 // Register registers data service at etcd
 func (s *Server) Register() error {
-	s.session.Register()
+	sessionChan := s.session.RegisterNew()
 	if s.enableActiveStandBy {
-		err := s.session.ProcessActiveStandBy(s.activateFunc)
+		err := s.session.ProcessActiveStandByNew(s.activateFunc)
 		if err != nil {
 			return err
 		}
 	}
 	metrics.NumNodes.WithLabelValues(strconv.FormatInt(s.session.ServerID, 10), typeutil.DataCoordRole).Inc()
 	log.Info("DataCoord Register Finished")
-	s.session.LivenessCheck(s.serverLoopCtx, func() {
+	callBackFunc := func() {
 		logutil.Logger(s.ctx).Error("disconnected from etcd and exited", zap.Int64("serverID", s.session.ServerID))
 		if err := s.Stop(); err != nil {
 			logutil.Logger(s.ctx).Fatal("failed to stop server", zap.Error(err))
@@ -241,7 +241,23 @@ func (s *Server) Register() error {
 				p.Signal(syscall.SIGINT)
 			}
 		}
-	})
+	}
+	go func() {
+		for {
+			select {
+			case _, ok := <-*sessionChan:
+				// ok, still alive
+				if ok {
+					continue
+				}
+				// not ok, connection lost
+				log.Warn("connection lost detected, shuting down")
+				s.session.SetDisconnected(true)
+				go callBackFunc()
+				return
+			}
+		}
+	}()
 	return nil
 }
 

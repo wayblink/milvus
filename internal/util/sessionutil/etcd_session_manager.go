@@ -142,6 +142,13 @@ func (e *EtcdSessionManager) Register(session *Session) (*EtcdSessionRegister, e
 }
 
 func (e *EtcdSessionManager) doRegister(register *EtcdSessionRegister, isRetry bool, retryTimes uint, session *Session) (bool, error) {
+	sessionJSON, err := json.Marshal(session)
+	if err != nil {
+		return false, err
+	}
+	value := string(sessionJSON)
+	log.With(zap.String("key", register.Key), zap.String("value", value))
+
 	registerFn := func() error {
 		resp, err := e.etcdCli.Grant(e.ctx, e.sessionTTL)
 		if err != nil {
@@ -150,14 +157,9 @@ func (e *EtcdSessionManager) doRegister(register *EtcdSessionRegister, isRetry b
 		}
 		register.leaseID = &resp.ID
 
-		sessionJSON, err := json.Marshal(session)
-		if err != nil {
-			return err
-		}
-
 		if isRetry {
 			txnResp, err := e.etcdCli.Txn(e.ctx).
-				Then(clientv3.OpPut(register.Key, string(sessionJSON), clientv3.WithLease(resp.ID))).Commit()
+				Then(clientv3.OpPut(register.Key, value, clientv3.WithLease(resp.ID))).Commit()
 			if err != nil {
 				log.Warn("retry register session error", zap.String("Key", register.Key), zap.Error(err))
 				return err
@@ -171,7 +173,7 @@ func (e *EtcdSessionManager) doRegister(register *EtcdSessionRegister, isRetry b
 					clientv3.Version(register.Key),
 					"=",
 					0)).
-				Then(clientv3.OpPut(register.Key, string(sessionJSON), clientv3.WithLease(resp.ID))).Commit()
+				Then(clientv3.OpPut(register.Key, value, clientv3.WithLease(resp.ID))).Commit()
 
 			if err != nil {
 				log.Warn("compare and swap error, maybe the Key has already been registered", zap.Error(err))
@@ -193,8 +195,6 @@ func (e *EtcdSessionManager) doRegister(register *EtcdSessionRegister, isRetry b
 			}
 		}
 		log.Debug("Successfully put session Key into etcd",
-			zap.String("Key", register.Key),
-			zap.String("value", string(sessionJSON)),
 			zap.Int64("leaseID", int64(*register.leaseID)))
 
 		keepAliveCtx, cancelFunc := context.WithCancel(e.ctx)
@@ -208,7 +208,6 @@ func (e *EtcdSessionManager) doRegister(register *EtcdSessionRegister, isRetry b
 		return nil
 	}
 
-	var err error
 	if retryTimes == 0 {
 		err = registerFn()
 	} else {
@@ -257,7 +256,6 @@ func (e *EtcdSessionManager) doRegister(register *EtcdSessionRegister, isRetry b
 	}()
 
 	log.Info("Session registered successfully",
-		zap.String("Key", register.Key),
 		zap.String("ServerName", session.ServerName),
 		zap.Int64("serverID", session.ServerID))
 	return true, nil

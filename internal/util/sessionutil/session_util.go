@@ -363,8 +363,8 @@ func (s *Session) registerService(retryTimes uint, reRegister bool) (<-chan *cli
 			log.Error("register service", zap.String("key", completeKey), zap.Error(err))
 			return err
 		}
+		log.Info("Update lease ID", zap.Any("before", int64(*s.leaseID)), zap.Int64("after", int64(resp.ID)))
 		s.leaseID = &resp.ID
-		log.Info("update lease ID", zap.Int64("leaseID", int64(resp.ID)))
 		sessionJSON, err := json.Marshal(s)
 		if err != nil {
 			return err
@@ -452,12 +452,12 @@ func (s *Session) processKeepAliveResponse() {
 						return
 					}
 					s.leaseKeepAliveCh = ch
-					err = s.ProcessActiveStandBy(nil)
-					if err != nil {
-						log.Error("redo ProcessActiveStandby after keepalive channel close failed", zap.Error(err))
-						close(s.liveCh)
-						return
-					}
+					go s.ProcessActiveStandBy(nil)
+					//if err != nil {
+					//	log.Error("redo ProcessActiveStandby after keepalive channel close failed", zap.Error(err))
+					//	close(s.liveCh)
+					//	return
+					//}
 				}
 			}
 		}
@@ -984,7 +984,7 @@ func (s *Session) ProcessActiveStandBy(activateFunc func() error) error {
 		if err != nil {
 			log.Error("register active key to etcd failed", zap.Error(err))
 			leasesResp, _ := s.etcdCli.Leases(s.ctx)
-			log.Info("leasesResp", zap.Any("leasesResp", leasesResp))
+			log.Info("leasesResp", zap.String("leasesResp", leasesResp.String()))
 			return false, -1, err
 		}
 		doRegistered := txnResp.Succeeded

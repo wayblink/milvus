@@ -363,7 +363,11 @@ func (s *Session) registerService(retryTimes uint, reRegister bool) (<-chan *cli
 			log.Error("register service", zap.String("key", completeKey), zap.Error(err))
 			return err
 		}
-		log.Info("Update lease ID", zap.Any("before", int64(*s.leaseID)), zap.Int64("after", int64(resp.ID)))
+		if s.leaseID == nil {
+			log.Info("Update lease ID", zap.Int64("after", int64(resp.ID)))
+		} else {
+			log.Info("Update lease ID", zap.Int64("before", int64(*s.leaseID)), zap.Int64("after", int64(resp.ID)))
+		}
 		s.leaseID = &resp.ID
 		sessionJSON, err := json.Marshal(s)
 		if err != nil {
@@ -371,8 +375,12 @@ func (s *Session) registerService(retryTimes uint, reRegister bool) (<-chan *cli
 		}
 
 		if reRegister {
-			txnResp, err := s.etcdCli.Txn(s.ctx).
-				Then(clientv3.OpPut(completeKey, string(sessionJSON), clientv3.WithLease(resp.ID))).Commit()
+			txn := s.etcdCli.Txn(s.ctx).
+				Then(clientv3.OpPut(completeKey, string(sessionJSON), clientv3.WithLease(resp.ID)))
+			if !s.isStandby.Load().(bool) && s.enableActiveStandBy {
+				txn = txn.Then(clientv3.OpPut(s.activeKey, string(sessionJSON), clientv3.WithLease(resp.ID)))
+			}
+			txnResp, err := txn.Commit()
 			if err != nil {
 				log.Warn("retry register session error", zap.String("Key", completeKey), zap.Error(err))
 				return err
@@ -452,12 +460,6 @@ func (s *Session) processKeepAliveResponse() {
 						return
 					}
 					s.leaseKeepAliveCh = ch
-					go s.ProcessActiveStandBy(nil)
-					//if err != nil {
-					//	log.Error("redo ProcessActiveStandby after keepalive channel close failed", zap.Error(err))
-					//	close(s.liveCh)
-					//	return
-					//}
 				}
 			}
 		}
@@ -846,91 +848,6 @@ func (s *Session) SetEnableActiveStandBy(enable bool) {
 func (s *Session) updateStandby(b bool) {
 	s.isStandby.Store(b)
 }
-
-//func (s *Session) RegisterActive() chan bool {
-//	activeCh := make(chan bool, 1)
-//
-//	registerActiveFn := func(leaseID int64) (bool, int64, error) {
-//		log.Info(fmt.Sprintf("try to register as ACTIVE %v service...", s.ServerName))
-//		sessionJSON, err := json.Marshal(s)
-//		if err != nil {
-//			log.Error("json marshal error", zap.Error(err))
-//			return false, -1, err
-//		}
-//		txnResp, err := s.etcdCli.Txn(s.ctx).If(
-//			clientv3.Compare(
-//				clientv3.Version(s.activeKey),
-//				"=",
-//				0)).
-//			Then(clientv3.OpPut(s.activeKey, string(sessionJSON), clientv3.WithLease(clientv3.LeaseID(leaseID)))).Commit()
-//		if err != nil {
-//			log.Error("register active key to etcd failed", zap.Error(err))
-//			return false, -1, err
-//		}
-//		doRegistered := txnResp.Succeeded
-//		if doRegistered {
-//			log.Info(fmt.Sprintf("register ACTIVE %s", s.ServerName))
-//		} else {
-//			log.Info(fmt.Sprintf("ACTIVE %s has already been registered", s.ServerName))
-//		}
-//		revision := txnResp.Header.GetRevision()
-//		return doRegistered, revision, nil
-//	}
-//	s.updateStandby(true)
-//	log.Info(fmt.Sprintf("serverName: %v enter STANDBY mode", s.ServerName))
-//	go func() {
-//		for s.isStandby.Load().(bool) {
-//			log.Info(fmt.Sprintf("serverName: %v is in STANDBY ...", s.ServerName))
-//			time.Sleep(10 * time.Second)
-//		}
-//	}()
-//
-//	for {
-//		leaseID := int64(*s.leaseID)
-//		log.Debug("register via leaseID", zap.Int64("leaseID", leaseID))
-//		registered, revision, err := registerActiveFn(leaseID)
-//		if err != nil {
-//			time.Sleep(time.Second * 1)
-//			continue
-//		}
-//		if registered {
-//			break
-//		}
-//		log.Info(fmt.Sprintf("%s start to watch ACTIVE key %s", s.ServerName, s.activeKey))
-//		ctx, cancel := context.WithCancel(s.ctx)
-//		watchChan := s.etcdCli.Watch(ctx, s.activeKey, clientv3.WithPrevKV(), clientv3.WithRev(revision))
-//		select {
-//		case <-ctx.Done():
-//			cancel()
-//		case wresp, ok := <-watchChan:
-//			if !ok {
-//				cancel()
-//			}
-//			if wresp.Err() != nil {
-//				cancel()
-//			}
-//			for _, event := range wresp.Events {
-//				switch event.Type {
-//				case mvccpb.PUT:
-//					log.Info("watch the ACTIVE key", zap.Any("ADD", event.Kv))
-//				case mvccpb.DELETE:
-//					log.Info("watch the ACTIVE key", zap.Any("DELETE", event.Kv))
-//					cancel()
-//				}
-//			}
-//		}
-//		cancel()
-//		log.Info(fmt.Sprintf("stop watching ACTIVE key %v", s.activeKey))
-//	}
-//
-//	s.updateStandby(false)
-//	log.Info(fmt.Sprintf("serverName: %v quit STANDBY mode, this node will become ACTIVE", s.ServerName))
-//	if s.activateFunc != nil {
-//		return s.activateFunc()
-//	}
-//	return nil
-//
-//}
 
 // ProcessActiveStandBy is used by coordinators to do active-standby mechanism.
 // coordinator enabled active-standby will first call Register and then call ProcessActiveStandBy.

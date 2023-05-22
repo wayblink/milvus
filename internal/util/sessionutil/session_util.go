@@ -377,7 +377,7 @@ func (s *Session) registerService(retryTimes uint, reRegister bool) (<-chan *cli
 		if reRegister {
 			txn := s.etcdCli.Txn(s.ctx).
 				Then(clientv3.OpPut(completeKey, string(sessionJSON), clientv3.WithLease(resp.ID)))
-			if !s.isStandby.Load().(bool) && s.enableActiveStandBy {
+			if s.enableActiveStandBy && !s.isStandby.Load().(bool) {
 				txn = txn.Then(clientv3.OpPut(s.activeKey, string(sessionJSON), clientv3.WithLease(resp.ID)))
 			}
 			txnResp, err := txn.Commit()

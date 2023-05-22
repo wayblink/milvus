@@ -426,13 +426,11 @@ func (s *Session) processKeepAliveResponse(ch <-chan *clientv3.LeaseKeepAliveRes
 					}
 					keepAliveCtx, keepAliveCancel := context.WithCancel(context.Background())
 					s.keepAliveCancel = &keepAliveCancel
-					leaseTimeToLiveResponse, err := s.etcdCli.TimeToLive(keepAliveCtx, *s.leaseID)
+
+					leaseResp, err := s.etcdCli.KeepAliveOnce(keepAliveCtx, *s.leaseID)
 					if err != nil {
-						log.Warn("leaseTimeToLiveResponse error", zap.Int64("leaseID", int64(*s.leaseID)), zap.Error(err))
-						close(s.liveCh)
-						return
+						log.Warn("leaseResp", zap.String("leaseResp", leaseResp.String()))
 					}
-					log.Info("leaseTimeToLiveResponse", zap.String("leaseTimeToLiveResponse", leaseTimeToLiveResponse.String()))
 					chNew, err := s.etcdCli.KeepAlive(keepAliveCtx, *s.leaseID)
 					if err != nil {
 						log.Warn("got error during keeping alive with etcd", zap.Error(err))

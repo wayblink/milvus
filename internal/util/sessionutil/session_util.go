@@ -345,22 +345,27 @@ func (s *Session) initWatchSessionCh() {
 // Exclusive means whether this service can exist two at the same time, if so,
 // it is false. Otherwise, set it to true.
 func (s *Session) registerService(retryTimes uint, reRegister bool) (<-chan *clientv3.LeaseKeepAliveResponse, error) {
+	var sessionKey string
 	if s.enableActiveStandBy {
-		s.updateStandby(true)
+		sessionKey = path.Join(s.metaRoot, DefaultServiceRoot, fmt.Sprintf("%s-%d", s.ServerName, s.ServerID))
+		if !reRegister {
+			s.updateStandby(true)
+		}
+	} else {
+		sessionKey = s.getSessionKey()
 	}
-	completeKey := s.getCompleteKey()
 	var ch <-chan *clientv3.LeaseKeepAliveResponse
 	log.Info("service begin to register to etcd", zap.String("serverName", s.ServerName), zap.Int64("ServerID", s.ServerID))
 
 	registerFn := func() error {
 		log.Info("retry register service",
 			zap.String("serverName", s.ServerName),
-			zap.String("key", completeKey),
+			zap.String("key", sessionKey),
 			zap.Int64("ServerID", s.ServerID))
 
 		resp, err := s.etcdCli.Grant(s.ctx, s.sessionTTL)
 		if err != nil {
-			log.Error("register service", zap.String("key", completeKey), zap.Error(err))
+			log.Error("register service", zap.String("key", sessionKey), zap.Error(err))
 			return err
 		}
 		if s.leaseID == nil {
@@ -375,37 +380,39 @@ func (s *Session) registerService(retryTimes uint, reRegister bool) (<-chan *cli
 		}
 
 		if reRegister {
-			txn := s.etcdCli.Txn(s.ctx).
-				Then(clientv3.OpPut(completeKey, string(sessionJSON), clientv3.WithLease(resp.ID)))
+			txn := s.etcdCli.Txn(s.ctx)
 			if s.enableActiveStandBy && !s.isStandby.Load().(bool) {
-				txn = txn.Then(clientv3.OpPut(s.activeKey, string(sessionJSON), clientv3.WithLease(resp.ID)))
+				txn = txn.Then(clientv3.OpPut(sessionKey, string(sessionJSON), clientv3.WithLease(resp.ID)),
+					clientv3.OpPut(s.activeKey, string(sessionJSON), clientv3.WithLease(resp.ID)))
+			} else {
+				txn = txn.Then(clientv3.OpPut(sessionKey, string(sessionJSON), clientv3.WithLease(resp.ID)))
 			}
 			txnResp, err := txn.Commit()
 			if err != nil {
-				log.Warn("retry register session error", zap.String("Key", completeKey), zap.Error(err))
+				log.Warn("retry register session error", zap.String("Key", sessionKey), zap.Error(err))
 				return err
 			}
 			if !txnResp.Succeeded {
-				return fmt.Errorf("retry register session error not succeed: %s", completeKey)
+				return fmt.Errorf("retry register session error not succeed: %s", sessionKey)
 			}
 		} else {
 			txnResp, err := s.etcdCli.Txn(s.ctx).If(
 				clientv3.Compare(
-					clientv3.Version(completeKey),
+					clientv3.Version(sessionKey),
 					"=",
 					0)).
-				Then(clientv3.OpPut(completeKey, string(sessionJSON), clientv3.WithLease(resp.ID))).Commit()
+				Then(clientv3.OpPut(sessionKey, string(sessionJSON), clientv3.WithLease(resp.ID))).Commit()
 			if err != nil {
 				log.Warn("compare and swap error, maybe the Key has already been registered", zap.Error(err))
 				return err
 			}
 
 			if !txnResp.Succeeded {
-				return fmt.Errorf("function CompareAndSwap error for compare is false for Key: %s", completeKey)
+				return fmt.Errorf("function CompareAndSwap error for compare is false for Key: %s", sessionKey)
 			}
 		}
 
-		log.Info("put session key into etcd", zap.String("key", completeKey), zap.String("value", string(sessionJSON)),
+		log.Info("put session key into etcd", zap.String("key", sessionKey), zap.String("value", string(sessionJSON)),
 			zap.Any("lease", resp.ID))
 
 		keepAliveCtx, keepAliveCancel := context.WithCancel(context.Background())

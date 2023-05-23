@@ -399,8 +399,8 @@ func (q *QuotaCenter) calculateReadRates() {
 
 		q.guaranteeMinRate(Params.QuotaConfig.DQLMinSearchRatePerCollection, internalpb.RateType_DQLSearch, collections...)
 		q.guaranteeMinRate(Params.QuotaConfig.DQLMinQueryRatePerCollection, internalpb.RateType_DQLQuery, collections...)
-		log.Info("QueryNodeMetrics when cool-off",
-			zap.Any("metrics", q.queryNodeMetrics))
+		//log.Info("QueryNodeMetrics when cool-off",
+		//	zap.Any("metrics", q.queryNodeMetrics))
 	}
 
 	// TODO: unify search and query?

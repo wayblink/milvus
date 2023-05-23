@@ -427,7 +427,7 @@ func (s *Session) registerService(retryTimes uint, reRegister bool) (<-chan *cli
 		log.Info("Service registered successfully", zap.String("ServerName", s.ServerName), zap.Int64("serverID", s.ServerID))
 		return nil
 	}
-	err := retry.Do(s.ctx, registerFn, retry.Attempts(uint(retryTimes)), retry.Sleep(time.Second))
+	err := retry.Do(s.ctx, registerFn, retry.Attempts(uint(retryTimes)), retry.FnTimeout(time.Second*time.Duration(3)), retry.TotalTimeout(time.Second*time.Duration(s.sessionTTL)))
 	if err != nil {
 		return nil, err
 	}
@@ -455,14 +455,18 @@ func (s *Session) processKeepAliveResponse() {
 				}()
 				if !ok || resp == nil {
 					if !ok {
-						log.Warn("session keepalive channel closed")
+						log.Warn("session keepalive channel closed", zap.String("serverName", s.ServerName))
 					} else {
-						log.Warn("session keepalive response failed")
+						log.Warn("session keepalive response failed", zap.String("serverName", s.ServerName))
 					}
 					// re-register
-					ch, err := s.registerService(uint(s.sessionRetryTimes), true)
+					//time.Sleep(time.Second * time.Duration(5))
+					ch, err := s.registerService(10, true)
 					if err != nil {
-						log.Error("re-register after keepalive channel close failed", zap.Error(err))
+						log.Error("re-register after keepalive channel close failed",
+							zap.String("serverName", s.ServerName),
+							zap.Int64("serverID", s.ServerID),
+							zap.Error(err))
 						close(s.liveCh)
 						return
 					}

@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/milvus-io/milvus/internal/log"
 	"testing"
 	"time"
 
@@ -55,12 +56,15 @@ func TestAttempts(t *testing.T) {
 
 func TestMaxSleepTime(t *testing.T) {
 	ctx := context.Background()
+	log.Warn("retry func start")
 
 	testFn := func() error {
+		time.Sleep(time.Second * 20)
 		return fmt.Errorf("some error")
 	}
 
-	err := Do(ctx, testFn, Attempts(3), MaxSleepTime(200*time.Millisecond))
+	err := Do(ctx, testFn, Attempts(60), FnTimeout(time.Second*10), TotalTimeout(time.Second*60))
+	log.Warn("retry func end")
 	assert.NotNil(t, err)
 	fmt.Println(err)
 }

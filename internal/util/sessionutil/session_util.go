@@ -80,7 +80,7 @@ type Session struct {
 	TriggerKill bool
 	Version     semver.Version `json:"Version,omitempty"`
 
-	leaseKeepAliveCh  <-chan *clientv3.LeaseKeepAliveResponse
+	leaseKeepAliveCh  *<-chan *clientv3.LeaseKeepAliveResponse
 	liveCh            chan bool
 	etcdCli           *clientv3.Client
 	leaseID           *clientv3.LeaseID
@@ -104,6 +104,8 @@ type Session struct {
 
 	activateFunc func() error
 	//activateChan chan bool
+
+	keepAliveLoop int
 }
 
 type SessionOption func(session *Session)
@@ -194,6 +196,7 @@ func NewSession(ctx context.Context, metaRoot string, client *clientv3.Client, o
 		useCustomConfig:   false,
 		sessionTTL:        GlobalParams.CommonCfg.SessionTTL,
 		sessionRetryTimes: GlobalParams.CommonCfg.SessionRetryTimes,
+		keepAliveLoop:     0,
 	}
 
 	session.apply(opts...)
@@ -249,9 +252,8 @@ func (s *Session) Register() {
 	if err != nil {
 		panic(err)
 	}
-	s.leaseKeepAliveCh = ch
 	s.liveCh = make(chan bool)
-	s.processKeepAliveResponse()
+	s.processKeepAliveResponse(ch)
 	s.UpdateRegistered(true)
 }
 
@@ -362,7 +364,6 @@ func (s *Session) registerService(retryTimes uint, reRegister bool) (<-chan *cli
 			zap.String("serverName", s.ServerName),
 			zap.String("key", sessionKey),
 			zap.Int64("ServerID", s.ServerID))
-
 		resp, err := s.etcdCli.Grant(s.ctx, s.sessionTTL)
 		if err != nil {
 			log.Error("register service", zap.String("key", sessionKey), zap.Error(err))
@@ -436,9 +437,10 @@ func (s *Session) registerService(retryTimes uint, reRegister bool) (<-chan *cli
 
 // processKeepAliveResponse processes the response of etcd keepAlive interface
 // If keepAlive fails for unexpected error, it will send a signal to the channel.
-func (s *Session) processKeepAliveResponse() {
+func (s *Session) processKeepAliveResponse(ch <-chan *clientv3.LeaseKeepAliveResponse) {
 	s.wg.Add(1)
 	go func() {
+		s.keepAliveLoop = s.keepAliveLoop + 1
 		defer s.wg.Done()
 		for {
 			select {
@@ -448,29 +450,41 @@ func (s *Session) processKeepAliveResponse() {
 					s.keepAliveCancel()
 				}
 				return
-			case resp, ok := <-s.leaseKeepAliveCh:
+			case resp, ok := <-ch:
 				s.etcdLeaderFail.Store(true)
 				defer func() {
 					s.etcdLeaderFail.Store(false)
 				}()
 				if !ok || resp == nil {
 					if !ok {
-						log.Warn("session keepalive channel closed", zap.String("serverName", s.ServerName))
+						log.Warn("session keepalive channel closed", zap.Int("s.keepAliveLoop", s.keepAliveLoop), zap.String("serverName", s.ServerName))
 					} else {
-						log.Warn("session keepalive response failed", zap.String("serverName", s.ServerName))
+						log.Warn("session keepalive response failed", zap.Int("s.keepAliveLoop", s.keepAliveLoop), zap.String("serverName", s.ServerName))
 					}
-					// re-register
-					//time.Sleep(time.Second * time.Duration(5))
-					ch, err := s.registerService(10, true)
+
+					keepAliveCtx, keepAliveCancel := context.WithCancel(context.Background())
+					s.keepAliveCancel = func() {
+						keepAliveCancel()
+					}
+					chNew, err := s.etcdCli.KeepAlive(keepAliveCtx, *s.leaseID)
 					if err != nil {
-						log.Error("re-register after keepalive channel close failed",
-							zap.String("serverName", s.ServerName),
-							zap.Int64("serverID", s.ServerID),
-							zap.Error(err))
-						close(s.liveCh)
+						log.Warn("retry keep alive fail", zap.Error(err))
+						// re-register
+						//time.Sleep(time.Second * time.Duration(5))
+						chNew2, err := s.registerService(10, true)
+						if err != nil {
+							log.Error("re-register after keepalive channel close failed",
+								zap.String("serverName", s.ServerName),
+								zap.Int64("serverID", s.ServerID),
+								zap.Error(err))
+							close(s.liveCh)
+							return
+						}
+						s.leaseKeepAliveCh = &chNew2
+					} else {
+						s.processKeepAliveResponse(chNew)
 						return
 					}
-					s.leaseKeepAliveCh = ch
 				}
 			}
 		}

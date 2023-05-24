@@ -80,7 +80,7 @@ type Session struct {
 	TriggerKill bool
 	Version     semver.Version `json:"Version,omitempty"`
 
-	leaseKeepAliveCh  *<-chan *clientv3.LeaseKeepAliveResponse
+	leaseKeepAliveCh  <-chan *clientv3.LeaseKeepAliveResponse
 	liveCh            chan bool
 	etcdCli           *clientv3.Client
 	leaseID           *clientv3.LeaseID
@@ -466,25 +466,65 @@ func (s *Session) processKeepAliveResponse(ch <-chan *clientv3.LeaseKeepAliveRes
 					s.keepAliveCancel = func() {
 						keepAliveCancel()
 					}
-					chNew, err := s.etcdCli.KeepAlive(keepAliveCtx, *s.leaseID)
-					if err != nil {
-						log.Warn("retry keep alive fail", zap.Error(err))
-						// re-register
-						//time.Sleep(time.Second * time.Duration(5))
-						chNew2, err := s.registerService(10, true)
-						if err != nil {
-							log.Error("re-register after keepalive channel close failed",
-								zap.String("serverName", s.ServerName),
-								zap.Int64("serverID", s.ServerID),
-								zap.Error(err))
-							close(s.liveCh)
-							return
+					leases, _ := s.etcdCli.Leases(keepAliveCtx)
+					for _, lease := range leases.Leases {
+						leaseResp, _ := s.etcdCli.TimeToLive(keepAliveCtx, lease.ID)
+						log.Debug("active lease", zap.String("lease", leaseResp.String()), zap.Int64("leaseID", int64(*s.leaseID)))
+						if int64(leaseResp.ID) == int64(*s.leaseID) {
+							chNew, err := s.etcdCli.KeepAlive(keepAliveCtx, *s.leaseID)
+							if err != nil {
+								log.Warn("retry keep alive fail", zap.Error(err))
+								// re-register
+								//time.Sleep(time.Second * time.Duration(5))
+								chNew2, err := s.registerService(10, true)
+								if err != nil {
+									log.Error("re-register after keepalive channel close failed",
+										zap.String("serverName", s.ServerName),
+										zap.Int64("serverID", s.ServerID),
+										zap.Error(err))
+									close(s.liveCh)
+									return
+								}
+								s.leaseKeepAliveCh = chNew2
+							} else {
+								s.processKeepAliveResponse(chNew)
+								return
+							}
 						}
-						s.leaseKeepAliveCh = &chNew2
-					} else {
-						s.processKeepAliveResponse(chNew)
+
+					}
+
+					chNew2, err := s.registerService(10, true)
+					if err != nil {
+						log.Error("re-register after keepalive channel close failed",
+							zap.String("serverName", s.ServerName),
+							zap.Int64("serverID", s.ServerID),
+							zap.Error(err))
+						close(s.liveCh)
 						return
 					}
+					s.processKeepAliveResponse(chNew2)
+					return
+
+					//chNew, err := s.etcdCli.KeepAlive(keepAliveCtx, *s.leaseID)
+					//if err != nil {
+					//	log.Warn("retry keep alive fail", zap.Error(err))
+					//	// re-register
+					//	//time.Sleep(time.Second * time.Duration(5))
+					//	chNew2, err := s.registerService(10, true)
+					//	if err != nil {
+					//		log.Error("re-register after keepalive channel close failed",
+					//			zap.String("serverName", s.ServerName),
+					//			zap.Int64("serverID", s.ServerID),
+					//			zap.Error(err))
+					//		close(s.liveCh)
+					//		return
+					//	}
+					//	s.leaseKeepAliveCh = chNew2
+					//} else {
+					//	s.processKeepAliveResponse(chNew)
+					//	return
+					//}
 				}
 			}
 		}

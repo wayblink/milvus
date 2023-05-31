@@ -139,6 +139,7 @@ func (p *EtcdConfig) initEndpoints() {
 		panic(err)
 	}
 	p.Endpoints = strings.Split(endpoints, ",")
+	log.Info("wayblink Endpoints", zap.String("endpoints", endpoints))
 }
 
 func (p *EtcdConfig) initMetaRootPath() {

@@ -13,6 +13,7 @@ import (
 
 const (
 	MemoryCategory_Compact = "compact"
+	MemoryCategory_Insert  = "insert"
 )
 
 // MemoryUnit declare memory usage of certain category

@@ -296,6 +296,18 @@ func (iData *InsertData) IsEmpty() bool {
 	return (!ok) || (timeFieldData.RowNum() <= 0)
 }
 
+func (iData *InsertData) MemorySize() int64 {
+	if iData == nil {
+		return 0
+	}
+
+	var totalSize int64 = 0
+	for _, v := range iData.Data {
+		totalSize = totalSize + int64(v.GetMemorySize())
+	}
+	return totalSize
+}
+
 // InsertCodec serializes and deserializes the insert data
 // Blob key example:
 // ${tenant}/insert_log/${collection_id}/${partition_id}/${segment_id}/${field_id}/${log_idx}

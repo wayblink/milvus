@@ -21,16 +21,15 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/milvus-io/milvus/pkg/util/tsoutil"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
-
-	"github.com/milvus-io/milvus/pkg/util/typeutil"
+	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/metrics"
 	"github.com/milvus-io/milvus/pkg/mq/msgstream"
-	"go.uber.org/zap"
+	"github.com/milvus-io/milvus/pkg/util/tsoutil"
+	"github.com/milvus-io/milvus/pkg/util/typeutil"
 )
 
 // InputNode is the entry point of flowgragh

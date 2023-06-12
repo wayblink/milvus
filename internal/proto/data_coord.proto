@@ -291,6 +291,7 @@ message SegmentInfo {
   // (2) the bulk insert task that creates this segment has not yet reached `ImportCompleted` state.
   bool is_importing = 17;
   bool is_fake = 18;
+  repeated common.KeyValuePair params = 19;
 }
 
 message SegmentStartPosition {
@@ -310,6 +311,7 @@ message SaveBinlogPathsRequest {
   repeated FieldBinlog deltalogs = 9;
   bool dropped = 10;
   bool importing = 11;
+  repeated common.KeyValuePair segment_params = 12;
 }
 
 message CheckPoint {

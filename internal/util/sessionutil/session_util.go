@@ -435,17 +435,27 @@ func (s *Session) processKeepAliveResponse(ch <-chan *clientv3.LeaseKeepAliveRes
 						s.safeCloseLiveCh()
 						return
 					}
-					log.Info("start try to KeepAliveOnce", zap.String("serverName", s.ServerName))
+					log.Info("start try to KeepAliveOnce", zap.String("serverName", s.ServerName), zap.Int64("leaseID", int64(*s.leaseID)))
 					s.retryKeepAlive.Store(true)
 					// have to KeepAliveOnce before KeepAlive because KeepAlive won't throw error even when lease OT
-					keepAliveOnceResp, err := s.etcdCli.KeepAliveOnce(s.ctx, *s.leaseID)
+					// we find it KeepAliveOnce may stuck sometimes
+					err := retry.Do(s.ctx, func() error {
+						keepAliveOnceResp, err := s.etcdCli.KeepAliveOnce(s.ctx, *s.leaseID)
+						if err != nil {
+							// error="etcdserver: requested lease not found"
+							log.Warn("fail to keepAliveOnce", zap.String("serverName", s.ServerName), zap.Int64("leaseID", int64(*s.leaseID)), zap.Error(err))
+							return err
+						}
+						log.Info("succeed to KeepAliveOnce", zap.String("serverName", s.ServerName), zap.Int64("leaseID", int64(*s.leaseID)), zap.Any("resp", keepAliveOnceResp))
+						return nil
+					}, retry.Attempts(5), retry.FnTimeout(3*time.Second))
+
 					if err != nil {
-						// error="etcdserver: requested lease not found"
-						log.Warn("fail to keepAliveOnce", zap.Error(err))
+						log.Warn("fail to retry keepAliveOnce", zap.Error(err))
 						s.safeCloseLiveCh()
 						return
 					}
-					log.Info("succeed to KeepAliveOnce", zap.Any("resp", keepAliveOnceResp))
+
 					chNew, err := s.etcdCli.KeepAlive(s.ctx, *s.leaseID)
 					if err != nil {
 						log.Warn("fail to retry keepAlive", zap.Error(err))

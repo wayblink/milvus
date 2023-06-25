@@ -473,7 +473,7 @@ func (s *Session) processKeepAliveResponse(ch <-chan *clientv3.LeaseKeepAliveRes
 					// have to KeepAliveOnce before KeepAlive because KeepAlive won't throw error even when lease OT
 					var keepAliveOnceResp *clientv3.LeaseKeepAliveResponse
 					err := retry.Do(s.keepAliveCtx, func() error {
-						ctx, cancel := context.WithTimeout(s.keepAliveCtx, time.Second*5)
+						ctx, cancel := context.WithTimeout(s.keepAliveCtx, time.Second*10)
 						defer cancel()
 						resp, err := s.etcdCli.KeepAliveOnce(ctx, *s.leaseID)
 						keepAliveOnceResp = resp
@@ -489,7 +489,7 @@ func (s *Session) processKeepAliveResponse(ch <-chan *clientv3.LeaseKeepAliveRes
 
 					var chNew <-chan *clientv3.LeaseKeepAliveResponse
 					err = retry.Do(s.keepAliveCtx, func() error {
-						ctx, cancel := context.WithTimeout(s.keepAliveCtx, time.Second*5)
+						ctx, cancel := context.WithTimeout(s.keepAliveCtx, time.Second*10)
 						defer cancel()
 						ch, err := s.etcdCli.KeepAlive(ctx, *s.leaseID)
 						chNew = ch
@@ -569,6 +569,7 @@ func (s *Session) GetSessionsWithVersionRange(prefix string, r semver.Range) (ma
 	return res, resp.Header.Revision, nil
 }
 
+// GoingStop gracefully stop the session, update the session Stopping = true and save to etcd
 func (s *Session) GoingStop() error {
 	if s == nil || s.etcdCli == nil || s.leaseID == nil {
 		return errors.New("the session hasn't been init")

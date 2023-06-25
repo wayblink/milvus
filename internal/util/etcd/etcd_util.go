@@ -56,8 +56,9 @@ func GetEtcdClient(
 // GetRemoteEtcdClient returns client of remote etcd by given endpoints
 func GetRemoteEtcdClient(endpoints []string) (*clientv3.Client, error) {
 	return clientv3.New(clientv3.Config{
-		Endpoints:   endpoints,
-		DialTimeout: 5 * time.Second,
+		Endpoints:            endpoints,
+		DialTimeout:          5 * time.Second,
+		DialKeepAliveTimeout: 5 * time.Second,
 	})
 }
 
@@ -65,6 +66,7 @@ func GetRemoteEtcdSSLClient(endpoints []string, certFile string, keyFile string,
 	var cfg clientv3.Config
 	cfg.Endpoints = endpoints
 	cfg.DialTimeout = 5 * time.Second
+	cfg.DialKeepAliveTimeout = 5 * time.Second
 	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
 		return nil, errors.Wrap(err, "load etcd cert key pair error")

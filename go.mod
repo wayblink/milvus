@@ -217,4 +217,7 @@ replace (
 	github.com/go-kit/kit => github.com/go-kit/kit v0.1.0
 	github.com/streamnative/pulsarctl => github.com/xiaofan-luan/pulsarctl v0.5.1
 	github.com/tecbot/gorocksdb => github.com/milvus-io/gorocksdb v0.0.0-20220624081344-8c5f4212846b // indirect
+	go.etcd.io/etcd/api/v3 v3.5.5 => github.com/wayblink/etcd/api/v3 v3.0.0-20230807101040-bff02fb9bc03
+	go.etcd.io/etcd/client/v3 v3.5.5 => github.com/wayblink/etcd/client/v3 v3.0.0-20230807101040-bff02fb9bc03
+	go.etcd.io/etcd/server/v3 v3.5.5 => github.com/wayblink/etcd/server/v3 v3.0.0-20230807101040-bff02fb9bc03
 )

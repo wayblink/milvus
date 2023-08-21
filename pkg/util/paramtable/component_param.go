@@ -2123,7 +2123,7 @@ the number of binlog file reaches to max value.`,
 
 	p.IndexBasedCompaction = ParamItem{
 		Key:          "dataCoord.compaction.indexBasedCompaction",
-		Version:      "2.0.0",
+		Version:      "2.2.12",
 		DefaultValue: "true",
 		Export:       true,
 	}

@@ -221,6 +221,9 @@ replace (
 	github.com/milvus-io/milvus/pkg => ./pkg
 	github.com/streamnative/pulsarctl => github.com/xiaofan-luan/pulsarctl v0.5.1
 	github.com/tecbot/gorocksdb => github.com/milvus-io/gorocksdb v0.0.0-20220624081344-8c5f4212846b // indirect
+	go.etcd.io/etcd/api/v3 v3.5.5 => github.com/wayblink/etcd/api/v3 v3.0.0-20230821080457-b3c3dd7d6bbf
+	go.etcd.io/etcd/client/v3 v3.5.5 => github.com/wayblink/etcd/client/v3 v3.0.0-20230821080457-b3c3dd7d6bbf
+	go.etcd.io/etcd/server/v3 v3.5.5 => github.com/wayblink/etcd/server/v3 v3.0.0-20230821080457-b3c3dd7d6bbf
 )
 
 exclude github.com/apache/pulsar-client-go/oauth2 v0.0.0-20211108044248-fe3b7c4e445b

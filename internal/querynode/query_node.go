@@ -292,9 +292,11 @@ func (node *QueryNode) InitSegcore() error {
 
 func (node *QueryNode) InitMetrics() error {
 	localUsedSize, err := GetLocalUsedSize(Params.LocalStorageCfg.Path)
+	log.Info("wayblink GetLocalUsedSize", zap.Int64("localDiskUsage", localUsedSize))
 	if err != nil {
 		return err
 	}
+	log.Info("wayblink GetLocalUsedSize update", zap.Int64("localDiskUsage", localUsedSize))
 	metrics.QueryNodeDiskUsedSize.WithLabelValues(fmt.Sprint(Params.QueryNodeCfg.GetNodeID())).Set(float64(localUsedSize / 1024 / 1024))
 
 	return nil

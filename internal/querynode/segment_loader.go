@@ -815,9 +815,11 @@ func (loader *segmentLoader) checkSegmentSize(collectionID UniqueID, segmentLoad
 	maxSegmentSize := uint64(0)
 
 	localDiskUsage, err := GetLocalUsedSize(Params.LocalStorageCfg.Path)
+	log.Info("wayblink GetLocalUsedSize", zap.Int64("localDiskUsage", localDiskUsage))
 	if err != nil {
 		return fmt.Errorf("get local used size failed, collectionID = %d", collectionID)
 	}
+	log.Info("wayblink GetLocalUsedSize update", zap.Int64("localDiskUsage", localDiskUsage))
 	metrics.QueryNodeDiskUsedSize.WithLabelValues(fmt.Sprint(Params.QueryNodeCfg.GetNodeID())).Set(float64(toMB(uint64(localDiskUsage))))
 	predictDiskUsage := uint64(localDiskUsage)
 

@@ -126,6 +126,7 @@ func GetUsedMemoryCount() uint64 {
 	}
 	// not in container, calculate by `gopsutil`
 	stats, err := mem.VirtualMemory()
+	log.Info("wayblink debug memory stats", zap.String("stats", stats.String()))
 	if err != nil {
 		log.Warn("failed to get memory usage count",
 			zap.Error(err))

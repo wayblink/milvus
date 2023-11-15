@@ -12,6 +12,8 @@
 package hardware
 
 import (
+	"github.com/milvus-io/milvus/pkg/log"
+	"go.uber.org/zap"
 	"strings"
 
 	"github.com/cockroachdb/errors"
@@ -51,6 +53,7 @@ func getContainerMemUsed() (uint64, error) {
 		return 0, err
 	}
 	stats, err := control.Stat(cgroups.IgnoreNotExist)
+	log.Info("wayblink debug memory stats", zap.String("stats", stats.String()))
 	if err != nil {
 		return 0, err
 	}

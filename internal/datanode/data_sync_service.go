@@ -357,7 +357,7 @@ func getServiceWithChannel(initCtx context.Context, node *DataNode, info *datapb
 	ds.flushManager = flushManager
 
 	// init flowgraph
-	fg := flowgraph.NewTimeTickedFlowGraph(node.ctx)
+	fg := flowgraph.NewTimeTickedFlowGraph(node.ctx, config.vChannelName)
 	dmStreamNode, err := newDmInputNode(initCtx, node.dispClient, info.GetVchan().GetSeekPosition(), config)
 	if err != nil {
 		return nil, err
@@ -403,6 +403,7 @@ func getServiceWithChannel(initCtx context.Context, node *DataNode, info *datapb
 	if err := fg.AssembleNodes(dmStreamNode, ddNode, insertBufferNode, deleteNode, ttNode); err != nil {
 		return nil, err
 	}
+	log.Info("wayblink start flowgraph of dataSyncService")
 	ds.fg = fg
 
 	return ds, nil

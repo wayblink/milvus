@@ -87,7 +87,7 @@ func syncSegmentsAtTs() segmentSyncPolicy {
 			segmentIDs := lo.Map(segmentsWithBuffer, func(segment *Segment, _ int) UniqueID {
 				return segment.segmentID
 			})
-			log.Info("sync segment at ts", zap.Int64s("segmentIDs", segmentIDs),
+			log.Debug("sync segment at ts", zap.Int64s("segmentIDs", segmentIDs),
 				zap.Time("ts", tsoutil.PhysicalTime(ts)), zap.Time("flushTs", tsoutil.PhysicalTime(flushTs)))
 			return segmentIDs
 		}

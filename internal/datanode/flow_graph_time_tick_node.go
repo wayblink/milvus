@@ -110,7 +110,7 @@ func (ttn *ttNode) updateChannelCP(channelPos *msgpb.MsgPosition, curTs time.Tim
 		if channelPos.GetTimestamp() >= ttn.channel.getFlushTs() {
 			ttn.channel.setFlushTs(math.MaxUint64)
 		}
-		log.Info("UpdateChannelCheckpoint success",
+		log.Debug("UpdateChannelCheckpoint success",
 			zap.String("channel", ttn.vChannelName),
 			zap.Uint64("cpTs", channelPos.GetTimestamp()),
 			zap.Time("cpTime", channelCPTs))

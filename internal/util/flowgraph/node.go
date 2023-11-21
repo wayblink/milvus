@@ -55,21 +55,26 @@ type BaseNode struct {
 
 // manage nodeCtx
 type nodeCtxManager struct {
+	vChannelName string
 	inputNodeCtx *nodeCtx
 	closeWg      *sync.WaitGroup
 	closeOnce    sync.Once
 
 	inputNodeCloseCh chan struct{} // notify input node work to exit
-	workNodeCh       chan struct{} // notify ddnode and downstream node work to exit
+	workNodeCloseCh  chan struct{} // notify ddnode and downstream node work to exit
+
+	workNodeStarted         bool
+	workNodeLastConsumeTime int64
+	workNodeMu              sync.Mutex
 }
 
 // NewNodeCtxManager init with the inputNode and fg.closeWg
-func NewNodeCtxManager(nodeCtx *nodeCtx, closeWg *sync.WaitGroup) *nodeCtxManager {
+func NewNodeCtxManager(nodeCtx *nodeCtx, closeWg *sync.WaitGroup, vChannelName string) *nodeCtxManager {
 	return &nodeCtxManager{
+		vChannelName:     vChannelName,
 		inputNodeCtx:     nodeCtx,
 		closeWg:          closeWg,
 		inputNodeCloseCh: make(chan struct{}),
-		workNodeCh:       make(chan struct{}),
 	}
 }
 
@@ -77,9 +82,8 @@ func NewNodeCtxManager(nodeCtx *nodeCtx, closeWg *sync.WaitGroup) *nodeCtxManage
 func (nodeCtxManager *nodeCtxManager) Start() {
 	// in dmInputNode, message from mq to channel, alloc goroutines
 	// limit the goroutines in other node to prevent huge goroutines numbers
-	nodeCtxManager.closeWg.Add(2)
+	nodeCtxManager.closeWg.Add(1)
 	go nodeCtxManager.inputNodeStart()
-	go nodeCtxManager.workNodeStart()
 }
 
 func (nodeCtxManager *nodeCtxManager) inputNodeStart() {
@@ -125,13 +129,50 @@ func (nodeCtxManager *nodeCtxManager) inputNodeStart() {
 					close(inputNode.inputChannel)
 				}
 			}
-			// deliver to all following flow graph node.
-			inputNode.downstream.inputChannel <- output
+
+			if nodeCtxManager.workNodeStarted {
+				inputNode.downstream.inputChannel <- output
+				if !isEmptyMsg(output) {
+					nodeCtxManager.workNodeLastConsumeTime = time.Now().Unix()
+				} else {
+					if time.Now().Unix()-nodeCtxManager.workNodeLastConsumeTime > 60 {
+						nodeCtxManager.WorkNodeStop()
+						log.Info("work node is starving for a long time, close it to save resource", zap.String("vchannel", nodeCtxManager.vChannelName))
+					}
+				}
+			} else {
+				if !isEmptyMsg(output) {
+					nodeCtxManager.WorkNodeStart()
+					inputNode.downstream.inputChannel <- output
+					nodeCtxManager.workNodeLastConsumeTime = time.Now().Unix()
+				}
+			}
+
 			if enableTtChecker {
 				checker.Check(name)
 			}
 		}
 	}
+}
+
+func (nodeCtxManager *nodeCtxManager) WorkNodeStart() {
+	nodeCtxManager.workNodeMu.Lock()
+	defer nodeCtxManager.workNodeMu.Unlock()
+	if !nodeCtxManager.workNodeStarted {
+		nodeCtxManager.workNodeCloseCh = make(chan struct{})
+		nodeCtxManager.closeWg.Add(1)
+		go nodeCtxManager.workNodeStart()
+		nodeCtxManager.workNodeLastConsumeTime = time.Now().Unix()
+		nodeCtxManager.workNodeStarted = true
+	}
+	log.Info("start workNode", zap.String("vchannel", nodeCtxManager.vChannelName))
+}
+
+func (nodeCtxManager *nodeCtxManager) WorkNodeStop() {
+	nodeCtxManager.workNodeMu.Lock()
+	defer nodeCtxManager.workNodeMu.Unlock()
+	close(nodeCtxManager.workNodeCloseCh)
+	nodeCtxManager.workNodeStarted = false
 }
 
 func (nodeCtxManager *nodeCtxManager) workNodeStart() {
@@ -154,7 +195,7 @@ func (nodeCtxManager *nodeCtxManager) workNodeStart() {
 
 	for {
 		select {
-		case <-nodeCtxManager.workNodeCh:
+		case <-nodeCtxManager.workNodeCloseCh:
 			return
 		// handles node work spinning
 		// 1. collectMessage from upstream or just produce Msg from InputNode
@@ -182,7 +223,7 @@ func (nodeCtxManager *nodeCtxManager) workNodeStart() {
 				// the output decide whether the node should be closed.
 				if isCloseMsg(output) {
 					nodeCtxManager.closeOnce.Do(func() {
-						close(nodeCtxManager.workNodeCh)
+						close(nodeCtxManager.workNodeCloseCh)
 					})
 					if curNode.inputChannel != nil {
 						close(curNode.inputChannel)
@@ -240,6 +281,14 @@ func isCloseMsg(msgs []Msg) bool {
 		return msgs[0].IsClose()
 	}
 	return false
+}
+
+func isEmptyMsg(msgs []Msg) bool {
+	if len(msgs) == 0 {
+		return true
+	}
+	msMsg, _ := msgs[0].(*MsgStreamMsg)
+	return len(msMsg.TsMessages()) == 0
 }
 
 // Close handles cleanup logic and notify worker to quit

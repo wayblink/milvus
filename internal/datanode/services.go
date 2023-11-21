@@ -535,11 +535,15 @@ func (node *DataNode) FlushChannels(ctx context.Context, req *datapb.FlushChanne
 	}
 
 	for _, channel := range req.GetChannels() {
-		fg, ok := node.flowgraphManager.getFlowgraphService(channel)
+		dsService, ok := node.flowgraphManager.getFlowgraphService(channel)
 		if !ok {
 			return merr.Status(merr.WrapErrChannelNotFound(channel)), nil
 		}
-		fg.channel.setFlushTs(req.GetFlushTs())
+		dsService.channel.setFlushTs(req.GetFlushTs())
+		if dsService.fg != nil {
+			log.Info("dataSyncService flowgraph restart", zap.String("vchannel", dsService.vchannelName))
+			dsService.fg.ReStart()
+		}
 	}
 
 	return merr.Success(), nil

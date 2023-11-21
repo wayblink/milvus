@@ -35,6 +35,7 @@ type TimeTickedFlowGraph struct {
 	startOnce       sync.Once
 	closeWg         *sync.WaitGroup
 	closeGracefully *atomic.Bool
+	vChannelName    string
 }
 
 // AddNode add Node into flowgraph and fill nodeCtxManager
@@ -44,7 +45,7 @@ func (fg *TimeTickedFlowGraph) AddNode(node Node) {
 	}
 	fg.nodeCtx[node.Name()] = &nodeCtx
 	if node.IsInputNode() {
-		fg.nodeCtxManager = NewNodeCtxManager(&nodeCtx, fg.closeWg)
+		fg.nodeCtxManager = NewNodeCtxManager(&nodeCtx, fg.closeWg, fg.vChannelName)
 	}
 }
 
@@ -87,6 +88,10 @@ func (fg *TimeTickedFlowGraph) Start() {
 	})
 }
 
+func (fg *TimeTickedFlowGraph) ReStart() {
+	fg.nodeCtxManager.WorkNodeStart()
+}
+
 func (fg *TimeTickedFlowGraph) Blockall() {
 	for _, v := range fg.nodeCtx {
 		v.Block()
@@ -120,12 +125,13 @@ func (fg *TimeTickedFlowGraph) Close() {
 }
 
 // NewTimeTickedFlowGraph create timetick flowgraph
-func NewTimeTickedFlowGraph(ctx context.Context) *TimeTickedFlowGraph {
+func NewTimeTickedFlowGraph(ctx context.Context, vChannelName string) *TimeTickedFlowGraph {
 	flowGraph := TimeTickedFlowGraph{
 		nodeCtx:         make(map[string]*nodeCtx),
-		nodeCtxManager:  &nodeCtxManager{},
+		nodeCtxManager:  &nodeCtxManager{vChannelName: vChannelName},
 		closeWg:         &sync.WaitGroup{},
 		closeGracefully: atomic.NewBool(CloseImmediately),
+		vChannelName:    vChannelName,
 	}
 
 	return &flowGraph

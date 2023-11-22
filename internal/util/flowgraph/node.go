@@ -77,8 +77,8 @@ func NewNodeCtxManager(nodeCtx *nodeCtx, closeWg *sync.WaitGroup) *nodeCtxManage
 func (nodeCtxManager *nodeCtxManager) Start() {
 	// in dmInputNode, message from mq to channel, alloc goroutines
 	// limit the goroutines in other node to prevent huge goroutines numbers
-	nodeCtxManager.closeWg.Add(2)
-	go nodeCtxManager.inputNodeStart()
+	nodeCtxManager.closeWg.Add(1)
+	//go nodeCtxManager.inputNodeStart()
 	go nodeCtxManager.workNodeStart()
 }
 
@@ -136,8 +136,9 @@ func (nodeCtxManager *nodeCtxManager) inputNodeStart() {
 
 func (nodeCtxManager *nodeCtxManager) workNodeStart() {
 	defer nodeCtxManager.closeWg.Done()
-	ddNode := nodeCtxManager.inputNodeCtx.downstream
-	curNode := ddNode
+	//ddNode := nodeCtxManager.inputNodeCtx.downstream
+	inputNode := nodeCtxManager.inputNodeCtx
+	curNode := inputNode
 	// tt checker start
 	var checker *timerecord.GroupChecker
 	if enableTtChecker {
@@ -161,19 +162,21 @@ func (nodeCtxManager *nodeCtxManager) workNodeStart() {
 		// 2. invoke node.Operate
 		// 3. deliver the Operate result to downstream nodes
 		default:
-			// goroutine will work loop for all node(expect inpuNode) even when closeCh notify to exit
+			// goroutine will work loop for all node(expect inputNode) even when closeCh notify to exit
 			// input node will close all node
-			curNode = ddNode
+			curNode = inputNode
 			for curNode != nil {
 				// inputs from inputsMessages for Operate
 				var input, output []Msg
-				input = <-curNode.inputChannel
+				if curNode != inputNode {
+					input = <-curNode.inputChannel
+				}
 				// the input message decides whether the operate method is executed
 				n := curNode.node
 				curNode.blockMutex.RLock()
 				if !n.IsValidInMsg(input) {
 					curNode.blockMutex.RUnlock()
-					curNode = ddNode
+					curNode = inputNode
 					continue
 				}
 

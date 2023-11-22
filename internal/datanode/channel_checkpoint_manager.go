@@ -38,7 +38,7 @@ type channelCPManager struct {
 func newChannelCPManager(dn *DataNode) *channelCPManager {
 	return &channelCPManager{
 		dn:          dn,
-		workerPool:  conc.NewPool[any](500, conc.WithPreAlloc(true)),
+		workerPool:  conc.NewPool[any](1000, conc.WithPreAlloc(true)),
 		channelLock: lock.NewKeyLock[string](),
 		closeChan:   make(chan struct{}),
 	}

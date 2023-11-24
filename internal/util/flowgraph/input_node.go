@@ -19,12 +19,13 @@ package flowgraph
 import (
 	"context"
 	"fmt"
-
+	
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 
+	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/metrics"
 	"github.com/milvus-io/milvus/pkg/mq/msgstream"
@@ -49,6 +50,8 @@ type InputNode struct {
 	dataType     string
 
 	closeGracefully *atomic.Bool
+	lazy            bool
+	lazyCount       int64
 }
 
 // IsInputNode returns whether Node is InputNode
@@ -129,6 +132,11 @@ func (inNode *InputNode) Operate(in []Msg) []Msg {
 	}
 
 	var spans []trace.Span
+	defer func() {
+		for _, span := range spans {
+			span.End()
+		}
+	}()
 	for _, msg := range msgPack.Msgs {
 		ctx := msg.TraceCtx()
 		if ctx == nil {
@@ -140,16 +148,22 @@ func (inNode *InputNode) Operate(in []Msg) []Msg {
 		msg.SetTraceCtx(ctx)
 	}
 
+	if inNode.role == typeutil.DataNodeRole && inNode.lazy && len(msgPack.Msgs) > 0 && msgPack.Msgs[0].Type() == commonpb.MsgType_TimeTick {
+		if inNode.lazyCount == 0 {
+			inNode.lazyCount = inNode.lazyCount + 1
+		} else if inNode.lazyCount == 5 {
+			inNode.lazyCount = 0
+		} else {
+			return []Msg{}
+		}
+	}
+
 	var msgStreamMsg Msg = &MsgStreamMsg{
 		tsMessages:     msgPack.Msgs,
 		timestampMin:   msgPack.BeginTs,
 		timestampMax:   msgPack.EndTs,
 		startPositions: msgPack.StartPositions,
 		endPositions:   msgPack.EndPositions,
-	}
-
-	for _, span := range spans {
-		span.End()
 	}
 
 	return []Msg{msgStreamMsg}
@@ -170,5 +184,7 @@ func NewInputNode(input <-chan *msgstream.MsgPack, nodeName string, maxQueueLeng
 		collectionID:    collectionID,
 		dataType:        dataType,
 		closeGracefully: atomic.NewBool(CloseImmediately),
+		lazy:            true,
+		lazyCount:       0,
 	}
 }

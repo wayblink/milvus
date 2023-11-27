@@ -18,15 +18,13 @@ package bulkinsert
 
 import (
 	"context"
-	"os"
+	"fmt"
 	"strconv"
 	"testing"
 	"time"
 
 	"github.com/cockroachdb/errors"
 	"github.com/golang/protobuf/proto"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/zap"
 
@@ -42,9 +40,105 @@ import (
 )
 
 const (
-	TempFilesPath = "/tmp/integration_test/import/"
-	Dim           = 128
+	DIM8   = 8
+	DIM128 = 128
 )
+
+func GenerateNumpyFile(filePath string, rowCount int, fieldSchema *schemapb.FieldSchema) error {
+	dType := fieldSchema.DataType
+	if dType == schemapb.DataType_VarChar {
+		var data []string
+		for i := 0; i < rowCount; i++ {
+			data = append(data, "str")
+		}
+		err := importutil.CreateNumpyFile(filePath, data)
+		if err != nil {
+			log.Warn("failed to create numpy file", zap.Error(err))
+			return err
+		}
+	} else if dType == schemapb.DataType_FloatVector {
+		dimStr, ok := funcutil.KeyValuePair2Map(fieldSchema.GetTypeParams())[common.DimKey]
+		if !ok {
+			return errors.New("FloatVector field needs dim parameter")
+		}
+		dim, err := strconv.Atoi(dimStr)
+		if err != nil {
+			return err
+		}
+		switch dim {
+		case DIM128:
+			var data [][DIM128]float32
+			for i := 0; i < rowCount; i++ {
+				vec := [DIM128]float32{}
+				for j := 0; j < dim; j++ {
+					vec[j] = 1.1
+				}
+				data = append(data, vec)
+			}
+			err = importutil.CreateNumpyFile(filePath, data)
+			if err != nil {
+				log.Warn("failed to create numpy file", zap.Error(err))
+				return err
+			}
+		case DIM8:
+			var data [][DIM8]float32
+			for i := 0; i < rowCount; i++ {
+				vec := [DIM8]float32{}
+				for j := 0; j < dim; j++ {
+					vec[j] = 1.1
+				}
+				data = append(data, vec)
+			}
+			err = importutil.CreateNumpyFile(filePath, data)
+			if err != nil {
+				log.Warn("failed to create numpy file", zap.Error(err))
+				return err
+			}
+		default:
+			// dim must be a constant expression, so we make DIM128 a constant, if you want other dim value,
+			// please add new constant like: DIM16, DIM32, and change this part into switch case style
+			log.Warn("Unsupported dim value", zap.Int("dim", dim))
+			return errors.New("Unsupported dim value, please add new dim constants and case")
+		}
+	}
+	return nil
+}
+
+func BulkInsertSync(ctx context.Context, cluster *integration.MiniClusterV2, collectionName string, bulkInsertFiles []string, bulkInsertOptions []*commonpb.KeyValuePair) error {
+	importResp, err := cluster.Proxy.Import(ctx, &milvuspb.ImportRequest{
+		CollectionName: collectionName,
+		Files:          bulkInsertFiles,
+		Options:        bulkInsertOptions,
+	})
+	if err != nil {
+		return err
+	}
+	log.Info("Import result", zap.Any("importResp", importResp), zap.Int64s("tasks", importResp.GetTasks()))
+
+	tasks := importResp.GetTasks()
+	for _, task := range tasks {
+	loop:
+		for {
+			importTaskState, err := cluster.Proxy.GetImportState(ctx, &milvuspb.GetImportStateRequest{
+				Task: task,
+			})
+			if err != nil {
+				return err
+			}
+			switch importTaskState.GetState() {
+			case commonpb.ImportState_ImportFailed:
+			case commonpb.ImportState_ImportFailedAndCleaned:
+			case commonpb.ImportState_ImportCompleted:
+				break loop
+			default:
+				log.Info("import task state", zap.Int64("id", task), zap.String("state", importTaskState.GetState().String()))
+				time.Sleep(time.Second * time.Duration(3))
+				continue
+			}
+		}
+	}
+	return nil
+}
 
 type BulkInsertSuite struct {
 	integration.MiniClusterSuite
@@ -65,13 +159,15 @@ func (s *BulkInsertSuite) TestBulkInsert() {
 	prefix := "TestBulkInsert"
 	dbName := ""
 	collectionName := prefix + funcutil.GenRandomStr()
-	// floatVecField := floatVecField
-	dim := 128
+	dim := DIM128
+	pkFieldSchema := &schemapb.FieldSchema{Name: "id", DataType: schemapb.DataType_Int64, IsPrimaryKey: true, AutoID: true}
+	varcharFieldSchema := &schemapb.FieldSchema{Name: "image_path", DataType: schemapb.DataType_VarChar, TypeParams: []*commonpb.KeyValuePair{{Key: common.MaxLengthKey, Value: "65535"}}}
+	vecFieldSchema := &schemapb.FieldSchema{Name: "embeddings", DataType: schemapb.DataType_FloatVector, TypeParams: []*commonpb.KeyValuePair{{Key: common.DimKey, Value: fmt.Sprint(dim)}}}
 
 	schema := integration.ConstructSchema(collectionName, dim, true,
-		&schemapb.FieldSchema{Name: "id", DataType: schemapb.DataType_Int64, IsPrimaryKey: true, AutoID: true},
-		&schemapb.FieldSchema{Name: "image_path", DataType: schemapb.DataType_VarChar, TypeParams: []*commonpb.KeyValuePair{{Key: common.MaxLengthKey, Value: "65535"}}},
-		&schemapb.FieldSchema{Name: "embeddings", DataType: schemapb.DataType_FloatVector, TypeParams: []*commonpb.KeyValuePair{{Key: common.DimKey, Value: "128"}}},
+		pkFieldSchema,
+		varcharFieldSchema,
+		vecFieldSchema,
 	)
 	marshaledSchema, err := proto.Marshal(schema)
 	s.NoError(err)
@@ -95,19 +191,9 @@ func (s *BulkInsertSuite) TestBulkInsert() {
 	s.Equal(showCollectionsResp.GetStatus().GetErrorCode(), commonpb.ErrorCode_Success)
 	log.Info("ShowCollections result", zap.Any("showCollectionsResp", showCollectionsResp))
 
-	err = GenerateNumpyFile(c.ChunkManager.RootPath()+"/"+"embeddings.npy", 100, schemapb.DataType_FloatVector, []*commonpb.KeyValuePair{
-		{
-			Key:   common.DimKey,
-			Value: strconv.Itoa(Dim),
-		},
-	})
+	err = GenerateNumpyFile(c.ChunkManager.RootPath()+"/"+"embeddings.npy", 100, vecFieldSchema)
 	s.NoError(err)
-	err = GenerateNumpyFile(c.ChunkManager.RootPath()+"/"+"image_path.npy", 100, schemapb.DataType_VarChar, []*commonpb.KeyValuePair{
-		{
-			Key:   common.MaxLengthKey,
-			Value: strconv.Itoa(65535),
-		},
-	})
+	err = GenerateNumpyFile(c.ChunkManager.RootPath()+"/"+"image_path.npy", 100, varcharFieldSchema)
 	s.NoError(err)
 
 	bulkInsertFiles := []string{
@@ -118,35 +204,9 @@ func (s *BulkInsertSuite) TestBulkInsert() {
 	health1, err := c.DataCoord.CheckHealth(ctx, &milvuspb.CheckHealthRequest{})
 	s.NoError(err)
 	log.Info("dataCoord health", zap.Any("health1", health1))
-	importResp, err := c.Proxy.Import(ctx, &milvuspb.ImportRequest{
-		CollectionName: collectionName,
-		Files:          bulkInsertFiles,
-	})
-	s.NoError(err)
-	log.Info("Import result", zap.Any("importResp", importResp), zap.Int64s("tasks", importResp.GetTasks()))
 
-	tasks := importResp.GetTasks()
-	for _, task := range tasks {
-	loop:
-		for {
-			importTaskState, err := c.Proxy.GetImportState(ctx, &milvuspb.GetImportStateRequest{
-				Task: task,
-			})
-			s.NoError(err)
-			switch importTaskState.GetState() {
-			case commonpb.ImportState_ImportCompleted:
-				break loop
-			case commonpb.ImportState_ImportFailed:
-				break loop
-			case commonpb.ImportState_ImportFailedAndCleaned:
-				break loop
-			default:
-				log.Info("import task state", zap.Int64("id", task), zap.String("state", importTaskState.GetState().String()))
-				time.Sleep(time.Second * time.Duration(3))
-				continue
-			}
-		}
-	}
+	err = BulkInsertSync(ctx, c, collectionName, bulkInsertFiles, nil)
+	s.NoError(err)
 
 	health2, err := c.DataCoord.CheckHealth(ctx, &milvuspb.CheckHealthRequest{})
 	s.NoError(err)
@@ -213,59 +273,4 @@ func (s *BulkInsertSuite) TestBulkInsert() {
 
 func TestBulkInsert(t *testing.T) {
 	suite.Run(t, new(BulkInsertSuite))
-}
-
-func GenerateNumpyFile(filePath string, rowCount int, dType schemapb.DataType, typeParams []*commonpb.KeyValuePair) error {
-	if dType == schemapb.DataType_VarChar {
-		var data []string
-		for i := 0; i < rowCount; i++ {
-			data = append(data, "str")
-		}
-		err := importutil.CreateNumpyFile(filePath, data)
-		if err != nil {
-			log.Warn("failed to create numpy file", zap.Error(err))
-			return err
-		}
-	}
-	if dType == schemapb.DataType_FloatVector {
-		dimStr, ok := funcutil.KeyValuePair2Map(typeParams)[common.DimKey]
-		if !ok {
-			return errors.New("FloatVector field needs dim parameter")
-		}
-		dim, err := strconv.Atoi(dimStr)
-		if err != nil {
-			return err
-		}
-		// data := make([][]float32, rowCount)
-		var data [][Dim]float32
-		for i := 0; i < rowCount; i++ {
-			vec := [Dim]float32{}
-			for j := 0; j < dim; j++ {
-				vec[j] = 1.1
-			}
-			// v := reflect.Indirect(reflect.ValueOf(vec))
-			// log.Info("type", zap.Any("type", v.Kind()))
-			data = append(data, vec)
-			// v2 := reflect.Indirect(reflect.ValueOf(data))
-			// log.Info("type", zap.Any("type", v2.Kind()))
-		}
-		err = importutil.CreateNumpyFile(filePath, data)
-		if err != nil {
-			log.Warn("failed to create numpy file", zap.Error(err))
-			return err
-		}
-	}
-	return nil
-}
-
-func TestGenerateNumpyFile(t *testing.T) {
-	err := os.MkdirAll(TempFilesPath, os.ModePerm)
-	require.NoError(t, err)
-	err = GenerateNumpyFile(TempFilesPath+"embeddings.npy", 100, schemapb.DataType_FloatVector, []*commonpb.KeyValuePair{
-		{
-			Key:   common.DimKey,
-			Value: strconv.Itoa(Dim),
-		},
-	})
-	assert.NoError(t, err)
 }

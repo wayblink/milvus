@@ -37,6 +37,7 @@ import (
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/metastore/model"
 	"github.com/milvus-io/milvus/internal/proto/datapb"
+	"github.com/milvus-io/milvus/internal/proto/internalpb"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/util/segmentutil"
 	"github.com/milvus-io/milvus/pkg/common"
@@ -598,6 +599,20 @@ func UpdateCheckPointOperator(segmentID int64, importing bool, checkpoints []*da
 				zap.Int64("segment bin log row count (correct)", count))
 			segment.NumOfRows = count
 		}
+		return true
+	}
+}
+
+// update distribution
+func UpdateDistribution(segmentID int64, distribution *internalpb.DistributionInfo) UpdateOperator {
+	return func(modPack *updateSegmentPack) bool {
+		segment := modPack.Get(segmentID)
+		if segment == nil {
+			log.Warn("meta update: update distribution failed - segment not found",
+				zap.Int64("segmentID", segmentID))
+			return false
+		}
+		segment.DistributionInfo = distribution
 		return true
 	}
 }

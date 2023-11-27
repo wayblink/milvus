@@ -2433,9 +2433,11 @@ During compaction, the size of segment # of rows is able to exceed segment max #
 // /////////////////////////////////////////////////////////////////////////////
 // --- datanode ---
 type dataNodeConfig struct {
-	FlowGraphMaxQueueLength ParamItem `refreshable:"false"`
-	FlowGraphMaxParallelism ParamItem `refreshable:"false"`
-	MaxParallelSyncTaskNum  ParamItem `refreshable:"false"`
+	FlowGraphMaxQueueLength        ParamItem `refreshable:"false"`
+	FlowGraphMaxParallelism        ParamItem `refreshable:"false"`
+	FlowGraphSkipTimeTickMsgEnable ParamItem `refreshable:"true"`
+	FlowGraphSkipTimeTickMsgRatio  ParamItem `refreshable:"true"`
+	MaxParallelSyncTaskNum         ParamItem `refreshable:"false"`
 
 	// segment
 	FlushInsertBufferSize  ParamItem `refreshable:"true"`
@@ -2489,6 +2491,26 @@ func (p *dataNodeConfig) init(base *BaseTable) {
 		Export:       true,
 	}
 	p.FlowGraphMaxParallelism.Init(base.mgr)
+
+	p.FlowGraphSkipTimeTickMsgEnable = ParamItem{
+		Key:          "datanode.dataSync.flowGraph.skipTimeTickMsgEnable",
+		Version:      "2.3.4",
+		DefaultValue: "true",
+		PanicIfEmpty: false,
+		Doc:          "Support skip some timetick message to reduce CPU usage",
+		Export:       true,
+	}
+	p.FlowGraphSkipTimeTickMsgEnable.Init(base.mgr)
+
+	p.FlowGraphSkipTimeTickMsgRatio = ParamItem{
+		Key:          "datanode.dataSync.flowGraph.skipTimeTickMsgRatio",
+		Version:      "2.3.4",
+		DefaultValue: "5",
+		PanicIfEmpty: false,
+		Doc:          "Consume one every x timetick message",
+		Export:       true,
+	}
+	p.FlowGraphSkipTimeTickMsgRatio.Init(base.mgr)
 
 	p.MaxParallelSyncTaskNum = ParamItem{
 		Key:          "dataNode.dataSync.maxParallelSyncTaskNum",

@@ -75,10 +75,23 @@ func newProxyClientManager(creator proxyCreator) *proxyClientManager {
 	}
 }
 
-func (p *proxyClientManager) GetProxyClients(sessions []*sessionutil.Session) {
+func (p *proxyClientManager) AddProxyClients(sessions []*sessionutil.Session) {
 	for _, session := range sessions {
 		p.AddProxyClient(session)
 	}
+}
+
+func (p *proxyClientManager) GetProxyClients() map[int64]types.ProxyClient {
+	p.lock.RLock()
+	defer p.lock.RUnlock()
+	return p.proxyClient
+}
+
+func (p *proxyClientManager) GetProxyClient(serverID int64) (types.ProxyClient, bool) {
+	p.lock.RLock()
+	defer p.lock.RUnlock()
+	res, exist := p.proxyClient[serverID]
+	return res, exist
 }
 
 func (p *proxyClientManager) AddProxyClient(session *sessionutil.Session) {

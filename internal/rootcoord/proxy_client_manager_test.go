@@ -101,7 +101,7 @@ func (p *proxyMock) RefreshPolicyInfoCache(ctx context.Context, req *proxypb.Ref
 	}, nil
 }
 
-func TestProxyClientManager_GetProxyClients(t *testing.T) {
+func TestProxyClientManager_AddProxyClients(t *testing.T) {
 	paramtable.Init()
 
 	core, err := NewCore(context.Background(), nil)
@@ -129,7 +129,7 @@ func TestProxyClientManager_GetProxyClients(t *testing.T) {
 	}
 
 	sessions := []*sessionutil.Session{session}
-	pcm.GetProxyClients(sessions)
+	pcm.AddProxyClients(sessions)
 }
 
 func TestProxyClientManager_AddProxyClient(t *testing.T) {

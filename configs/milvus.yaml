@@ -171,6 +171,7 @@ proxy:
     # change to smaller value to limit client request and response
     serverMaxRecvSize: 67108864 # 64M
     serverMaxSendSize: 67108864 # 64M
+  skipAutoIDCheckWhenIDExisted: false
 
 
 

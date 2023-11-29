@@ -92,6 +92,23 @@ func (s *Server) Flush(ctx context.Context, req *datapb.FlushRequest) (*datapb.F
 		return resp, nil
 	}
 
+	channelCPs := make(map[string]*internalpb.MsgPosition, 0)
+	describeCollectionResp, err := s.rootCoordClient.DescribeCollection(ctx, &milvuspb.DescribeCollectionRequest{
+		Base: commonpbutil.NewMsgBase(
+			commonpbutil.WithMsgType(commonpb.MsgType_DescribeCollection),
+		),
+		// please do not specify the collection name alone after database feature.
+		CollectionID: req.GetCollectionID(),
+	})
+	log.Info("describeCollectionResp", zap.Any("describeCollectionResp", describeCollectionResp))
+	vchannels := describeCollectionResp.GetVirtualChannelNames()
+	for _, vchannel := range vchannels {
+		cp := s.meta.GetChannelCheckpoint(vchannel)
+		log.Info("vchannel cp", zap.String("channel", vchannel), zap.Any("cp", cp))
+		channelCPs[vchannel] = cp
+	}
+	resp.ChannelCps = channelCPs
+
 	// generate a timestamp timeOfSeal, all data before timeOfSeal is guaranteed to be sealed or flushed
 	ts, err := s.allocator.allocTimestamp(ctx)
 	if err != nil {
@@ -125,7 +142,8 @@ func (s *Server) Flush(ctx context.Context, req *datapb.FlushRequest) (*datapb.F
 		zap.Int64("collectionID", req.GetCollectionID()),
 		zap.Int64s("sealSegments", sealedSegmentIDs),
 		zap.Int64s("flushSegments", flushSegmentIDs),
-		zap.Int64("timeOfSeal", timeOfSeal.Unix()))
+		zap.Int64("timeOfSeal", timeOfSeal.Unix()),
+		zap.Any("channelCps", resp.GetChannelCps()))
 	resp.Status.ErrorCode = commonpb.ErrorCode_Success
 	resp.DbID = req.GetDbID()
 	resp.CollectionID = req.GetCollectionID()
@@ -1293,6 +1311,7 @@ func (s *Server) GetFlushState(ctx context.Context, req *milvuspb.GetFlushStateR
 		return resp, nil
 	}
 
+	channelCPs := make(map[string]*milvuspb.MsgPosition, 0)
 	var unflushed []UniqueID
 	for _, sid := range req.GetSegmentIDs() {
 		segment := s.meta.GetHealthySegment(sid)
@@ -1300,6 +1319,14 @@ func (s *Server) GetFlushState(ctx context.Context, req *milvuspb.GetFlushStateR
 		if segment == nil || segment.GetState() == commonpb.SegmentState_Flushing ||
 			segment.GetState() == commonpb.SegmentState_Flushed {
 			continue
+		}
+		vch := segment.SegmentInfo.GetInsertChannel()
+		cp := s.meta.GetChannelCheckpoint(vch)
+		channelCPs[vch] = &milvuspb.MsgPosition{
+			ChannelName: cp.GetChannelName(),
+			MsgID:       cp.GetMsgID(),
+			MsgGroup:    cp.GetMsgGroup(),
+			Timestamp:   cp.GetTimestamp(),
 		}
 		unflushed = append(unflushed, sid)
 	}
@@ -1312,6 +1339,7 @@ func (s *Server) GetFlushState(ctx context.Context, req *milvuspb.GetFlushStateR
 		resp.Flushed = true
 	}
 	resp.Status.ErrorCode = commonpb.ErrorCode_Success
+	resp.ChannelCps = channelCPs
 	return resp, nil
 }
 

@@ -46,12 +46,13 @@ import (
 
 type meta struct {
 	sync.RWMutex
-	ctx          context.Context
-	catalog      metastore.DataCoordCatalog
-	collections  map[UniqueID]*collectionInfo       // collection id to collection info
-	segments     *SegmentsInfo                      // segment id to segment info
-	channelCPs   map[string]*internalpb.MsgPosition // vChannel -> channel checkpoint/see position
-	chunkManager storage.ChunkManager
+	ctx             context.Context
+	catalog         metastore.DataCoordCatalog
+	collections     map[UniqueID]*collectionInfo       // collection id to collection info
+	collectionNames map[string]*collectionInfo         // collection id to collection info
+	segments        *SegmentsInfo                      // segment id to segment info
+	channelCPs      map[string]*internalpb.MsgPosition // vChannel -> channel checkpoint/see position
+	chunkManager    storage.ChunkManager
 }
 
 // A local cache of segment metric update. Must call commit() to take effect.
@@ -73,12 +74,13 @@ type collectionInfo struct {
 // NewMeta creates meta from provided `kv.TxnKV`
 func newMeta(ctx context.Context, catalog metastore.DataCoordCatalog, chunkManager storage.ChunkManager) (*meta, error) {
 	mt := &meta{
-		ctx:          ctx,
-		catalog:      catalog,
-		collections:  make(map[UniqueID]*collectionInfo),
-		segments:     NewSegmentsInfo(),
-		channelCPs:   make(map[string]*internalpb.MsgPosition),
-		chunkManager: chunkManager,
+		ctx:             ctx,
+		catalog:         catalog,
+		collections:     make(map[UniqueID]*collectionInfo),
+		collectionNames: make(map[string]*collectionInfo),
+		segments:        NewSegmentsInfo(),
+		channelCPs:      make(map[string]*internalpb.MsgPosition),
+		chunkManager:    chunkManager,
 	}
 	err := mt.reloadFromKV()
 	if err != nil {

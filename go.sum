@@ -713,8 +713,8 @@ github.com/uber/jaeger-lib v2.4.0+incompatible/go.mod h1:ComeNDZlWwrWnDv8aPp0Ba6
 github.com/ugorji/go/codec v1.2.11 h1:BMaWp1Bb6fHwEtbplGBGJ498wD+LKlNSl25MjdZY4dU=
 github.com/ugorji/go/codec v1.2.11/go.mod h1:UNopzCgEMSXjBc6AOMqYvWC1ktqTAfzJZUZgYf6w6lg=
 github.com/urfave/cli v1.22.2/go.mod h1:Gos4lmkARVdJ6EkW0WaNv/tZAAMe9V7XWyB60NtXRu0=
-github.com/wayblink/milvus-proto/go-api/v2 v2.0.0-20231129114526-07ac8c05e07e h1:KQ5W8yY0hHy2NUUUFbKvybURHz8mKQEKLd9Op5EXV9g=
-github.com/wayblink/milvus-proto/go-api/v2 v2.0.0-20231129114526-07ac8c05e07e/go.mod h1:1OIl0v5PQeNxIJhCvY+K55CBUOYDZevw9g9380u1Wek=
+github.com/wayblink/milvus-proto/go-api/v2 v2.0.0-20231130035024-0fa00bc315eb h1:HDe55utaD8dtETNWcRaN84EgrXAXpCKPPpCTCF3jPtM=
+github.com/wayblink/milvus-proto/go-api/v2 v2.0.0-20231130035024-0fa00bc315eb/go.mod h1:1OIl0v5PQeNxIJhCvY+K55CBUOYDZevw9g9380u1Wek=
 github.com/xiang90/probing v0.0.0-20190116061207-43a291ad63a2 h1:eY9dn8+vbi4tKz5Qo6v2eYzo7kUS51QINcR5jNpbZS8=
 github.com/xiang90/probing v0.0.0-20190116061207-43a291ad63a2/go.mod h1:UETIi67q53MR2AWcXfiuqkDkRtnGDLqkBTpCHuJHxtU=
 github.com/xiaofan-luan/pulsarctl v0.5.1 h1:2V+IWFarElzcln5WBbU3VNu3zC8Q7RS6rMpVs9oUfLg=

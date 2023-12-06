@@ -247,3 +247,35 @@ message Rate {
   RateType rt = 1;
   double r = 2;
 }
+
+// vector clustering info of data distribution
+message VectorClusteringInfo {
+  // clustering.clusterID, id of one cluster
+  int64 cluster_id = 1;
+  // clustering.operationID, id of one clustering operation, a clustering operation contains multiple clusters
+  int64 operation_id = 2;
+  // clustering.centroid
+  repeated float centroid = 3;
+  // clustering.size
+  int64 size = 4;
+}
+
+// a clustering operation contains multiple clusters triggered in import or compaction
+message VectorClusteringOperation {
+  // id of a clustering operation 
+  int64 operation_id = 1;
+  // clustering parameters such as clustering method, cluster number, etc.
+  repeated common.KeyValuePair params = 2;
+  // clustering results
+  repeated VectorClusteringInfo clusters = 3;
+}
+
+// Scalar field info of data distribution
+message ScalarRangeInfo {
+  string field = 1;
+}
+
+message DistributionInfo {
+  repeated VectorClusteringInfo vector_clustering_infos = 1;
+  repeated ScalarRangeInfo scalar_range_infos = 2;
+}

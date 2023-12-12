@@ -18,6 +18,7 @@ package datacoord
 
 import (
 	"context"
+	"errors"
 	"path"
 	"sort"
 	"strings"
@@ -60,10 +61,24 @@ type garbageCollector struct {
 	segRefer   *SegmentReferenceManager
 	indexCoord types.IndexCoord
 
-	startOnce sync.Once
-	stopOnce  sync.Once
-	wg        sync.WaitGroup
-	closeCh   chan struct{}
+	startOnce  sync.Once
+	stopOnce   sync.Once
+	wg         sync.WaitGroup
+	closeCh    chan struct{}
+	cmdCh      chan gcCmd
+	pauseUntil time.Time
+}
+
+type cmdType int32
+
+const (
+	pause cmdType = iota + 1
+	resume
+)
+
+type gcCmd struct {
+	cmdType  cmdType
+	duration time.Duration
 }
 
 // newGarbageCollector create garbage collector with meta and option
@@ -94,6 +109,37 @@ func (gc *garbageCollector) start() {
 	}
 }
 
+func (gc *garbageCollector) Pause(ctx context.Context, pauseDuration time.Duration) error {
+	if !gc.option.enabled {
+		log.Info("garbage collection not enabled")
+		return nil
+	}
+	select {
+	case gc.cmdCh <- gcCmd{
+		cmdType:  pause,
+		duration: pauseDuration,
+	}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (gc *garbageCollector) Resume(ctx context.Context) error {
+	if !gc.option.enabled {
+		log.Warn("garbage collection not enabled, cannot resume")
+		return errors.New("garbage collection not enabled")
+	}
+	select {
+	case gc.cmdCh <- gcCmd{
+		cmdType: resume,
+	}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // work contains actual looping check logic
 func (gc *garbageCollector) work() {
 	defer gc.wg.Done()
@@ -101,8 +147,21 @@ func (gc *garbageCollector) work() {
 	for {
 		select {
 		case <-ticker:
+			if time.Now().Before(gc.pauseUntil) {
+				log.Info("garbage collector paused", zap.Time("until", gc.pauseUntil))
+				continue
+			}
 			gc.clearEtcd()
 			gc.scan()
+		case cmd := <-gc.cmdCh:
+			switch cmd.cmdType {
+			case pause:
+				log.Info("garbage collection paused", zap.Duration("duration", cmd.duration))
+				gc.pauseUntil = time.Now().Add(cmd.duration)
+			case resume:
+				// reset to zero value
+				gc.pauseUntil = time.Time{}
+			}
 		case <-gc.closeCh:
 			log.Warn("garbage collector quit")
 			return

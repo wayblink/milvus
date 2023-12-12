@@ -39,6 +39,7 @@ import (
 	rootcoordclient "github.com/milvus-io/milvus/internal/distributed/rootcoord/client"
 	etcdkv "github.com/milvus-io/milvus/internal/kv/etcd"
 	"github.com/milvus-io/milvus/internal/log"
+	"github.com/milvus-io/milvus/internal/management"
 	"github.com/milvus-io/milvus/internal/metastore/kv/datacoord"
 	"github.com/milvus-io/milvus/internal/metrics"
 	"github.com/milvus-io/milvus/internal/mq/msgstream"
@@ -322,7 +323,7 @@ func (s *Server) initDataCoord() error {
 		return err
 	}
 
-	if Params.DataCoordCfg.EnableCompaction {
+	if Params.DataCoordCfg.GetEnableCompaction() {
 		s.createCompactionHandler()
 		s.createCompactionTrigger()
 	}
@@ -358,11 +359,109 @@ func (s *Server) Start() error {
 }
 
 func (s *Server) startDataCoord() {
-	if Params.DataCoordCfg.EnableCompaction {
+	if Params.DataCoordCfg.GetEnableCompaction() {
 		s.compactionHandler.start()
 		s.compactionTrigger.start()
 	}
 	s.startServerLoop()
+
+	management.Register(&management.HTTPHandler{
+		Path: "/datacoord/garbage_collection/pause",
+		HandlerFunc: func(w management.ResponseWriter, req *management.Request) {
+			log.Info("receive garbage collection pause request")
+			pauseSeconds := req.URL.Query().Get("pause_seconds")
+			seconds, err := strconv.ParseInt(pauseSeconds, 10, 64)
+			if err != nil {
+				w.WriteHeader(400)
+				w.Write([]byte(fmt.Sprintf(`{"msg": "invalid pause seconds(%v)"}`, pauseSeconds)))
+				return
+			}
+
+			err = s.garbageCollector.Pause(req.Context(), time.Duration(seconds)*time.Second)
+			if err != nil {
+				w.WriteHeader(500)
+				w.Write([]byte(fmt.Sprintf(`{"msg": "failed to pause garbage collection, %s"}`, err.Error())))
+				return
+			}
+			w.WriteHeader(200)
+			w.Write([]byte(`{"msg": "OK"}`))
+			return
+		},
+	})
+	management.Register(&management.HTTPHandler{
+		Path: "/datacoord/garbage_collection/resume",
+		HandlerFunc: func(w management.ResponseWriter, req *management.Request) {
+			log.Info("receive garbage collection resume request")
+			err := s.garbageCollector.Resume(req.Context())
+			if err != nil {
+				w.WriteHeader(500)
+				w.Write([]byte(fmt.Sprintf(`{"msg": "failed to pause garbage collection, %s"}`, err.Error())))
+				return
+			}
+			w.WriteHeader(200)
+			w.Write([]byte(`{"msg": "OK"}`))
+			return
+		},
+	})
+	management.Register(&management.HTTPHandler{
+		Path: "/datacoord/settings/debug",
+		HandlerFunc: func(writer management.ResponseWriter, request *management.Request) {
+			opType := request.URL.Query().Get("type")
+			settingsKey := request.URL.Query().Get("key")
+			settingsValue := request.URL.Query().Get("value")
+			if settingsKey == "" {
+				writer.WriteHeader(500)
+				writer.Write([]byte(fmt.Sprintf(`{"msg": "the param 'key' is empty"}`)))
+				return
+			}
+			if opType == "" {
+				opType = "get"
+			}
+			log.Info("debug settings", zap.String("op", opType), zap.String("key", settingsKey), zap.String("value", settingsValue))
+			if opType == "get" {
+				var v string
+				switch settingsKey {
+				case "enableCompaction":
+					v = fmt.Sprintf("%v", Params.DataCoordCfg.GetEnableCompaction())
+				case "enableAutoCompaction":
+					v = fmt.Sprintf("%v", Params.DataCoordCfg.GetEnableAutoCompaction())
+				default:
+					v = "unknown"
+				}
+				writer.WriteHeader(200)
+				writer.Write([]byte(fmt.Sprintf(`{"key": "%s", "value": "%s"}`, settingsKey, v)))
+				return
+			} else if opType == "set" {
+				switch settingsKey {
+				case "enableCompaction":
+					b, err := strconv.ParseBool(settingsValue)
+					if err != nil {
+						writer.WriteHeader(500)
+						writer.Write([]byte(fmt.Sprintf(`{"msg": "the param 'value' is invalid"}`)))
+						return
+					}
+					Params.DataCoordCfg.SetEnableCompaction(b)
+				case "enableAutoCompaction":
+					b, err := strconv.ParseBool(settingsValue)
+					if err != nil {
+						writer.WriteHeader(500)
+						writer.Write([]byte(fmt.Sprintf(`{"msg": "the param 'value' is invalid"}`)))
+						return
+					}
+					Params.DataCoordCfg.SetEnableAutoCompaction(b)
+				default:
+					writer.WriteHeader(500)
+					writer.Write([]byte(fmt.Sprintf(`{"msg": "the param 'key' is invalid"}`)))
+					return
+				}
+				writer.WriteHeader(200)
+				writer.Write([]byte(fmt.Sprintf(`{"key": "%s", "value": "%s"}`, settingsKey, settingsValue)))
+				return
+			}
+			writer.WriteHeader(500)
+			writer.Write([]byte(fmt.Sprintf(`{"msg": "the param 'type' is invalid"}`)))
+		},
+	})
 
 	s.stateCode.Store(commonpb.StateCode_Healthy)
 	sessionutil.SaveServerInfo(typeutil.DataCoordRole, s.session.ServerID)
@@ -906,7 +1005,7 @@ func (s *Server) Stop() error {
 	s.garbageCollector.close()
 	s.stopServerLoop()
 
-	if Params.DataCoordCfg.EnableCompaction {
+	if Params.DataCoordCfg.GetEnableCompaction() {
 		s.stopCompactionTrigger()
 		s.stopCompactionHandler()
 	}

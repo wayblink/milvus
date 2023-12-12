@@ -3361,7 +3361,7 @@ func TestGetRecoveryInfo(t *testing.T) {
 }
 
 func TestGetCompactionState(t *testing.T) {
-	Params.DataCoordCfg.EnableCompaction = true
+	Params.DataCoordCfg.SetEnableCompaction(true)
 	t.Run("test get compaction state with new compactionhandler", func(t *testing.T) {
 		svr := &Server{}
 		svr.stateCode.Store(commonpb.StateCode_Healthy)
@@ -3425,7 +3425,7 @@ func TestGetCompactionState(t *testing.T) {
 }
 
 func TestManualCompaction(t *testing.T) {
-	Params.DataCoordCfg.EnableCompaction = true
+	Params.DataCoordCfg.SetEnableCompaction(true)
 	t.Run("test manual compaction successfully", func(t *testing.T) {
 		svr := &Server{allocator: &MockAllocator{}}
 		svr.stateCode.Store(commonpb.StateCode_Healthy)

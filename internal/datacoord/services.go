@@ -521,7 +521,7 @@ func (s *Server) SaveBinlogPaths(ctx context.Context, req *datapb.SaveBinlogPath
 		s.segmentManager.DropSegment(ctx, req.SegmentID)
 		s.flushCh <- req.SegmentID
 
-		if !req.Importing && Params.DataCoordCfg.EnableCompaction {
+		if !req.Importing && Params.DataCoordCfg.GetEnableCompaction() {
 			err = s.compactionTrigger.triggerSingleCompaction(segment.GetCollectionID(), segment.GetPartitionID(),
 				segmentID, segment.GetInsertChannel())
 			if err != nil {
@@ -1093,7 +1093,7 @@ func (s *Server) ManualCompaction(ctx context.Context, req *milvuspb.ManualCompa
 		return resp, nil
 	}
 
-	if !Params.DataCoordCfg.EnableCompaction {
+	if !Params.DataCoordCfg.GetEnableCompaction() {
 		resp.Status.Reason = "compaction disabled"
 		return resp, nil
 	}
@@ -1127,7 +1127,7 @@ func (s *Server) GetCompactionState(ctx context.Context, req *milvuspb.GetCompac
 		return resp, nil
 	}
 
-	if !Params.DataCoordCfg.EnableCompaction {
+	if !Params.DataCoordCfg.GetEnableCompaction() {
 		resp.Status.Reason = "compaction disabled"
 		return resp, nil
 	}
@@ -1166,7 +1166,7 @@ func (s *Server) GetCompactionStateWithPlans(ctx context.Context, req *milvuspb.
 		return resp, nil
 	}
 
-	if !Params.DataCoordCfg.EnableCompaction {
+	if !Params.DataCoordCfg.GetEnableCompaction() {
 		resp.Status.Reason = "compaction disabled"
 		return resp, nil
 	}

@@ -74,6 +74,7 @@ func TestDatabaseInterceptor(t *testing.T) {
 			&milvuspb.DeleteRequest{},
 			&milvuspb.SearchRequest{},
 			&milvuspb.FlushRequest{},
+			&milvuspb.GetFlushStateRequest{},
 			&milvuspb.QueryRequest{},
 			&milvuspb.CreateAliasRequest{},
 			&milvuspb.DropAliasRequest{},

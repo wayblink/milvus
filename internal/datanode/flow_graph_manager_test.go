@@ -221,14 +221,14 @@ func TestFlowGraphManager(t *testing.T) {
 				err = fg.(*dataSyncService).channel.addSegment(addSegmentReq{segID: 0})
 				assert.NoError(t, err)
 				fg.(*dataSyncService).channel.updateSegmentMemorySize(0, memorySize)
-				fg.(*dataSyncService).channel.(*ChannelMeta).needToSync.Store(false)
+				fg.(*dataSyncService).channel.(*ChannelMeta).setIsHighMemory(false)
 			}
 			fm.execute(test.totalMemory)
 			for i, needToSync := range test.expectNeedToSync {
 				vchannel := fmt.Sprintf("%s%d", channelPrefix, i)
 				fg, ok := fm.flowgraphs.Load(vchannel)
 				assert.True(t, ok)
-				assert.Equal(t, needToSync, fg.(*dataSyncService).channel.(*ChannelMeta).needToSync.Load())
+				assert.Equal(t, needToSync, fg.(*dataSyncService).channel.(*ChannelMeta).getIsHighMemory())
 			}
 		}
 	})

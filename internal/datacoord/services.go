@@ -1300,6 +1300,19 @@ func (s *Server) GetFlushState(ctx context.Context, req *milvuspb.GetFlushStateR
 		}
 		unflushed = append(unflushed, sid)
 	}
+	resp.Status.ErrorCode = commonpb.ErrorCode_Success
+	resp.ChannelCps = channelCPs
+
+	for _, channelCP := range channelCPs {
+		if channelCP.GetTimestamp() < req.GetFlushTs() {
+			resp.Flushed = false
+			log.RatedInfo(10, "GetFlushState failed, channel unflushed",
+				zap.String("channel", channelCP.GetChannelName()),
+				zap.Time("CP", tsoutil.PhysicalTime(channelCP.GetTimestamp())),
+				zap.Duration("lag", tsoutil.PhysicalTime(req.GetFlushTs()).Sub(tsoutil.PhysicalTime(channelCP.GetTimestamp()))))
+			return resp, nil
+		}
+	}
 
 	if len(unflushed) != 0 {
 		log.Info("DataCoord receive GetFlushState request, Flushed is false", zap.Int64s("segmentIDs", unflushed), zap.Int("len", len(unflushed)))
@@ -1308,8 +1321,7 @@ func (s *Server) GetFlushState(ctx context.Context, req *milvuspb.GetFlushStateR
 		log.Info("DataCoord receive GetFlushState request, Flushed is true", zap.Int64s("segmentIDs", req.GetSegmentIDs()), zap.Int("len", len(req.GetSegmentIDs())))
 		resp.Flushed = true
 	}
-	resp.Status.ErrorCode = commonpb.ErrorCode_Success
-	resp.ChannelCps = channelCPs
+
 	return resp, nil
 }
 

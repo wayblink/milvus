@@ -32,6 +32,12 @@ const (
 	ListenPortEnvKey  = "METRICS_PORT"
 )
 
+// Provide alias for native http package
+// avoiding import alias when using http package
+
+type ResponseWriter = http.ResponseWriter
+type Request = http.Request
+
 type HTTPHandler struct {
 	Path        string
 	HandlerFunc http.HandlerFunc

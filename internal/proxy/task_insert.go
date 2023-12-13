@@ -142,7 +142,9 @@ func (it *insertTask) checkPrimaryFieldData() error {
 
 	// get primaryFieldData whether autoID is true or not
 	var primaryFieldData *schemapb.FieldData
-	if !primaryFieldSchema.AutoID {
+	var skipAutoIDCheck = Params.ProxyCfg.SkipAutoIDCheckWhenIDExisted && primaryFieldSchema.AutoID && typeutil.IsPrimaryFieldDataExist(it.GetFieldsData(), primaryFieldSchema)
+
+	if !primaryFieldSchema.AutoID || skipAutoIDCheck {
 		primaryFieldData, err = typeutil.GetPrimaryFieldData(it.GetFieldsData(), primaryFieldSchema)
 		if err != nil {
 			log.Info("get primary field data failed", zap.String("collection name", it.CollectionName), zap.Error(err))

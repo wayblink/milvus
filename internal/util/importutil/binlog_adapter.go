@@ -307,7 +307,7 @@ func (p *BinlogAdapter) verify(segmentHolder *SegmentFilesHolder) error {
 // readDeltalogs method reads data from deltalog, and convert to a dict
 // The deltalog data is a list, to improve performance of next step, we convert it to a dict,
 // key is the deleted ID, value is operation timestamp which is used to apply or skip the delete operation.
-func (p *BinlogAdapter) readDeltalogs(segmentHolder *SegmentFilesHolder) (map[int64]uint64, map[string]uint64, error) {
+func (p *BinlogAdapter) readDeltalogs(segmentHolder *SegmentFilesHolder) (map[int64][]uint64, map[string][]uint64, error) {
 	deleteLogs, err := p.decodeDeleteLogs(segmentHolder)
 	if err != nil {
 		return nil, nil, err
@@ -319,16 +319,24 @@ func (p *BinlogAdapter) readDeltalogs(segmentHolder *SegmentFilesHolder) (map[in
 	}
 
 	if p.primaryType == schemapb.DataType_Int64 {
-		deletedIDDict := make(map[int64]uint64)
+		deletedIDDict := make(map[int64][]uint64)
 		for _, deleteLog := range deleteLogs {
-			deletedIDDict[deleteLog.Pk.GetValue().(int64)] = deleteLog.Ts
+			if _, exist := deletedIDDict[deleteLog.Pk.GetValue().(int64)]; exist {
+				deletedIDDict[deleteLog.Pk.GetValue().(int64)] = append(deletedIDDict[deleteLog.Pk.GetValue().(int64)], deleteLog.Ts)
+			} else {
+				deletedIDDict[deleteLog.Pk.GetValue().(int64)] = []uint64{deleteLog.Ts}
+			}
 		}
 		log.Info("Binlog adapter: count of deleted entities", zap.Int("deletedCount", len(deletedIDDict)))
 		return deletedIDDict, nil, nil
 	} else if p.primaryType == schemapb.DataType_VarChar {
-		deletedIDDict := make(map[string]uint64)
+		deletedIDDict := make(map[string][]uint64)
 		for _, deleteLog := range deleteLogs {
-			deletedIDDict[deleteLog.Pk.GetValue().(string)] = deleteLog.Ts
+			if _, exist := deletedIDDict[deleteLog.Pk.GetValue().(string)]; exist {
+				deletedIDDict[deleteLog.Pk.GetValue().(string)] = append(deletedIDDict[deleteLog.Pk.GetValue().(string)], deleteLog.Ts)
+			} else {
+				deletedIDDict[deleteLog.Pk.GetValue().(string)] = []uint64{deleteLog.Ts}
+			}
 		}
 		log.Info("Binlog adapter: count of deleted entities", zap.Int("deletedCount", len(deletedIDDict)))
 		return nil, deletedIDDict, nil
@@ -522,7 +530,7 @@ func (p *BinlogAdapter) readPrimaryKeys(logPath string) ([]int64, []string, erro
 func (p *BinlogAdapter) getShardingListByPrimaryInt64(primaryKeys []int64,
 	timestampList []int64,
 	memoryData []map[storage.FieldID]storage.FieldData,
-	intDeletedList map[int64]uint64) ([]int32, error) {
+	intDeletedList map[int64][]uint64) ([]int32, error) {
 	if len(timestampList) != len(primaryKeys) {
 		log.Error("Binlog adapter: primary key length is not equal to timestamp list length",
 			zap.Int("primaryKeysLen", len(primaryKeys)), zap.Int("timestampLen", len(timestampList)))
@@ -544,7 +552,14 @@ func (p *BinlogAdapter) getShardingListByPrimaryInt64(primaryKeys []int64,
 			continue
 		}
 
-		_, deleted := intDeletedList[key]
+		deleted := false
+		deleteTss, _ := intDeletedList[key]
+		// only skip entity when delete happen after insert
+		for _, deleteTs := range deleteTss {
+			if deleteTs > uint64(ts) {
+				deleted = true
+			}
+		}
 		// if the key exists in intDeletedList, that means this entity has been deleted
 		if deleted {
 			shardList = append(shardList, -1) // this entity has been deleted, set shardID = -1 and skip this entity
@@ -573,7 +588,7 @@ func (p *BinlogAdapter) getShardingListByPrimaryInt64(primaryKeys []int64,
 func (p *BinlogAdapter) getShardingListByPrimaryVarchar(primaryKeys []string,
 	timestampList []int64,
 	memoryData []map[storage.FieldID]storage.FieldData,
-	strDeletedList map[string]uint64) ([]int32, error) {
+	strDeletedList map[string][]uint64) ([]int32, error) {
 	if len(timestampList) != len(primaryKeys) {
 		log.Error("Binlog adapter: primary key length is not equal to timestamp list length",
 			zap.Int("primaryKeysLen", len(primaryKeys)), zap.Int("timestampLen", len(timestampList)))

@@ -150,7 +150,7 @@ func (s *Server) Flush(ctx context.Context, req *datapb.FlushRequest) (*datapb.F
 			}
 		}
 		return nil
-	})
+	}, retry.Attempts(60))
 	if err != nil {
 		resp.Status.Reason = fmt.Sprintf("failed to flush channel %d, %s", req.CollectionID, err)
 		return resp, nil

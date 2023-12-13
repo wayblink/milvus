@@ -529,9 +529,10 @@ func (p *BinlogAdapter) getShardingListByPrimaryInt64(primaryKeys []int64,
 			continue
 		}
 
-		_, deleted := intDeletedList[key]
+		deleteTs, deleted := intDeletedList[key]
 		// if the key exists in intDeletedList, that means this entity has been deleted
-		if deleted {
+		// only delete happen after insert should be skipped, considering upsert
+		if deleted && deleteTs > uint64(ts) {
 			shardList = append(shardList, -1) // this entity has been deleted, set shardID = -1 and skip this entity
 			actualDeleted++
 		} else {

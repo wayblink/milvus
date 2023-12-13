@@ -611,6 +611,8 @@ type proxyConfig struct {
 	CreatedTime              time.Time
 	UpdatedTime              time.Time
 	ShardLeaderCacheInterval atomic.Value
+
+	SkipAutoIDCheckWhenIDExisted bool
 }
 
 func (p *proxyConfig) init(base *BaseTable) {
@@ -634,6 +636,7 @@ func (p *proxyConfig) init(base *BaseTable) {
 
 	p.initSoPath()
 	p.initShardLeaderCacheInterval()
+	p.initSkipAutoIDCheckWhenIDExisted()
 }
 
 // InitAlias initialize Alias member.
@@ -759,6 +762,10 @@ func (p *proxyConfig) initMaxRoleNum() {
 func (p *proxyConfig) initShardLeaderCacheInterval() {
 	interval := p.Base.ParseIntWithDefault("proxy.shardLeaderCacheInterval", 3)
 	p.ShardLeaderCacheInterval.Store(time.Duration(interval) * time.Second)
+}
+
+func (p *proxyConfig) initSkipAutoIDCheckWhenIDExisted() {
+	p.SkipAutoIDCheckWhenIDExisted = p.Base.ParseBool("proxy.skipAutoIDCheckWhenIDExisted", false)
 }
 
 // /////////////////////////////////////////////////////////////////////////////

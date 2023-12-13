@@ -191,6 +191,14 @@ func TestComponentParam(t *testing.T) {
 		t.Logf("MaxTaskNum: %d", Params.MaxTaskNum)
 
 		t.Logf("ShardLeaderCacheInterval: %d", Params.ShardLeaderCacheInterval.Load())
+
+		t.Run("test skipAutoIDCheckWhenIDExisted", func(t *testing.T) {
+			Params.initSkipAutoIDCheckWhenIDExisted()
+			assert.False(t, Params.SkipAutoIDCheckWhenIDExisted)
+			Params.Base.Save("proxy.skipAutoIDCheckWhenIDExisted", "true")
+			Params.initSkipAutoIDCheckWhenIDExisted()
+			assert.True(t, Params.SkipAutoIDCheckWhenIDExisted)
+		})
 	})
 
 	t.Run("test proxyConfig panic", func(t *testing.T) {
@@ -254,6 +262,11 @@ func TestComponentParam(t *testing.T) {
 		shouldPanic(t, "proxy.maxRoleNum", func() {
 			Params.Base.Save("proxy.maxRoleNum", "abc")
 			Params.initMaxRoleNum()
+		})
+
+		shouldPanic(t, "proxy.skipAutoIDCheckWhenIDExisted", func() {
+			Params.Base.Save("proxy.skipAutoIDCheckWhenIDExisted", "abc")
+			Params.initSkipAutoIDCheckWhenIDExisted()
 		})
 	})
 

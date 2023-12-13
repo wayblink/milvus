@@ -53,7 +53,7 @@ service DataCoord {
   rpc GetCompactionStateWithPlans(milvus.GetCompactionPlansRequest) returns (milvus.GetCompactionPlansResponse) {}
 
   rpc WatchChannels(WatchChannelsRequest) returns (WatchChannelsResponse) {}
-  rpc GetFlushState(milvus.GetFlushStateRequest) returns (milvus.GetFlushStateResponse) {}
+  rpc GetFlushState(GetFlushStateRequest) returns (milvus.GetFlushStateResponse) {}
   rpc DropVirtualChannel(DropVirtualChannelRequest) returns (DropVirtualChannelResponse) {}
 
   rpc SetSegmentState(SetSegmentStateRequest) returns (SetSegmentStateResponse) {}
@@ -97,6 +97,8 @@ service DataNode {
   rpc ResendSegmentStats(ResendSegmentStatsRequest) returns(ResendSegmentStatsResponse) {}
 
   rpc AddImportSegment(AddImportSegmentRequest) returns(AddImportSegmentResponse) {}
+
+  rpc FlushChannels(FlushChannelsRequest) returns(common.Status) {}
 }
 
 message FlushRequest {
@@ -115,6 +117,21 @@ message FlushResponse {
   repeated int64 flushSegmentIDs = 5; // old flushed segment
   int64 timeOfSeal = 6;
   map<string, internal.MsgPosition> channel_cps = 7;
+  uint64 flush_ts = 8;
+}
+
+message FlushChannelsRequest {
+  common.MsgBase base = 1;
+  uint64 flush_ts = 2;
+  repeated string channels = 3;
+}
+
+message GetFlushStateRequest {
+  repeated int64 segmentIDs = 1;
+  uint64 flush_ts = 2;
+  string db_name = 3;
+  string collection_name = 4;
+  int64 collectionID = 5;
 }
 
 message SegmentIDRequest {

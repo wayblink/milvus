@@ -291,6 +291,24 @@ func (c *SessionManager) getClient(ctx context.Context, nodeID int64) (types.Dat
 	return session.GetOrCreateClient(ctx)
 }
 
+func (c *SessionManager) FlushChannels(ctx context.Context, nodeID int64, req *datapb.FlushChannelsRequest) error {
+	log := log.Ctx(ctx).With(zap.Int64("nodeID", nodeID))
+	cli, err := c.getClient(ctx, nodeID)
+	if err != nil {
+		log.Warn("failed to get client", zap.Error(err))
+		return err
+	}
+
+	resp, err := cli.FlushChannels(ctx, req)
+	err = VerifyResponse(resp, err)
+	if err != nil {
+		log.Warn("SessionManager.FlushChannels failed", zap.Error(err))
+		return err
+	}
+	log.Info("SessionManager.FlushChannels successfully")
+	return nil
+}
+
 // Close release sessions
 func (c *SessionManager) Close() {
 	c.sessions.Lock()

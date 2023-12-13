@@ -3601,7 +3601,7 @@ func TestGetFlushState(t *testing.T) {
 			},
 		}
 		svr.stateCode.Store(commonpb.StateCode_Healthy)
-		resp, err := svr.GetFlushState(context.TODO(), &milvuspb.GetFlushStateRequest{SegmentIDs: []int64{1, 2}})
+		resp, err := svr.GetFlushState(context.TODO(), &datapb.GetFlushStateRequest{SegmentIDs: []int64{1, 2}})
 		assert.Nil(t, err)
 		assert.EqualValues(t, &milvuspb.GetFlushStateResponse{
 			Status:  &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success},
@@ -3632,7 +3632,7 @@ func TestGetFlushState(t *testing.T) {
 		}
 		svr.stateCode.Store(commonpb.StateCode_Healthy)
 
-		resp, err := svr.GetFlushState(context.TODO(), &milvuspb.GetFlushStateRequest{SegmentIDs: []int64{1, 2}})
+		resp, err := svr.GetFlushState(context.TODO(), &datapb.GetFlushStateRequest{SegmentIDs: []int64{1, 2}})
 		assert.Nil(t, err)
 		assert.EqualValues(t, &milvuspb.GetFlushStateResponse{
 			Status:  &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success},
@@ -3663,8 +3663,65 @@ func TestGetFlushState(t *testing.T) {
 		}
 		svr.stateCode.Store(commonpb.StateCode_Healthy)
 
-		resp, err := svr.GetFlushState(context.TODO(), &milvuspb.GetFlushStateRequest{SegmentIDs: []int64{1, 2}})
+		resp, err := svr.GetFlushState(context.TODO(), &datapb.GetFlushStateRequest{SegmentIDs: []int64{1, 2}})
 		assert.Nil(t, err)
+		assert.EqualValues(t, &milvuspb.GetFlushStateResponse{
+			Status:  &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success},
+			Flushed: true,
+		}, resp)
+	})
+
+	t.Run("channel unflushed", func(t *testing.T) {
+		meta, err := newMemoryMeta()
+		assert.NoError(t, err)
+		svr := newTestServerWithMeta(t, nil, meta)
+		defer closeTestServer(t, svr)
+
+		var (
+			vchannel   = "ch1"
+			collection = int64(0)
+		)
+
+		svr.channelManager = &ChannelManager{
+			store: &ChannelStore{
+				channelsInfo: map[int64]*NodeChannelInfo{
+					1: {NodeID: 1, Channels: []*channel{{Name: vchannel, CollectionID: collection}}},
+				},
+			},
+		}
+
+		err = svr.meta.UpdateChannelCheckpoint(vchannel, &internalpb.MsgPosition{
+			MsgID:     []byte{1},
+			Timestamp: 10,
+		})
+		assert.NoError(t, err)
+
+		resp, err := svr.GetFlushState(context.Background(), &datapb.GetFlushStateRequest{
+			FlushTs:      11,
+			CollectionID: collection,
+		})
+		assert.NoError(t, err)
+		assert.EqualValues(t, &milvuspb.GetFlushStateResponse{
+			Status:  &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success},
+			Flushed: false,
+		}, resp)
+	})
+
+	t.Run("no channels", func(t *testing.T) {
+		meta, err := newMemoryMeta()
+		assert.NoError(t, err)
+		svr := newTestServerWithMeta(t, nil, meta)
+		defer closeTestServer(t, svr)
+
+		var (
+			collection = int64(0)
+		)
+
+		resp, err := svr.GetFlushState(context.Background(), &datapb.GetFlushStateRequest{
+			FlushTs:      11,
+			CollectionID: collection,
+		})
+		assert.NoError(t, err)
 		assert.EqualValues(t, &milvuspb.GetFlushStateResponse{
 			Status:  &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success},
 			Flushed: true,

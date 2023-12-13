@@ -19,7 +19,6 @@ package datacoord
 import (
 	"context"
 	"fmt"
-
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/samber/lo"
 	"go.uber.org/zap"
@@ -104,6 +103,29 @@ func (c *Cluster) Flush(ctx context.Context, nodeID int64, channel string,
 
 	c.sessionManager.Flush(ctx, nodeID, req)
 	return nil
+}
+
+func (c *Cluster) FlushChannels(ctx context.Context, nodeID int64, flushTs Timestamp, channels []string) error {
+	if len(channels) == 0 {
+		return nil
+	}
+
+	for _, channel := range channels {
+		if !c.channelManager.Match(nodeID, channel) {
+			return fmt.Errorf("channel %s is not watched on node %d", channel, nodeID)
+		}
+	}
+
+	req := &datapb.FlushChannelsRequest{
+		Base: commonpbutil.NewMsgBase(
+			commonpbutil.WithSourceID(Params.DataCoordCfg.GetNodeID()),
+			commonpbutil.WithTargetID(nodeID),
+		),
+		FlushTs:  flushTs,
+		Channels: channels,
+	}
+
+	return c.sessionManager.FlushChannels(ctx, nodeID, req)
 }
 
 // Import sends import requests to DataNodes whose ID==nodeID.

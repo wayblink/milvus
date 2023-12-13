@@ -33,6 +33,7 @@ import (
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/commonpbutil"
 	"github.com/milvus-io/milvus/internal/util/retry"
+	"github.com/milvus-io/milvus/internal/util/tsoutil"
 )
 
 const (
@@ -283,6 +284,27 @@ func (c *SessionManager) getClient(ctx context.Context, nodeID int64) (types.Dat
 	}
 
 	return session.GetOrCreateClient(ctx)
+}
+
+func (c *SessionManager) FlushChannels(ctx context.Context, nodeID int64, req *datapb.FlushChannelsRequest) error {
+	log := log.Ctx(ctx).With(zap.Int64("nodeID", nodeID),
+		zap.Time("flushTs", tsoutil.PhysicalTime(req.GetFlushTs())),
+		zap.Strings("channels", req.GetChannels()))
+	cli, err := c.getClient(ctx, nodeID)
+	if err != nil {
+		log.Warn("failed to get client", zap.Error(err))
+		return err
+	}
+
+	log.Info("SessionManager.FlushChannels start")
+	resp, err := cli.FlushChannels(ctx, req)
+	err = VerifyResponse(resp, err)
+	if err != nil {
+		log.Warn("SessionManager.FlushChannels failed", zap.Error(err))
+		return err
+	}
+	log.Info("SessionManager.FlushChannels successfully")
+	return nil
 }
 
 // Close release sessions

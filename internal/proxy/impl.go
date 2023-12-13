@@ -4358,7 +4358,7 @@ func (node *Proxy) GetCompactionStateWithPlans(ctx context.Context, req *milvusp
 	return resp, err
 }
 
-// GetFlushState gets the flush state of multiple segments
+// GetFlushState gets the flush state of the collection based on the provided flush ts and segment IDs.
 func (node *Proxy) GetFlushState(ctx context.Context, req *milvuspb.GetFlushStateRequest) (*milvuspb.GetFlushStateResponse, error) {
 	log.Info("received get flush state request", zap.Any("request", req))
 	var err error
@@ -4369,9 +4369,37 @@ func (node *Proxy) GetFlushState(ctx context.Context, req *milvuspb.GetFlushStat
 		return resp, nil
 	}
 
-	resp, err = node.dataCoord.GetFlushState(ctx, req)
+	stateReq := &datapb.GetFlushStateRequest{
+		SegmentIDs: req.GetSegmentIDs(),
+		FlushTs:    req.GetFlushTs(),
+	}
+
+	if len(req.GetCollectionName()) > 0 { // For compatibility with old client
+		if err = validateCollectionName(req.GetCollectionName()); err != nil {
+			resp.Status = &commonpb.Status{
+				ErrorCode: commonpb.ErrorCode_UnexpectedError,
+				Reason:    fmt.Sprintf("fail to validateCollectionName err: %s", err.Error()),
+			}
+			return resp, nil
+		}
+		collectionID, err := globalMetaCache.GetCollectionID(ctx, req.GetDbName(), req.GetCollectionName())
+		if err != nil {
+			resp.Status = &commonpb.Status{
+				ErrorCode: commonpb.ErrorCode_UnexpectedError,
+				Reason:    fmt.Sprintf("fail to GetCollectionID err: %s", err.Error()),
+			}
+			return resp, nil
+		}
+		stateReq.CollectionID = collectionID
+	}
+
+	resp, err = node.dataCoord.GetFlushState(ctx, stateReq)
 	if err != nil {
 		log.Warn("failed to get flush state response", zap.Error(err))
+		resp.Status = &commonpb.Status{
+			ErrorCode: commonpb.ErrorCode_UnexpectedError,
+			Reason:    fmt.Sprintf("fail to get flush state response err: %s", err.Error()),
+		}
 		return nil, err
 	}
 	log.Info("received get flush state response", zap.Any("response", resp))

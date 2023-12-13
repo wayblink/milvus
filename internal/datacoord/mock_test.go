@@ -216,6 +216,10 @@ type mockDataNodeClient struct {
 	compactionResp       *commonpb.Status
 }
 
+func (c *mockDataNodeClient) FlushChannels(ctx context.Context, req *datapb.FlushChannelsRequest) (*commonpb.Status, error) {
+	return &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success}, nil
+}
+
 func newMockDataNodeClient(id int64, ch chan interface{}) (*mockDataNodeClient, error) {
 	return &mockDataNodeClient{
 		id:    id,

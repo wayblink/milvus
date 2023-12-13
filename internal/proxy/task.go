@@ -1284,6 +1284,7 @@ func (ft *flushTask) Execute(ctx context.Context) error {
 	coll2Segments := make(map[string]*schemapb.LongArray)
 	flushColl2Segments := make(map[string]*schemapb.LongArray)
 	coll2SealTimes := make(map[string]int64)
+	coll2FlushTs := make(map[string]Timestamp)
 	channelCps := make(map[string]*milvuspb.MsgPosition)
 	for _, collName := range ft.CollectionNames {
 		collID, err := globalMetaCache.GetCollectionID(ctx, ft.GetDbName(), collName)
@@ -1308,6 +1309,7 @@ func (ft *flushTask) Execute(ctx context.Context) error {
 		coll2Segments[collName] = &schemapb.LongArray{Data: resp.GetSegmentIDs()}
 		flushColl2Segments[collName] = &schemapb.LongArray{Data: resp.GetFlushSegmentIDs()}
 		coll2SealTimes[collName] = resp.GetTimeOfSeal()
+		coll2FlushTs[collName] = resp.GetFlushTs()
 		dcChannelCps := resp.GetChannelCps()
 		log.Info("FlushResp", zap.Any("resp", resp))
 		for ch, pos := range dcChannelCps {
@@ -1329,6 +1331,7 @@ func (ft *flushTask) Execute(ctx context.Context) error {
 		FlushCollSegIDs: flushColl2Segments,
 		CollSealTimes:   coll2SealTimes,
 		ChannelCps:      channelCps,
+		CollFlushTs:     coll2FlushTs,
 	}
 	return nil
 }

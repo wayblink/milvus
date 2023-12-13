@@ -685,6 +685,36 @@ func (node *DataNode) FlushSegments(ctx context.Context, req *datapb.FlushSegmen
 	}, nil
 }
 
+func (node *DataNode) FlushChannels(ctx context.Context, req *datapb.FlushChannelsRequest) (*commonpb.Status, error) {
+	log := log.Ctx(ctx).With(zap.Int64("nodeId", Params.DataNodeCfg.GetNodeID()),
+		zap.Time("flushTs", tsoutil.PhysicalTime(req.GetFlushTs())),
+		zap.Int("len(channels)", len(req.GetChannels())))
+
+	log.Info("DataNode receives FlushChannels request")
+
+	errStatus := &commonpb.Status{
+		ErrorCode: commonpb.ErrorCode_UnexpectedError,
+	}
+
+	if !node.isHealthy() {
+		setNotServingStatus(errStatus, node.GetStateCode())
+		return errStatus, nil
+	}
+
+	for _, channel := range req.GetChannels() {
+		fg, ok := node.flowgraphManager.getFlowgraphService(channel)
+		if !ok {
+			errStatus.Reason = fmt.Sprintf("ChannelNotFound %s", channel)
+			return errStatus, nil
+		}
+		fg.channel.setFlushTs(req.GetFlushTs())
+	}
+
+	return &commonpb.Status{
+		ErrorCode: commonpb.ErrorCode_Success,
+	}, nil
+}
+
 // ResendSegmentStats resend un-flushed segment stats back upstream to DataCoord by resending DataNode time tick message.
 // It returns a list of segments to be sent.
 // Deprecated in 2.2.15, reversed it just for compatibility during rolling back

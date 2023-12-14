@@ -185,7 +185,7 @@ require github.com/cockroachdb/errors v1.2.4
 
 require (
 	github.com/aliyun/credentials-go v1.2.7
-	github.com/milvus-io/milvus-proto/go-api/v2 v2.2.12-0.20231201024302-ea1c36bb9546 // testing-kdxf
+	github.com/milvus-io/milvus-proto/go-api/v2 v2.2.12-0.20231214031905-7d0ee86c529c // testing-kdxf3
 )
 
 require (
@@ -212,7 +212,7 @@ replace (
 	github.com/bketelsen/crypt => github.com/bketelsen/crypt v0.0.4 // Fix security alert for core-os/etcd
 	github.com/dgrijalva/jwt-go => github.com/golang-jwt/jwt v3.2.2+incompatible // Fix security alert for jwt-go 3.2.0
 	github.com/go-kit/kit => github.com/go-kit/kit v0.1.0
-	github.com/milvus-io/milvus-proto/go-api/v2 => github.com/wayblink/milvus-proto/go-api/v2 v2.0.0-20231213063050-7886c3ad3699
+	//github.com/milvus-io/milvus-proto/go-api/v2 => github.com/wayblink/milvus-proto/go-api/v2 v2.0.0-20231213063050-7886c3ad3699
 	github.com/streamnative/pulsarctl => github.com/xiaofan-luan/pulsarctl v0.5.1
 	github.com/tecbot/gorocksdb => github.com/milvus-io/gorocksdb v0.0.0-20220624081344-8c5f4212846b // indirect
 )

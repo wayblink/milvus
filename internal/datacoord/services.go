@@ -129,11 +129,31 @@ func (s *Server) Flush(ctx context.Context, req *datapb.FlushRequest) (*datapb.F
 	flushSegmentIDs := make([]UniqueID, 0, len(segments))
 	for _, segment := range segments {
 		if segment != nil &&
-			(segment.GetState() == commonpb.SegmentState_Flushed ||
-				segment.GetState() == commonpb.SegmentState_Flushing) &&
+			isFlushState(segment.GetState()) &&
 			!sealedSegmentsIDDict[segment.GetID()] {
 			flushSegmentIDs = append(flushSegmentIDs, segment.GetID())
 		}
+	}
+
+	err = retry.Do(ctx, func() error {
+		for _, channelInfo := range s.channelManager.GetChannels() {
+			nodeID := channelInfo.NodeID
+			channels := lo.Filter(channelInfo.Channels, func(channel *channel, _ int) bool {
+				return channel.CollectionID == req.GetCollectionID()
+			})
+			channelNames := lo.Map(channels, func(channel *channel, _ int) string {
+				return channel.Name
+			})
+			err = s.cluster.FlushChannels(ctx, nodeID, ts, channelNames)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}, retry.Attempts(60))
+	if err != nil {
+		resp.Status.Reason = fmt.Sprintf("failed to flush channel %d, %s", req.CollectionID, err)
+		return resp, nil
 	}
 
 	log.Info("flush response with segments",
@@ -141,6 +161,7 @@ func (s *Server) Flush(ctx context.Context, req *datapb.FlushRequest) (*datapb.F
 		zap.Int64s("sealSegments", sealedSegmentIDs),
 		zap.Int64s("flushSegments", flushSegmentIDs),
 		zap.Int64("timeOfSeal", timeOfSeal.Unix()),
+		zap.Time("flushTs", tsoutil.PhysicalTime(ts)),
 		zap.Any("channelCps", resp.GetChannelCps()))
 	resp.Status.ErrorCode = commonpb.ErrorCode_Success
 	resp.DbID = req.GetDbID()
@@ -148,6 +169,7 @@ func (s *Server) Flush(ctx context.Context, req *datapb.FlushRequest) (*datapb.F
 	resp.SegmentIDs = sealedSegmentIDs
 	resp.TimeOfSeal = timeOfSeal.Unix()
 	resp.FlushSegmentIDs = flushSegmentIDs
+	resp.FlushTs = ts
 	return resp, nil
 }
 
@@ -1272,11 +1294,13 @@ func (s *Server) WatchChannels(ctx context.Context, req *datapb.WatchChannelsReq
 }
 
 // GetFlushState gets the flush state of multiple segments
-func (s *Server) GetFlushState(ctx context.Context, req *milvuspb.GetFlushStateRequest) (*milvuspb.GetFlushStateResponse, error) {
+func (s *Server) GetFlushState(ctx context.Context, req *datapb.GetFlushStateRequest) (*milvuspb.GetFlushStateResponse, error) {
+	log := log.Ctx(ctx).With(zap.Int64("collection", req.GetCollectionID()),
+		zap.Time("flushTs", tsoutil.PhysicalTime(req.GetFlushTs()))).
+		WithRateGroup("dc.GetFlushState", 1, 60)
 	resp := &milvuspb.GetFlushStateResponse{Status: &commonpb.Status{ErrorCode: commonpb.ErrorCode_UnexpectedError}}
 	if s.isClosed() {
-		log.Warn("DataCoord receive GetFlushState request, server closed",
-			zap.Int64s("segmentIDs", req.GetSegmentIDs()), zap.Int("len", len(req.GetSegmentIDs())))
+		log.Warn("DataCoord receive GetFlushState request, server closed")
 		setNotServingStatus(resp.Status, s.GetStateCode())
 		return resp, nil
 	}
@@ -1301,6 +1325,20 @@ func (s *Server) GetFlushState(ctx context.Context, req *milvuspb.GetFlushStateR
 		unflushed = append(unflushed, sid)
 	}
 
+	resp.Status.ErrorCode = commonpb.ErrorCode_Success
+	resp.ChannelCps = channelCPs
+
+	for _, channelCP := range channelCPs {
+		if channelCP.GetTimestamp() < req.GetFlushTs() {
+			resp.Flushed = false
+			log.RatedInfo(10, "GetFlushState failed, channel unflushed",
+				zap.String("channel", channelCP.GetChannelName()),
+				zap.Time("CP", tsoutil.PhysicalTime(channelCP.GetTimestamp())),
+				zap.Duration("lag", tsoutil.PhysicalTime(req.GetFlushTs()).Sub(tsoutil.PhysicalTime(channelCP.GetTimestamp()))))
+			return resp, nil
+		}
+	}
+
 	if len(unflushed) != 0 {
 		log.Info("DataCoord receive GetFlushState request, Flushed is false", zap.Int64s("segmentIDs", unflushed), zap.Int("len", len(unflushed)))
 		resp.Flushed = false
@@ -1308,8 +1346,7 @@ func (s *Server) GetFlushState(ctx context.Context, req *milvuspb.GetFlushStateR
 		log.Info("DataCoord receive GetFlushState request, Flushed is true", zap.Int64s("segmentIDs", req.GetSegmentIDs()), zap.Int("len", len(req.GetSegmentIDs())))
 		resp.Flushed = true
 	}
-	resp.Status.ErrorCode = commonpb.ErrorCode_Success
-	resp.ChannelCps = channelCPs
+
 	return resp, nil
 }
 

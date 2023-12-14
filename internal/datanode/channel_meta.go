@@ -96,7 +96,12 @@ type Channel interface {
 
 	// getTotalMemorySize returns the sum of memory sizes of segments.
 	getTotalMemorySize() int64
-	forceToSync()
+
+	setIsHighMemory(b bool)
+	getIsHighMemory() bool
+
+	getFlushTs() Timestamp
+	setFlushTs(ts Timestamp)
 
 	close()
 }
@@ -111,7 +116,15 @@ type ChannelMeta struct {
 	segMu    sync.RWMutex
 	segments map[UniqueID]*Segment
 
-	needToSync   *atomic.Bool
+	// isHighMemory is intended to trigger the syncing of segments
+	// when segment's buffer consumes a significant amount of memory.
+	isHighMemory *atomic.Bool
+
+	// flushTs is intended to trigger:
+	// 1. the syncing of segments when consumed ts exceeds flushTs;
+	// 2. the updating of channelCP when channelCP exceeds flushTs.
+	flushTs *atomic.Uint64
+
 	syncPolicies []segmentSyncPolicy
 
 	metaService  *metaService
@@ -133,11 +146,14 @@ func newChannel(channelName string, collID UniqueID, schema *schemapb.Collection
 
 		segments: make(map[UniqueID]*Segment),
 
-		needToSync: atomic.NewBool(false),
+		isHighMemory: atomic.NewBool(false),
+		flushTs:      atomic.NewUint64(math.MaxUint64),
+
 		syncPolicies: []segmentSyncPolicy{
 			syncPeriodically(),
 			syncMemoryTooHigh(),
 			syncCPLagTooBehind(),
+			syncSegmentsAtTs(),
 		},
 
 		metaService:  metaService,
@@ -283,7 +299,7 @@ func (c *ChannelMeta) listSegmentIDsToSync(ts Timestamp) []UniqueID {
 
 	segIDsToSync := typeutil.NewUniqueSet()
 	for _, policy := range c.syncPolicies {
-		segments := policy(validSegs, ts, c.needToSync)
+		segments := policy(validSegs, c, ts)
 		for _, segID := range segments {
 			segIDsToSync.Insert(segID)
 		}
@@ -895,8 +911,20 @@ func (c *ChannelMeta) evictHistoryDeleteBuffer(segmentID UniqueID, endPos *inter
 	log.Warn("cannot find segment when evictHistoryDeleteBuffer", zap.Int64("segmentID", segmentID))
 }
 
-func (c *ChannelMeta) forceToSync() {
-	c.needToSync.Store(true)
+func (c *ChannelMeta) setIsHighMemory(b bool) {
+	c.isHighMemory.Store(b)
+}
+
+func (c *ChannelMeta) getIsHighMemory() bool {
+	return c.isHighMemory.Load()
+}
+
+func (c *ChannelMeta) getFlushTs() Timestamp {
+	return c.flushTs.Load()
+}
+
+func (c *ChannelMeta) setFlushTs(ts Timestamp) {
+	c.flushTs.Store(ts)
 }
 
 func (c *ChannelMeta) getTotalMemorySize() int64 {

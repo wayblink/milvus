@@ -17,10 +17,10 @@
 package datanode
 
 import (
+	"github.com/samber/lo"
 	"math"
 	"sort"
 
-	"go.uber.org/atomic"
 	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus/internal/log"
@@ -30,11 +30,11 @@ import (
 const minSyncSize = 0.5 * 1024 * 1024
 
 // segmentsSyncPolicy sync policy applies to segments
-type segmentSyncPolicy func(segments []*Segment, ts Timestamp, needToSync *atomic.Bool) []UniqueID
+type segmentSyncPolicy func(segments []*Segment, c Channel, ts Timestamp) []UniqueID
 
 // syncPeriodically get segmentSyncPolicy with segments sync periodically.
 func syncPeriodically() segmentSyncPolicy {
-	return func(segments []*Segment, ts Timestamp, _ *atomic.Bool) []UniqueID {
+	return func(segments []*Segment, c Channel, ts Timestamp) []UniqueID {
 		segsToSync := make([]UniqueID, 0)
 		for _, seg := range segments {
 			endTime := tsoutil.PhysicalTime(ts)
@@ -45,8 +45,7 @@ func syncPeriodically() segmentSyncPolicy {
 			}
 		}
 		if len(segsToSync) > 0 {
-			log.Info("sync segment periodically",
-				zap.Int64s("segmentID", segsToSync))
+			log.Info("sync segment periodically", zap.Int64s("segmentIDs", segsToSync))
 		}
 		return segsToSync
 	}
@@ -54,8 +53,8 @@ func syncPeriodically() segmentSyncPolicy {
 
 // syncMemoryTooHigh force sync the largest segment.
 func syncMemoryTooHigh() segmentSyncPolicy {
-	return func(segments []*Segment, ts Timestamp, needToSync *atomic.Bool) []UniqueID {
-		if len(segments) == 0 || !needToSync.Load() {
+	return func(segments []*Segment, c Channel, _ Timestamp) []UniqueID {
+		if len(segments) == 0 || !c.getIsHighMemory() {
 			return nil
 		}
 		sort.Slice(segments, func(i, j int) bool {
@@ -99,7 +98,7 @@ func syncCPLagTooBehind() segmentSyncPolicy {
 		return minTs
 	}
 
-	return func(segments []*Segment, ts Timestamp, _ *atomic.Bool) []UniqueID {
+	return func(segments []*Segment, c Channel, ts Timestamp) []UniqueID {
 		segmentsToSync := make([]UniqueID, 0)
 		for _, segment := range segments {
 			segmentMinTs := segmentMinTs(segment)
@@ -115,5 +114,24 @@ func syncCPLagTooBehind() segmentSyncPolicy {
 				zap.Int64s("segmentID", segmentsToSync))
 		}
 		return segmentsToSync
+	}
+}
+
+// syncSegmentsAtTs returns a new segmentSyncPolicy, sync segments when ts exceeds ChannelMeta.flushTs
+func syncSegmentsAtTs() segmentSyncPolicy {
+	return func(segments []*Segment, c Channel, ts Timestamp) []UniqueID {
+		flushTs := c.getFlushTs()
+		if flushTs != 0 && ts >= flushTs {
+			segmentsWithBuffer := lo.Filter(segments, func(segment *Segment, _ int) bool {
+				return !segment.isBufferEmpty()
+			})
+			segmentIDs := lo.Map(segmentsWithBuffer, func(segment *Segment, _ int) UniqueID {
+				return segment.segmentID
+			})
+			log.Info("sync segment at ts", zap.Int64s("segmentIDs", segmentIDs),
+				zap.Time("ts", tsoutil.PhysicalTime(ts)), zap.Time("flushTs", tsoutil.PhysicalTime(flushTs)))
+			return segmentIDs
+		}
+		return nil
 	}
 }

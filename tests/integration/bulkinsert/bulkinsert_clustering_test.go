@@ -19,6 +19,7 @@ package bulkinsert
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"testing"
 
 	"github.com/golang/protobuf/proto"
@@ -28,7 +29,6 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
-	"github.com/milvus-io/milvus/internal/util/distribution"
 	"github.com/milvus-io/milvus/pkg/common"
 	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/util/funcutil"
@@ -95,15 +95,28 @@ func (s *BulkInsertClusteringSuite) TestBulkInsertClustering() {
 		c.ChunkManager.RootPath() + "/" + "image_path.npy",
 	}
 
-	allocTimestampResp, err := c.Proxy.AllocTimestamp(ctx, &milvuspb.AllocTimestampRequest{})
-	s.NoError(err)
-	clusteringGroupId := allocTimestampResp.Timestamp
+	vector := &schemapb.VectorField{
+		Dim: int64(DIM128),
+		Data: &schemapb.VectorField_FloatVector{
+			FloatVector: &schemapb.FloatArray{
+				Data: generateFloatVectors(DIM128),
+			},
+		},
+	}
 
-	err = BulkInsertSync(ctx, c, collectionName, bulkInsertFiles, []*commonpb.KeyValuePair{
-		{Key: distribution.ClusteringCentroid, Value: "[0.0,0.0,0.0,0.0]"},
-		{Key: distribution.ClusteringSize, Value: "100"},
-		{Key: distribution.ClusteringOperationId, Value: fmt.Sprint(clusteringGroupId)},
-	})
+	distribution := &schemapb.ClusteringInfo{
+		VectorClusteringInfos: []*schemapb.VectorClusteringInfo{
+			{
+				Centroid: vector,
+			},
+		},
+	}
+	distributionBytes, err := proto.Marshal(distribution)
+	s.NoError(err)
+	log.Info("byte length", zap.Int("length", len(distributionBytes)))
+
+	resp, err := BulkInsertSync(ctx, c, collectionName, bulkInsertFiles, nil, distributionBytes)
+	log.Info("BulkInsert resp", zap.Any("resp", resp))
 	s.NoError(err)
 
 	health2, err := c.DataCoord.CheckHealth(ctx, &milvuspb.CheckHealthRequest{})
@@ -116,11 +129,8 @@ func (s *BulkInsertClusteringSuite) TestBulkInsertClustering() {
 	for _, segment := range segments {
 		log.Info("ShowSegments result", zap.String("segment", segment.String()))
 		// check clustering info is inserted
-		s.True(len(segment.GetDistributionInfo().GetVectorClusteringInfos()) > 0)
-		s.True(segment.GetDistributionInfo().GetVectorClusteringInfos()[0].GetOperationId() == int64(clusteringGroupId))
-		s.True(segment.GetDistributionInfo().GetVectorClusteringInfos()[0].GetSize() == int64(100))
-		s.True(segment.GetDistributionInfo().GetVectorClusteringInfos()[0].GetClusterId() != 0)
-		s.True(segment.GetDistributionInfo().GetVectorClusteringInfos()[0].GetCentroid() != nil)
+		s.True(len(segment.GetClusteringInfo().GetVectorClusteringInfos()) > 0)
+		s.True(segment.GetClusteringInfo().GetVectorClusteringInfos()[0].GetCentroid() != nil)
 	}
 
 	log.Info("======================")
@@ -130,7 +140,15 @@ func (s *BulkInsertClusteringSuite) TestBulkInsertClustering() {
 	log.Info("======================")
 }
 
+func generateFloatVectors(dim int) []float32 {
+	total := dim
+	ret := make([]float32, 0, total)
+	for i := 0; i < total; i++ {
+		ret = append(ret, rand.Float32())
+	}
+	return ret
+}
+
 func TestBulkInsertClustering(t *testing.T) {
-	t.Skip("Skip integration test, need to refactor integration test framework")
 	suite.Run(t, new(BulkInsertClusteringSuite))
 }

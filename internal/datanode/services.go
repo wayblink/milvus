@@ -41,7 +41,6 @@ import (
 	"github.com/milvus-io/milvus/internal/proto/internalpb"
 	"github.com/milvus-io/milvus/internal/proto/rootcoordpb"
 	"github.com/milvus-io/milvus/internal/storage"
-	"github.com/milvus-io/milvus/internal/util/distribution"
 	"github.com/milvus-io/milvus/internal/util/importutil"
 	"github.com/milvus-io/milvus/pkg/common"
 	"github.com/milvus-io/milvus/pkg/log"
@@ -717,33 +716,6 @@ func createBinLogsFunc(node *DataNode, req *datapb.ImportTaskRequest, schema *sc
 	}
 }
 
-func parseDistributionInfo(node *DataNode, importTask *datapb.ImportTask) (*internalpb.DistributionInfo, error) {
-	clusteringInfo, err := distribution.ClusteringInfoFromKV(importTask.GetInfos())
-	if err != nil {
-		log.Warn("failed to parse clustering info from import request", zap.Error(err))
-		return nil, fmt.Errorf(err.Error())
-	}
-	if clusteringInfo != nil && clusteringInfo.GetClusterId() == 0 {
-		clusteringInfoId, err := node.rootCoord.AllocID(context.Background(), &rootcoordpb.AllocIDRequest{
-			Base: commonpbutil.NewMsgBase(
-				commonpbutil.WithMsgType(commonpb.MsgType_RequestID),
-				commonpbutil.WithMsgID(0),
-				commonpbutil.WithSourceID(node.session.ServerID),
-			),
-			Count: 1,
-		})
-		if err != nil {
-			log.Warn("failed to alloc id for cluster id", zap.Error(err))
-			return nil, fmt.Errorf(err.Error())
-		}
-		clusteringInfo.ClusterId = clusteringInfoId.ID
-	}
-
-	return &internalpb.DistributionInfo{
-		VectorClusteringInfos: []*internalpb.VectorClusteringInfo{clusteringInfo},
-	}, nil
-}
-
 func saveSegmentFunc(node *DataNode, req *datapb.ImportTaskRequest, res *rootcoordpb.ImportResult, ts Timestamp) importutil.SaveSegmentFunc {
 	importTaskID := req.GetImportTask().GetTaskId()
 	return func(fieldsInsert []*datapb.FieldBinlog, fieldsStats []*datapb.FieldBinlog, segmentID int64,
@@ -760,12 +732,8 @@ func saveSegmentFunc(node *DataNode, req *datapb.ImportTaskRequest, res *rootcoo
 		log.Info("adding segment to the correct DataNode flow graph and saving binlog paths", logFields...)
 
 		err := retry.Do(context.Background(), func() error {
-			distributionInfo, err := parseDistributionInfo(node, req.GetImportTask())
-			if err != nil {
-				return err
-			}
 			// Ask DataCoord to save binlog path and add segment to the corresponding DataNode flow graph.
-			err = node.broker.SaveImportSegment(context.Background(), &datapb.SaveImportSegmentRequest{
+			err := node.broker.SaveImportSegment(context.Background(), &datapb.SaveImportSegmentRequest{
 				Base: commonpbutil.NewMsgBase(
 					commonpbutil.WithTimeStamp(ts), // Pass current timestamp downstream.
 					commonpbutil.WithSourceID(paramtable.GetNodeID()),
@@ -794,8 +762,8 @@ func saveSegmentFunc(node *DataNode, req *datapb.ImportTaskRequest, res *rootcoo
 							SegmentID: segmentID,
 						},
 					},
-					Importing:        true,
-					DistributionInfo: distributionInfo,
+					Importing:      true,
+					ClusteringInfo: req.GetImportTask().GetClusteringInfo(),
 				},
 			})
 			// Only retrying when DataCoord is unhealthy or err != nil, otherwise return immediately.

@@ -37,7 +37,6 @@ import (
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/metastore/model"
 	"github.com/milvus-io/milvus/internal/proto/datapb"
-	"github.com/milvus-io/milvus/internal/proto/internalpb"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/util/segmentutil"
 	"github.com/milvus-io/milvus/pkg/common"
@@ -603,16 +602,14 @@ func UpdateCheckPointOperator(segmentID int64, importing bool, checkpoints []*da
 	}
 }
 
-// update distribution
-func UpdateDistribution(segmentID int64, distribution *internalpb.DistributionInfo) UpdateOperator {
+func UpdateClusteringInfo(segmentID int64, distribution *schemapb.ClusteringInfo) UpdateOperator {
 	return func(modPack *updateSegmentPack) bool {
 		segment := modPack.Get(segmentID)
 		if segment == nil {
-			log.Warn("meta update: update distribution failed - segment not found",
-				zap.Int64("segmentID", segmentID))
+			log.Warn("meta update: update clustering failed - segment not found", zap.Int64("segmentID", segmentID))
 			return false
 		}
-		segment.DistributionInfo = distribution
+		segment.ClusteringInfo = distribution
 		return true
 	}
 }
@@ -638,7 +635,15 @@ func (m *meta) UpdateSegmentsInfo(operators ...UpdateOperator) error {
 		}
 	}
 
-	segments := lo.MapToSlice(updatePack.segments, func(_ int64, segment *SegmentInfo) *datapb.SegmentInfo { return segment.SegmentInfo })
+	segments := lo.MapToSlice(updatePack.segments, func(id int64, segment *SegmentInfo) *datapb.SegmentInfo {
+		res := segment.SegmentInfo
+		if old, exist := m.segments.segments[id]; exist {
+			if old.SegmentInfo.GetClusteringInfo() != nil && res.ClusteringInfo == nil {
+				res.ClusteringInfo = old.SegmentInfo.GetClusteringInfo()
+			}
+		}
+		return res
+	})
 	increments := lo.Values(updatePack.increments)
 
 	if err := m.catalog.AlterSegments(m.ctx, segments, increments...); err != nil {

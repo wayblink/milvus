@@ -40,8 +40,9 @@ import (
 )
 
 const (
-	DIM8   = 8
-	DIM128 = 128
+	DIM8    = 8
+	DIM128  = 128
+	DIM2560 = 2560
 )
 
 func GenerateNumpyFile(filePath string, rowCount int, fieldSchema *schemapb.FieldSchema) error {
@@ -104,18 +105,20 @@ func GenerateNumpyFile(filePath string, rowCount int, fieldSchema *schemapb.Fiel
 	return nil
 }
 
-func BulkInsertSync(ctx context.Context, cluster *integration.MiniClusterV2, collectionName string, bulkInsertFiles []string, bulkInsertOptions []*commonpb.KeyValuePair) error {
+func BulkInsertSync(ctx context.Context, cluster *integration.MiniClusterV2, collectionName string, bulkInsertFiles []string, bulkInsertOptions []*commonpb.KeyValuePair, clusteringInfoBytes []byte) (*milvuspb.GetImportStateResponse, error) {
 	importResp, err := cluster.Proxy.Import(ctx, &milvuspb.ImportRequest{
 		CollectionName: collectionName,
 		Files:          bulkInsertFiles,
 		Options:        bulkInsertOptions,
+		ClusteringInfo: clusteringInfoBytes,
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	log.Info("Import result", zap.Any("importResp", importResp), zap.Int64s("tasks", importResp.GetTasks()))
 
 	tasks := importResp.GetTasks()
+	var importTaskState *milvuspb.GetImportStateResponse
 	for _, task := range tasks {
 	loop:
 		for {
@@ -123,7 +126,7 @@ func BulkInsertSync(ctx context.Context, cluster *integration.MiniClusterV2, col
 				Task: task,
 			})
 			if err != nil {
-				return err
+				return nil, err
 			}
 			switch importTaskState.GetState() {
 			case commonpb.ImportState_ImportFailed:
@@ -137,7 +140,7 @@ func BulkInsertSync(ctx context.Context, cluster *integration.MiniClusterV2, col
 			}
 		}
 	}
-	return nil
+	return importTaskState, nil
 }
 
 type BulkInsertSuite struct {
@@ -205,7 +208,7 @@ func (s *BulkInsertSuite) TestBulkInsert() {
 	s.NoError(err)
 	log.Info("dataCoord health", zap.Any("health1", health1))
 
-	err = BulkInsertSync(ctx, c, collectionName, bulkInsertFiles, nil)
+	_, err = BulkInsertSync(ctx, c, collectionName, bulkInsertFiles, nil, nil)
 	s.NoError(err)
 
 	health2, err := c.DataCoord.CheckHealth(ctx, &milvuspb.CheckHealthRequest{})

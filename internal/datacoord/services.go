@@ -489,8 +489,8 @@ func (s *Server) SaveBinlogPaths(ctx context.Context, req *datapb.SaveBinlogPath
 	// save checkpoints.
 	operators = append(operators, UpdateCheckPointOperator(segmentID, req.GetImporting(), req.GetCheckPoints()))
 
-	// save segment distribution info
-	operators = append(operators, UpdateDistribution(segmentID, req.GetDistributionInfo()))
+	// save segment clustering info
+	operators = append(operators, UpdateClusteringInfo(segmentID, req.GetClusteringInfo()))
 
 	if Params.CommonCfg.EnableStorageV2.GetAsBool() {
 		operators = append(operators, UpdateStorageVersionOperator(segmentID, req.GetStorageVersion()))

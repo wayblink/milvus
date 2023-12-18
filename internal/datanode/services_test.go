@@ -41,7 +41,6 @@ import (
 	"github.com/milvus-io/milvus/internal/proto/datapb"
 	"github.com/milvus-io/milvus/internal/proto/internalpb"
 	"github.com/milvus-io/milvus/internal/storage"
-	"github.com/milvus-io/milvus/internal/util/distribution"
 	"github.com/milvus-io/milvus/internal/util/importutil"
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
 	"github.com/milvus-io/milvus/pkg/common"
@@ -884,36 +883,6 @@ func (s *DataNodeServicesSuite) TestSyncSegments() {
 		_, result = fg.metacache.GetSegmentByID(301, metacache.WithSegmentState(commonpb.SegmentState_Flushed))
 		s.False(result)
 	})
-}
-
-func (s *DataNodeServicesSuite) TestParseDistributionInfo_InvalidClusteringInfo() {
-	importTask := &datapb.ImportTask{
-		CollectionId: 100,
-		PartitionId:  100,
-		Infos: []*commonpb.KeyValuePair{
-			{Key: distribution.ClusteringCentroid, Value: "1234"},
-			{Key: distribution.ClusteringId, Value: "abcd"},
-		},
-	}
-	_, err := parseDistributionInfo(s.node, importTask)
-	s.Assert().Error(err)
-}
-
-func (s *DataNodeServicesSuite) TestParseDistributionInfo_GenerateId() {
-	importTask := &datapb.ImportTask{
-		CollectionId: 100,
-		PartitionId:  100,
-		Infos: []*commonpb.KeyValuePair{
-			{Key: distribution.ClusteringCentroid, Value: "[1.0,2.0,3.0,4.0]"},
-		},
-	}
-	s.node.rootCoord = &RootCoordFactory{
-		collectionID: 100,
-		pkType:       schemapb.DataType_Int64,
-	}
-	clusteringInfo, err := parseDistributionInfo(s.node, importTask)
-	s.Assert().NoError(err)
-	s.Assert().NotEqual(0, clusteringInfo.GetVectorClusteringInfos()[0].GetClusterId())
 }
 
 func (s *DataNodeServicesSuite) TestResendSegmentStats() {

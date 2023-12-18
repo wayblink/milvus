@@ -265,8 +265,7 @@ message SegmentLoadInfo {
   msg.MsgPosition delta_position = 15;
   int64 readableVersion = 16;
   data.SegmentLevel level = 17;
-  // distribution infos if have
-  internal.DistributionInfo distribution_info = 22;
+  schema.ClusteringInfo clustering_info = 18;
 }
 
 message FieldIndexInfo {

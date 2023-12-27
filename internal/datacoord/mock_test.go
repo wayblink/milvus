@@ -637,7 +637,7 @@ func (h *mockCompactionHandler) updateCompaction(ts Timestamp) error {
 }
 
 // isFull return true if the task pool is full
-func (h *mockCompactionHandler) isFull() bool {
+func (h *mockCompactionHandler) isFull(compactionType ...datapb.CompactionType) bool {
 	if f, ok := h.methods["isFull"]; ok {
 		if ff, ok := f.(func() bool); ok {
 			return ff()
@@ -680,9 +680,9 @@ func (t *mockCompactionTrigger) triggerSingleCompaction(collectionID, partitionI
 	panic("not implemented")
 }
 
-// forceTriggerCompaction force to start a compaction
-func (t *mockCompactionTrigger) forceTriggerCompaction(collectionID int64) (UniqueID, error) {
-	if f, ok := t.methods["forceTriggerCompaction"]; ok {
+// triggerManualCompaction force to start a compaction
+func (t *mockCompactionTrigger) triggerManualCompaction(collectionID int64, isClustering bool) (UniqueID, error) {
+	if f, ok := t.methods["triggerManualCompaction"]; ok {
 		if ff, ok := f.(func(collectionID int64) (UniqueID, error)); ok {
 			return ff(collectionID)
 		}

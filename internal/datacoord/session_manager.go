@@ -49,7 +49,8 @@ type SessionManager struct {
 		sync.RWMutex
 		data map[int64]*Session
 	}
-	sessionCreator dataNodeCreatorFunc
+	clusteringSession *Session
+	sessionCreator    dataNodeCreatorFunc
 }
 
 // SessionOpt provides a way to set params in SessionManager
@@ -88,6 +89,15 @@ func (c *SessionManager) AddSession(node *NodeInfo) {
 	session := NewSession(node, c.sessionCreator)
 	c.sessions.data[node.NodeID] = session
 	metrics.DataCoordNumDataNodes.WithLabelValues().Set(float64(len(c.sessions.data)))
+}
+
+// AddClusteringSession creates a new session
+func (c *SessionManager) AddClusteringSession(node *NodeInfo) {
+	c.sessions.Lock()
+	defer c.sessions.Unlock()
+
+	session := NewSession(node, c.sessionCreator)
+	c.clusteringSession = session
 }
 
 // DeleteSession removes the node session
@@ -168,6 +178,27 @@ func (c *SessionManager) Compaction(nodeID int64, plan *datapb.CompactionPlan) e
 	return nil
 }
 
+// ClusteringCompaction is a grpc interface. It will send request to clustering service with provided `nodeID` synchronously.
+func (c *SessionManager) ClusteringCompaction(nodeID int64, plan *datapb.CompactionPlan) error {
+	ctx, cancel := context.WithTimeout(context.Background(), Params.DataCoordCfg.CompactionRPCTimeout.GetAsDuration(time.Second))
+	defer cancel()
+
+	cli, err := c.clusteringSession.GetOrCreateClient(ctx)
+	if err != nil {
+		log.Warn("failed to get client", zap.Int64("nodeID", nodeID), zap.Error(err))
+		return err
+	}
+
+	resp, err := cli.Compaction(ctx, plan)
+	if err := VerifyResponse(resp, err); err != nil {
+		log.Warn("failed to execute compaction", zap.Int64("node", nodeID), zap.Error(err), zap.Int64("planID", plan.GetPlanID()))
+		return err
+	}
+
+	log.Info("success to execute compaction", zap.Int64("node", nodeID), zap.Any("planID", plan.GetPlanID()))
+	return nil
+}
+
 // SyncSegments is a grpc interface. It will send request to DataNode with provided `nodeID` synchronously.
 func (c *SessionManager) SyncSegments(nodeID int64, req *datapb.SyncSegmentsRequest) error {
 	log := log.With(
@@ -232,36 +263,43 @@ func (c *SessionManager) GetCompactionState() map[int64]*datapb.CompactionStateR
 
 	plans := typeutil.NewConcurrentMap[int64, *datapb.CompactionStateResult]()
 	c.sessions.RLock()
+
+	callFunc := func(nodeID int64, s *Session) {
+		defer wg.Done()
+		cli, err := s.GetOrCreateClient(ctx)
+		if err != nil {
+			log.Info("Cannot Create Client", zap.Int64("NodeID", nodeID))
+			return
+		}
+		ctx, cancel := context.WithTimeout(ctx, Params.DataCoordCfg.CompactionRPCTimeout.GetAsDuration(time.Second))
+		defer cancel()
+		log.Debug("GetCompactionState", zap.Int64("NodeID", nodeID))
+		resp, err := cli.GetCompactionState(ctx, &datapb.CompactionStateRequest{
+			Base: commonpbutil.NewMsgBase(
+				commonpbutil.WithMsgType(commonpb.MsgType_GetSystemConfigs),
+				commonpbutil.WithSourceID(paramtable.GetNodeID()),
+			),
+		})
+		if err != nil {
+			log.Info("Get State failed", zap.Error(err))
+			return
+		}
+
+		if resp.GetStatus().GetErrorCode() != commonpb.ErrorCode_Success {
+			log.Info("Get State failed", zap.String("Reason", resp.GetStatus().GetReason()))
+			return
+		}
+		for _, rst := range resp.GetResults() {
+			plans.Insert(rst.PlanID, rst)
+		}
+	}
 	for nodeID, s := range c.sessions.data {
 		wg.Add(1)
-		go func(nodeID int64, s *Session) {
-			defer wg.Done()
-			cli, err := s.GetOrCreateClient(ctx)
-			if err != nil {
-				log.Info("Cannot Create Client", zap.Int64("NodeID", nodeID))
-				return
-			}
-			ctx, cancel := context.WithTimeout(ctx, Params.DataCoordCfg.CompactionRPCTimeout.GetAsDuration(time.Second))
-			defer cancel()
-			resp, err := cli.GetCompactionState(ctx, &datapb.CompactionStateRequest{
-				Base: commonpbutil.NewMsgBase(
-					commonpbutil.WithMsgType(commonpb.MsgType_GetSystemConfigs),
-					commonpbutil.WithSourceID(paramtable.GetNodeID()),
-				),
-			})
-			if err != nil {
-				log.Info("Get State failed", zap.Error(err))
-				return
-			}
-
-			if resp.GetStatus().GetErrorCode() != commonpb.ErrorCode_Success {
-				log.Info("Get State failed", zap.String("Reason", resp.GetStatus().GetReason()))
-				return
-			}
-			for _, rst := range resp.GetResults() {
-				plans.Insert(rst.PlanID, rst)
-			}
-		}(nodeID, s)
+		go callFunc(nodeID, s)
+	}
+	if c.clusteringSession != nil {
+		wg.Add(1)
+		go callFunc(c.clusteringSession.info.NodeID, c.clusteringSession)
 	}
 	c.sessions.RUnlock()
 	wg.Wait()

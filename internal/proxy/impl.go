@@ -2419,7 +2419,7 @@ func (node *Proxy) Search(ctx context.Context, request *milvuspb.SearchRequest) 
 
 	guaranteeTs := request.GuaranteeTimestamp
 
-	log := log.Ctx(ctx).With(
+	log := log.With(
 		zap.String("role", typeutil.ProxyRole),
 		zap.String("db", request.DbName),
 		zap.String("collection", request.CollectionName),

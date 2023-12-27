@@ -60,6 +60,10 @@ func (s *Server) getSystemInfoMetrics(
 
 	// for each data node, fetch metrics info
 	for _, node := range nodes {
+		// skip clustering service
+		if node.info.NodeID == 0 {
+			continue
+		}
 		infos, err := s.getDataNodeMetrics(ctx, req, node)
 		if err != nil {
 			log.Warn("fails to get DataNode metrics", zap.Error(err))

@@ -48,7 +48,7 @@ type compactionPlanContext interface {
 	// updateCompaction set the compaction state to timeout or completed
 	updateCompaction(ts Timestamp) error
 	// isFull return true if the task pool is full
-	isFull() bool
+	isFull(compactionType ...datapb.CompactionType) bool
 	// get compaction tasks by signal id
 	getCompactionTasksBySignalID(signalID int64) []*compactionTask
 }
@@ -104,6 +104,8 @@ type compactionPlanHandler struct {
 	flushCh          chan UniqueID
 	// segRefer         *SegmentReferenceManager
 	parallelCh map[int64]chan struct{}
+
+	executingClusteringTaskNum int
 }
 
 func newCompactionPlanHandler(sessions *SessionManager, cm *ChannelManager, meta *meta,
@@ -165,11 +167,16 @@ func (c *compactionPlanHandler) updateTask(planID int64, opts ...compactionTaskO
 func (c *compactionPlanHandler) execCompactionPlan(signal *compactionSignal, plan *datapb.CompactionPlan) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	nodeID, err := c.chManager.FindWatcher(plan.GetChannel())
-	if err != nil {
-		log.Error("failed to find watcher", zap.Int64("planID", plan.GetPlanID()), zap.Error(err))
-		return err
+	var nodeID int64 = 0
+	if plan.Type == datapb.CompactionType_ClusteringCompaction {
+		nodeID = 0
+	} else {
+		watchNodeID, err := c.chManager.FindWatcher(plan.GetChannel())
+		if err != nil {
+			log.Error("failed to find watcher", zap.Int64("planID", plan.GetPlanID()), zap.Error(err))
+			return err
+		}
+		nodeID = watchNodeID
 	}
 
 	log := log.With(zap.Int64("planID", plan.GetPlanID()), zap.Int64("nodeID", nodeID))
@@ -182,7 +189,11 @@ func (c *compactionPlanHandler) execCompactionPlan(signal *compactionSignal, pla
 		dataNodeID:  nodeID,
 	}
 	c.plans[plan.PlanID] = task
-	c.executingTaskNum++
+	if plan.Type == datapb.CompactionType_ClusteringCompaction {
+		c.executingClusteringTaskNum++
+	} else {
+		c.executingTaskNum++
+	}
 
 	go func() {
 		log.Info("acquire queue")
@@ -196,7 +207,12 @@ func (c *compactionPlanHandler) execCompactionPlan(signal *compactionSignal, pla
 			return
 		}
 		c.updateTask(plan.PlanID, setStartTime(ts))
-		err = c.sessions.Compaction(nodeID, plan)
+		if plan.Type == datapb.CompactionType_ClusteringCompaction {
+			err = c.sessions.ClusteringCompaction(nodeID, plan)
+		} else {
+			err = c.sessions.Compaction(nodeID, plan)
+		}
+
 		c.updateTask(plan.PlanID, setState(executing))
 		if err != nil {
 			log.Warn("try to Compaction but DataNode rejected", zap.Error(err))
@@ -237,9 +253,15 @@ func (c *compactionPlanHandler) completeCompaction(result *datapb.CompactionResu
 		return errors.New("unknown compaction type")
 	}
 	c.plans[planID] = c.plans[planID].shadowClone(setState(completed), setResult(result))
-	c.executingTaskNum--
-	if c.plans[planID].plan.GetType() == datapb.CompactionType_MergeCompaction ||
-		c.plans[planID].plan.GetType() == datapb.CompactionType_MixCompaction {
+
+	// Todo CompactionType_MergeCompaction now has no usage
+	switch c.plans[planID].plan.GetType() {
+	case datapb.CompactionType_MergeCompaction:
+	case datapb.CompactionType_MixCompaction:
+		c.executingTaskNum--
+		c.flushCh <- result.GetSegmentID()
+	case datapb.CompactionType_ClusteringCompaction:
+		c.executingClusteringTaskNum--
 		c.flushCh <- result.GetSegmentID()
 	}
 	// TODO: when to clean task list
@@ -335,7 +357,11 @@ func (c *compactionPlanHandler) updateCompaction(ts Timestamp) error {
 		log.Info("compaction failed", zap.Int64("planID", task.plan.PlanID), zap.Int64("nodeID", task.dataNodeID))
 		c.plans[planID] = c.plans[planID].shadowClone(setState(failed))
 		c.setSegmentsCompacting(task.plan, false)
-		c.executingTaskNum--
+		if task.plan.Type == datapb.CompactionType_ClusteringCompaction {
+			c.executingClusteringTaskNum--
+		} else {
+			c.executingTaskNum--
+		}
 		c.releaseQueue(task.dataNodeID)
 	}
 
@@ -395,12 +421,20 @@ func (c *compactionPlanHandler) releaseQueue(nodeID int64) {
 	<-ch
 }
 
-// isFull return true if the task pool is full
-func (c *compactionPlanHandler) isFull() bool {
+// isFull return true if the task pool for the compactionType is full
+func (c *compactionPlanHandler) isFull(compactionType ...datapb.CompactionType) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-
-	return c.executingTaskNum >= Params.DataCoordCfg.CompactionMaxParallelTasks.GetAsInt()
+	if compactionType != nil {
+		switch compactionType[0] {
+		case datapb.CompactionType_ClusteringCompaction:
+			return c.executingClusteringTaskNum >= Params.DataCoordCfg.ClusteringCompactionMaxParallelism.GetAsInt()
+		default:
+			return c.executingTaskNum >= Params.DataCoordCfg.CompactionMaxParallelTasks.GetAsInt()
+		}
+	} else {
+		return c.executingTaskNum >= Params.DataCoordCfg.CompactionMaxParallelTasks.GetAsInt()
+	}
 }
 
 func (c *compactionPlanHandler) getTasksByState(state compactionTaskState) []*compactionTask {

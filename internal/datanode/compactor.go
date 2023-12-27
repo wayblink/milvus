@@ -19,6 +19,8 @@ package datanode
 import (
 	"context"
 	"fmt"
+	"github.com/milvus-io/milvus/pkg/metrics"
+	"github.com/milvus-io/milvus/pkg/util/paramtable"
 	"path"
 	"strconv"
 	"strings"
@@ -34,11 +36,9 @@ import (
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/pkg/common"
 	"github.com/milvus-io/milvus/pkg/log"
-	"github.com/milvus-io/milvus/pkg/metrics"
 	"github.com/milvus-io/milvus/pkg/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/util/merr"
 	"github.com/milvus-io/milvus/pkg/util/metautil"
-	"github.com/milvus-io/milvus/pkg/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/util/timerecord"
 	"github.com/milvus-io/milvus/pkg/util/tsoutil"
 	"github.com/milvus-io/milvus/pkg/util/typeutil"
@@ -52,11 +52,9 @@ var (
 	errContext                 = errors.New("context done or timeout")
 )
 
-type iterator = storage.Iterator
-
 type compactor interface {
 	complete()
-	compact() (*datapb.CompactionResult, error)
+	compact() ([]*datapb.CompactionResult, error)
 	injectDone(success bool)
 	stop()
 	getPlanID() UniqueID
@@ -477,7 +475,7 @@ func (t *compactionTask) merge(
 	return insertPaths, statPaths, numRows, nil
 }
 
-func (t *compactionTask) compact() (*datapb.CompactionResult, error) {
+func (t *compactionTask) compact() ([]*datapb.CompactionResult, error) {
 	log := log.With(zap.Int64("planID", t.plan.GetPlanID()))
 	compactStart := time.Now()
 	if ok := funcutil.CheckCtxValid(t.ctx); !ok {
@@ -514,7 +512,7 @@ func (t *compactionTask) compact() (*datapb.CompactionResult, error) {
 		segIDs = append(segIDs, s.GetSegmentID())
 	}
 
-	_, partID, meta, err := t.getSegmentMeta(segIDs[0])
+	_, partID, collectionMeta, err := t.getSegmentMeta(segIDs[0])
 	if err != nil {
 		log.Warn("compact wrong", zap.Error(err))
 		return nil, err
@@ -523,7 +521,7 @@ func (t *compactionTask) compact() (*datapb.CompactionResult, error) {
 	// Inject to stop flush
 	injectStart := time.Now()
 	ti := newTaskInjection(len(segIDs), func(pack *segmentFlushPack) {
-		collectionID := meta.GetID()
+		collectionID := collectionMeta.GetID()
 		pack.segmentID = targetSegID
 		for _, insertLog := range pack.insertLogs {
 			splits := strings.Split(insertLog.LogPath, "/")
@@ -683,7 +681,7 @@ func (t *compactionTask) compact() (*datapb.CompactionResult, error) {
 		return nil, err
 	}
 
-	inPaths, statsPaths, numRows, err := t.merge(ctxTimeout, allPath, targetSegID, partID, meta, deltaPk2Ts)
+	inPaths, statsPaths, numRows, err := t.merge(ctxTimeout, allPath, targetSegID, partID, collectionMeta, deltaPk2Ts)
 	if err != nil {
 		log.Warn("compact wrong", zap.Error(err))
 		return nil, err
@@ -712,7 +710,7 @@ func (t *compactionTask) compact() (*datapb.CompactionResult, error) {
 	metrics.DataNodeCompactionLatency.WithLabelValues(fmt.Sprint(paramtable.GetNodeID())).Observe(float64(t.tr.ElapseSpan().Milliseconds()))
 	metrics.DataNodeCompactionLatencyInQueue.WithLabelValues(fmt.Sprint(paramtable.GetNodeID())).Observe(float64(durInQueue.Milliseconds()))
 
-	return pack, nil
+	return []*datapb.CompactionResult{pack}, nil
 }
 
 func (t *compactionTask) injectDone(success bool) {

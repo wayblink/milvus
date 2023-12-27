@@ -297,17 +297,17 @@ message SegmentInfo {
   // (2) the bulk insert task that creates this segment has not yet reached `ImportCompleted` state.
   bool is_importing = 17;
   bool is_fake = 18;
-
   // denote if this segment is compacted to other segment.
   // For compatibility reasons, this flag of an old compacted segment may still be False.
   // As for new fields added in the message, they will be populated with their respective field types' default values.
   bool compacted = 19;
-
   // Segment level, indicating compaction segment level
   // Available value: Legacy, L0, L1
   // For legacy level, it represent old segment before segment level introduced
   // so segments with Legacy level shall be treated as L1 segment
   SegmentLevel level = 20;
+  // clustering infos
+  repeated internal.ClusteringInfo clustering_infos = 21;
 }
 
 message SegmentStartPosition {
@@ -328,6 +328,7 @@ message SaveBinlogPathsRequest {
   bool dropped = 10;
   bool importing = 11;
   string channel = 12; // report channel name for verification
+  internal.ClusteringInfo clustering_info = 13; // cluster info if have
 }
 
 message CheckPoint {
@@ -468,6 +469,7 @@ enum CompactionType {
   MinorCompaction = 5;
   MajorCompaction = 6;
   Level0DeleteCompaction = 7;
+  ClusteringCompaction = 8;
 }
 
 message CompactionStateRequest {
@@ -500,6 +502,7 @@ message CompactionPlan {
   string channel = 7;
   int64 collection_ttl = 8;
   int64 total_rows = 9;
+  repeated common.KeyValuePair clustering_params = 10;
 }
 
 message CompactionResult {

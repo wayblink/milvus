@@ -375,6 +375,14 @@ dataCoord:
     rpcTimeout: 10 # compaction rpc request timeout in seconds
     maxParallelTaskNum: 100 # max parallel compaction task number
     indexBasedCompaction: true
+    clusteringCompaction:
+      enable: false
+      timeout: 1800
+      maxParallelism: 1
+      minSize: 0m
+      maxSize: 10G
+      serviceAddress: localhost:33930
+      nodeID: 0
 
   enableGarbageCollection: true
   gc:

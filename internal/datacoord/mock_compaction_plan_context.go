@@ -40,8 +40,8 @@ type MockCompactionPlanContext_execCompactionPlan_Call struct {
 }
 
 // execCompactionPlan is a helper method to define mock.On call
-//   - signal *compactionSignal
-//   - plan *datapb.CompactionPlan
+//  - signal *compactionSignal
+//  - plan *datapb.CompactionPlan
 func (_e *MockCompactionPlanContext_Expecter) execCompactionPlan(signal interface{}, plan interface{}) *MockCompactionPlanContext_execCompactionPlan_Call {
 	return &MockCompactionPlanContext_execCompactionPlan_Call{Call: _e.mock.On("execCompactionPlan", signal, plan)}
 }
@@ -85,7 +85,7 @@ type MockCompactionPlanContext_getCompaction_Call struct {
 }
 
 // getCompaction is a helper method to define mock.On call
-//   - planID int64
+//  - planID int64
 func (_e *MockCompactionPlanContext_Expecter) getCompaction(planID interface{}) *MockCompactionPlanContext_getCompaction_Call {
 	return &MockCompactionPlanContext_getCompaction_Call{Call: _e.mock.On("getCompaction", planID)}
 }
@@ -129,7 +129,7 @@ type MockCompactionPlanContext_getCompactionTasksBySignalID_Call struct {
 }
 
 // getCompactionTasksBySignalID is a helper method to define mock.On call
-//   - signalID int64
+//  - signalID int64
 func (_e *MockCompactionPlanContext_Expecter) getCompactionTasksBySignalID(signalID interface{}) *MockCompactionPlanContext_getCompactionTasksBySignalID_Call {
 	return &MockCompactionPlanContext_getCompactionTasksBySignalID_Call{Call: _e.mock.On("getCompactionTasksBySignalID", signalID)}
 }
@@ -151,13 +151,19 @@ func (_c *MockCompactionPlanContext_getCompactionTasksBySignalID_Call) RunAndRet
 	return _c
 }
 
-// isFull provides a mock function with given fields:
-func (_m *MockCompactionPlanContext) isFull() bool {
-	ret := _m.Called()
+// isFull provides a mock function with given fields: compactionType
+func (_m *MockCompactionPlanContext) isFull(compactionType ...datapb.CompactionType) bool {
+	_va := make([]interface{}, len(compactionType))
+	for _i := range compactionType {
+		_va[_i] = compactionType[_i]
+	}
+	var _ca []interface{}
+	_ca = append(_ca, _va...)
+	ret := _m.Called(_ca...)
 
 	var r0 bool
-	if rf, ok := ret.Get(0).(func() bool); ok {
-		r0 = rf()
+	if rf, ok := ret.Get(0).(func(...datapb.CompactionType) bool); ok {
+		r0 = rf(compactionType...)
 	} else {
 		r0 = ret.Get(0).(bool)
 	}
@@ -171,13 +177,21 @@ type MockCompactionPlanContext_isFull_Call struct {
 }
 
 // isFull is a helper method to define mock.On call
-func (_e *MockCompactionPlanContext_Expecter) isFull() *MockCompactionPlanContext_isFull_Call {
-	return &MockCompactionPlanContext_isFull_Call{Call: _e.mock.On("isFull")}
+//  - compactionType ...datapb.CompactionType
+func (_e *MockCompactionPlanContext_Expecter) isFull(compactionType ...interface{}) *MockCompactionPlanContext_isFull_Call {
+	return &MockCompactionPlanContext_isFull_Call{Call: _e.mock.On("isFull",
+		append([]interface{}{}, compactionType...)...)}
 }
 
-func (_c *MockCompactionPlanContext_isFull_Call) Run(run func()) *MockCompactionPlanContext_isFull_Call {
+func (_c *MockCompactionPlanContext_isFull_Call) Run(run func(compactionType ...datapb.CompactionType)) *MockCompactionPlanContext_isFull_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run()
+		variadicArgs := make([]datapb.CompactionType, len(args)-0)
+		for i, a := range args[0:] {
+			if a != nil {
+				variadicArgs[i] = a.(datapb.CompactionType)
+			}
+		}
+		run(variadicArgs...)
 	})
 	return _c
 }
@@ -187,7 +201,7 @@ func (_c *MockCompactionPlanContext_isFull_Call) Return(_a0 bool) *MockCompactio
 	return _c
 }
 
-func (_c *MockCompactionPlanContext_isFull_Call) RunAndReturn(run func() bool) *MockCompactionPlanContext_isFull_Call {
+func (_c *MockCompactionPlanContext_isFull_Call) RunAndReturn(run func(...datapb.CompactionType) bool) *MockCompactionPlanContext_isFull_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -276,7 +290,7 @@ type MockCompactionPlanContext_updateCompaction_Call struct {
 }
 
 // updateCompaction is a helper method to define mock.On call
-//   - ts uint64
+//  - ts uint64
 func (_e *MockCompactionPlanContext_Expecter) updateCompaction(ts interface{}) *MockCompactionPlanContext_updateCompaction_Call {
 	return &MockCompactionPlanContext_updateCompaction_Call{Call: _e.mock.On("updateCompaction", ts)}
 }

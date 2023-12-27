@@ -19,7 +19,10 @@ package delegator
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
+	"math"
+	"sort"
 	"sync"
 	"time"
 
@@ -42,6 +45,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/metrics"
 	"github.com/milvus-io/milvus/pkg/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/util/conc"
+	"github.com/milvus-io/milvus/pkg/util/distance"
 	"github.com/milvus-io/milvus/pkg/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/util/lifetime"
 	"github.com/milvus-io/milvus/pkg/util/merr"
@@ -69,6 +73,7 @@ type ShardDelegator interface {
 	ReleaseSegments(ctx context.Context, req *querypb.ReleaseSegmentsRequest, force bool) error
 	SyncTargetVersion(newVersion int64, growingInTarget []int64, sealedInTarget []int64, droppedInTarget []int64)
 	GetTargetVersion() int64
+	OptimizeSearchBasedOnClustering(req *querypb.SearchRequest, sealeds []SnapshotItem) (*querypb.SearchRequest, []SnapshotItem)
 
 	// control
 	Serviceable() bool
@@ -175,6 +180,118 @@ func (sd *shardDelegator) modifyQueryRequest(req *querypb.QueryRequest, scope qu
 	return nodeReq
 }
 
+func Deserialize(data []byte) []float32 {
+	vectorLen := len(data) / 4 // Each float32 occupies 4 bytes
+	fv := make([]float32, vectorLen)
+
+	for i := 0; i < vectorLen; i++ {
+		bits := binary.LittleEndian.Uint32(data[i*4 : (i+1)*4])
+		fv[i] = math.Float32frombits(bits)
+	}
+
+	return fv
+}
+
+func (sd *shardDelegator) OptimizeSearchBasedOnClustering(req *querypb.SearchRequest, sealeds []SnapshotItem) (*querypb.SearchRequest, []SnapshotItem) {
+	if !req.GetReq().GetClusteringOptions().GetEnable() {
+		log.Info("skip optimize based on clustering info")
+		return req, sealeds
+	}
+	filterRatio := req.GetReq().GetClusteringOptions().GetFilterRate()
+	dim := req.GetReq().GetDim()
+	metricType := req.GetReq().GetMetricType()
+	var phg commonpb.PlaceholderGroup
+	err := proto.Unmarshal(req.GetReq().GetPlaceholderGroup(), &phg)
+	if err != nil {
+		fmt.Println("Error:", err)
+	}
+	log.Info("optimizeSearchBasedOnClustering",
+		zap.String("metricType", metricType),
+		zap.Int32("dim", dim),
+		zap.Int("length", len(phg.GetPlaceholders())),
+		zap.Float32("filterRatio", filterRatio))
+
+	vectorsBytes := phg.GetPlaceholders()[0].GetValues()
+	searchVectors := make([][]float32, len(vectorsBytes))
+	for i, vectorBytes := range vectorsBytes {
+		searchVectors[i] = Deserialize(vectorBytes)
+	}
+
+	var segments = make([]SegmentEntry, 0)
+	for _, sealed := range sealeds {
+		segments = append(segments, sealed.Segments...)
+	}
+
+	type segmentDistanceStruct struct {
+		segment  SegmentEntry
+		distance float32
+	}
+
+	var vectorSegmentDistances = make([][]segmentDistanceStruct, 0)
+	for _, searchVector := range searchVectors {
+		var vectorSegmentDistance = make([]segmentDistanceStruct, 0)
+		for _, segment := range segments {
+			if segment.ClusteringInfos != nil {
+				for _, clusteringInfo := range segment.ClusteringInfos {
+					distance, err := distance.CalcFloatDistance(int64(dim), searchVector, clusteringInfo.Centroid, metricType)
+					if err != nil {
+						log.Error("Fail to calculate distance between clustering center and search vector", zap.Error(err))
+					}
+					log.Info("distance between searchVector and cluster center", zap.Int64("segmentID", segment.SegmentID), zap.Float32s("distance", distance))
+					vectorSegmentDistance = append(vectorSegmentDistance, segmentDistanceStruct{segment: segment, distance: distance[0]})
+				}
+			} else {
+				vectorSegmentDistance = append(vectorSegmentDistance, segmentDistanceStruct{segment: segment, distance: float32(0.0)})
+			}
+		}
+		vectorSegmentDistances = append(vectorSegmentDistances, vectorSegmentDistance)
+	}
+	log.Debug("vector segment distances", zap.Any("vectorSegmentDistances", vectorSegmentDistances))
+
+	filtered := make(map[UniqueID]SegmentEntry, 0)
+	for _, vectorSegmentDistance := range vectorSegmentDistances {
+		sort.SliceStable(vectorSegmentDistance, func(i, j int) bool {
+			return vectorSegmentDistance[i].distance < vectorSegmentDistance[j].distance
+		}) // sort by distance
+
+		segmentNum := len(vectorSegmentDistance)
+		zeroSegmentNum := 0
+		for i, segmentDistance := range vectorSegmentDistance {
+			if segmentDistance.distance == 0.0 {
+				zeroSegmentNum++
+				filtered[segmentDistance.segment.SegmentID] = segmentDistance.segment
+			} else if i < zeroSegmentNum+int(float32(segmentNum-zeroSegmentNum)*filterRatio) {
+				filtered[segmentDistance.segment.SegmentID] = segmentDistance.segment
+			}
+		}
+	}
+	log.Info("filtered segments", zap.Int("before", len(segments)), zap.Int("after", len(filtered)), zap.Any("segments", filtered))
+
+	// merge to SnapshotItem
+	nodeSegments := make(map[int64]SnapshotItem, 0)
+	for _, segment := range filtered {
+		if _, ok := nodeSegments[segment.NodeID]; ok {
+			snapshot := nodeSegments[segment.NodeID]
+			segments := append(snapshot.Segments, segment)
+			nodeSegments[segment.NodeID] = SnapshotItem{
+				NodeID:   segment.NodeID,
+				Segments: segments,
+			}
+		} else {
+			nodeSegments[segment.NodeID] = SnapshotItem{
+				NodeID:   segment.NodeID,
+				Segments: []SegmentEntry{segment},
+			}
+		}
+	}
+	nodeSegmentsArr := make([]SnapshotItem, 0)
+	for _, snapshot := range nodeSegments {
+		nodeSegmentsArr = append(nodeSegmentsArr, snapshot)
+	}
+
+	return req, nodeSegmentsArr
+}
+
 // Search preforms search operation on shard.
 func (sd *shardDelegator) Search(ctx context.Context, req *querypb.SearchRequest) ([]*internalpb.SearchResults, error) {
 	log := sd.getLogger(ctx)
@@ -217,12 +334,18 @@ func (sd *shardDelegator) Search(ctx context.Context, req *querypb.SearchRequest
 		growing = []SegmentEntry{}
 	}
 
+	// filter segments based on cluster info
+	start := time.Now()
+	req, sealed = sd.OptimizeSearchBasedOnClustering(req, sealed)
 	sealedNum := lo.SumBy(sealed, func(item SnapshotItem) int { return len(item.Segments) })
 	log.Debug("search segments...",
 		zap.Int("sealedNum", sealedNum),
 		zap.Int("growingNum", len(growing)),
 	)
+	elapse := time.Since(start) / time.Nanosecond
+	log.Info("OptimizeSearchBasedOnClustering time cost", zap.Int64("ns", elapse.Nanoseconds()))
 	tasks, err := organizeSubTask(ctx, req, sealed, growing, sd, sd.modifySearchRequest)
+	//tasks, err := organizeSubTask(ctx, req, sealed, growing, sd, sd.modifySearchRequest)
 	if err != nil {
 		log.Warn("Search organizeSubTask failed", zap.Error(err))
 		return nil, err

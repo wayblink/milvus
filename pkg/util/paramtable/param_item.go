@@ -137,6 +137,10 @@ func (pi *ParamItem) GetAsDuration(unit time.Duration) time.Duration {
 	return getAsDuration(pi.GetValue(), unit)
 }
 
+func (pi *ParamItem) GetAsSize() int64 {
+	return getAndConvert(pi.GetValue(), funcutil.StringToDataSize, int64(0))
+}
+
 func (pi *ParamItem) GetAsJSONMap() map[string]string {
 	return getAndConvert(pi.GetValue(), funcutil.JSONToMap, nil)
 }

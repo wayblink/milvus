@@ -42,8 +42,8 @@ type NMockHandler_CheckShouldDropChannel_Call struct {
 }
 
 // CheckShouldDropChannel is a helper method to define mock.On call
-//   - channel string
-//   - collectionID int64
+//  - channel string
+//  - collectionID int64
 func (_e *NMockHandler_Expecter) CheckShouldDropChannel(channel interface{}, collectionID interface{}) *NMockHandler_CheckShouldDropChannel_Call {
 	return &NMockHandler_CheckShouldDropChannel_Call{Call: _e.mock.On("CheckShouldDropChannel", channel, collectionID)}
 }
@@ -85,7 +85,7 @@ type NMockHandler_FinishDropChannel_Call struct {
 }
 
 // FinishDropChannel is a helper method to define mock.On call
-//   - channel string
+//  - channel string
 func (_e *NMockHandler_Expecter) FinishDropChannel(channel interface{}) *NMockHandler_FinishDropChannel_Call {
 	return &NMockHandler_FinishDropChannel_Call{Call: _e.mock.On("FinishDropChannel", channel)}
 }
@@ -139,8 +139,8 @@ type NMockHandler_GetCollection_Call struct {
 }
 
 // GetCollection is a helper method to define mock.On call
-//   - ctx context.Context
-//   - collectionID int64
+//  - ctx context.Context
+//  - collectionID int64
 func (_e *NMockHandler_Expecter) GetCollection(ctx interface{}, collectionID interface{}) *NMockHandler_GetCollection_Call {
 	return &NMockHandler_GetCollection_Call{Call: _e.mock.On("GetCollection", ctx, collectionID)}
 }
@@ -184,8 +184,8 @@ type NMockHandler_GetDataVChanPositions_Call struct {
 }
 
 // GetDataVChanPositions is a helper method to define mock.On call
-//   - ch *channel
-//   - partitionID int64
+//  - ch *channel
+//  - partitionID int64
 func (_e *NMockHandler_Expecter) GetDataVChanPositions(ch interface{}, partitionID interface{}) *NMockHandler_GetDataVChanPositions_Call {
 	return &NMockHandler_GetDataVChanPositions_Call{Call: _e.mock.On("GetDataVChanPositions", ch, partitionID)}
 }
@@ -236,8 +236,8 @@ type NMockHandler_GetQueryVChanPositions_Call struct {
 }
 
 // GetQueryVChanPositions is a helper method to define mock.On call
-//   - ch *channel
-//   - partitionIDs ...int64
+//  - ch *channel
+//  - partitionIDs ...int64
 func (_e *NMockHandler_Expecter) GetQueryVChanPositions(ch interface{}, partitionIDs ...interface{}) *NMockHandler_GetQueryVChanPositions_Call {
 	return &NMockHandler_GetQueryVChanPositions_Call{Call: _e.mock.On("GetQueryVChanPositions",
 		append([]interface{}{ch}, partitionIDs...)...)}

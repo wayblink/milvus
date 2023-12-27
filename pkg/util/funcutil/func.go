@@ -87,6 +87,35 @@ func JSONToMap(mStr string) (map[string]string, error) {
 	return ret, nil
 }
 
+func StringToDataSize(key string) (int64, error) {
+	valueStr := strings.ToLower(key)
+	if strings.HasSuffix(valueStr, "g") || strings.HasSuffix(valueStr, "gb") {
+		size, err := strconv.ParseInt(strings.Split(valueStr, "g")[0], 10, 64)
+		if err != nil {
+			return 0, err
+		}
+		return size * 1024 * 1024 * 1024, nil
+	} else if strings.HasSuffix(valueStr, "m") || strings.HasSuffix(valueStr, "mb") {
+		size, err := strconv.ParseInt(strings.Split(valueStr, "m")[0], 10, 64)
+		if err != nil {
+			return 0, err
+		}
+		return size * 1024 * 1024, nil
+	} else if strings.HasSuffix(valueStr, "k") || strings.HasSuffix(valueStr, "kb") {
+		size, err := strconv.ParseInt(strings.Split(valueStr, "k")[0], 10, 64)
+		if err != nil {
+			return 0, err
+		}
+		return size * 1024, nil
+	}
+
+	size, err := strconv.ParseInt(strings.Split(valueStr, "k")[0], 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	return size, nil
+}
+
 func MapToJSON(m map[string]string) []byte {
 	// error won't happen here.
 	bs, _ := json.Marshal(m)

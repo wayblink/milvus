@@ -481,7 +481,8 @@ func (s *Server) SaveBinlogPaths(ctx context.Context, req *datapb.SaveBinlogPath
 		req.GetField2StatslogPaths(),
 		req.GetDeltalogs(),
 		req.GetCheckPoints(),
-		req.GetStartPositions())
+		req.GetStartPositions(),
+		req.GetClusteringInfo())
 	if err != nil {
 		log.Error("save binlog and checkpoints failed", zap.Error(err))
 		return merr.Status(err), nil
@@ -1021,7 +1022,7 @@ func (s *Server) ManualCompaction(ctx context.Context, req *milvuspb.ManualCompa
 		return resp, nil
 	}
 
-	id, err := s.compactionTrigger.forceTriggerCompaction(req.CollectionID)
+	id, err := s.compactionTrigger.triggerManualCompaction(req.CollectionID, req.GetClustering())
 	if err != nil {
 		log.Error("failed to trigger manual compaction", zap.Error(err))
 		resp.Status = merr.Status(err)

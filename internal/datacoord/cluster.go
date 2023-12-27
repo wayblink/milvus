@@ -51,6 +51,12 @@ func (c *Cluster) Startup(ctx context.Context, nodes []*NodeInfo) error {
 	for _, node := range nodes {
 		c.sessionManager.AddSession(node)
 	}
+	if Params.DataCoordCfg.ClusteringCompactionEnable.GetAsBool() {
+		c.sessionManager.AddClusteringSession(&NodeInfo{
+			NodeID:  Params.DataCoordCfg.ClusteringCompactionServiceNodeID.GetAsInt64(),
+			Address: Params.DataCoordCfg.ClusteringCompactionServiceAddress.GetValue(),
+		})
+	}
 	currs := make([]int64, 0, len(nodes))
 	for _, node := range nodes {
 		currs = append(currs, node.NodeID)

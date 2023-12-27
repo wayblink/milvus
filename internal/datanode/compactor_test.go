@@ -887,11 +887,11 @@ func TestCompactorInterfaceMethods(t *testing.T) {
 			assert.NoError(t, err)
 			assert.NotNil(t, result)
 
-			assert.Equal(t, plan.GetPlanID(), result.GetPlanID())
-			assert.Equal(t, UniqueID(19530), result.GetSegmentID())
-			assert.Equal(t, int64(2), result.GetNumOfRows())
-			assert.NotEmpty(t, result.InsertLogs)
-			assert.NotEmpty(t, result.Field2StatslogPaths)
+			assert.Equal(t, plan.GetPlanID(), result[0].GetPlanID())
+			assert.Equal(t, UniqueID(19530), result[0].GetSegmentID())
+			assert.Equal(t, int64(2), result[0].GetNumOfRows())
+			assert.NotEmpty(t, result[0].InsertLogs)
+			assert.NotEmpty(t, result[0].Field2StatslogPaths)
 
 			// New test, remove all the binlogs in memkv
 			err = mockKv.RemoveWithPrefix("/")
@@ -1011,11 +1011,11 @@ func TestCompactorInterfaceMethods(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NotNil(t, result)
 
-		assert.Equal(t, plan.GetPlanID(), result.GetPlanID())
-		assert.Equal(t, UniqueID(19530), result.GetSegmentID())
-		assert.Equal(t, int64(2), result.GetNumOfRows())
-		assert.NotEmpty(t, result.InsertLogs)
-		assert.NotEmpty(t, result.Field2StatslogPaths)
+		assert.Equal(t, plan.GetPlanID(), result[0].GetPlanID())
+		assert.Equal(t, UniqueID(19530), result[0].GetSegmentID())
+		assert.Equal(t, int64(2), result[0].GetNumOfRows())
+		assert.NotEmpty(t, result[0].InsertLogs)
+		assert.NotEmpty(t, result[0].Field2StatslogPaths)
 
 		assert.Equal(t, 0, mockfm.injectCount())
 		task.injectDone(true)

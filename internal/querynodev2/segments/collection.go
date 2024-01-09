@@ -45,7 +45,7 @@ import (
 
 type CollectionManager interface {
 	Get(collectionID int64) *Collection
-	PutOrRef(collectionID int64, schema *schemapb.CollectionSchema, meta *segcorepb.CollectionIndexMeta, loadMeta *querypb.LoadMetaInfo)
+	PutOrRef(collectionID int64, schema *schemapb.CollectionSchema, meta *segcorepb.CollectionIndexMeta, loadMeta *querypb.LoadMetaInfo, collectionProperties []*commonpb.KeyValuePair)
 	Ref(collectionID int64, count uint32) bool
 	// unref the collection,
 	// returns true if the collection ref count goes 0, or the collection not exists,
@@ -71,19 +71,20 @@ func (m *collectionManager) Get(collectionID int64) *Collection {
 	return m.collections[collectionID]
 }
 
-func (m *collectionManager) PutOrRef(collectionID int64, schema *schemapb.CollectionSchema, meta *segcorepb.CollectionIndexMeta, loadMeta *querypb.LoadMetaInfo) {
+func (m *collectionManager) PutOrRef(collectionID int64, schema *schemapb.CollectionSchema, meta *segcorepb.CollectionIndexMeta, loadMeta *querypb.LoadMetaInfo, collectionProperties []*commonpb.KeyValuePair) {
 	m.mut.Lock()
 	defer m.mut.Unlock()
 
 	if collection, ok := m.collections[collectionID]; ok {
 		// the schema may be changed even the collection is loaded
 		collection.schema.Store(schema)
+		// update collectionProperties
+		collection.collectionProperties = collectionProperties
 		collection.Ref(1)
 		return
 	}
 
-	collection := NewCollection(collectionID, schema, meta, loadMeta.GetLoadType())
-	collection.metricType.Store(loadMeta.GetMetricType())
+	collection := NewCollection(collectionID, schema, meta, loadMeta.GetLoadType(), collectionProperties)
 	collection.AddPartition(loadMeta.GetPartitionIDs()...)
 	collection.Ref(1)
 	m.collections[collectionID] = collection
@@ -125,11 +126,13 @@ type Collection struct {
 	id            int64
 	partitions    *typeutil.ConcurrentSet[int64]
 	loadType      querypb.LoadType
-	metricType    atomic.String
+	metricType    atomic.String // deprecated
 	schema        atomic.Pointer[schemapb.CollectionSchema]
 	isGpuIndex    bool
 
 	refCount *atomic.Uint32
+
+	collectionProperties []*commonpb.KeyValuePair
 }
 
 // ID returns collection id
@@ -175,14 +178,6 @@ func (c *Collection) GetLoadType() querypb.LoadType {
 	return c.loadType
 }
 
-func (c *Collection) SetMetricType(metricType string) {
-	c.metricType.Store(metricType)
-}
-
-func (c *Collection) GetMetricType() string {
-	return c.metricType.Load()
-}
-
 func (c *Collection) Ref(count uint32) uint32 {
 	refCount := c.refCount.Add(count)
 	log.Debug("collection ref increment",
@@ -201,8 +196,12 @@ func (c *Collection) Unref(count uint32) uint32 {
 	return refCount
 }
 
+func (c *Collection) GetCollectionProperties() []*commonpb.KeyValuePair {
+	return c.collectionProperties
+}
+
 // newCollection returns a new Collection
-func NewCollection(collectionID int64, schema *schemapb.CollectionSchema, indexMeta *segcorepb.CollectionIndexMeta, loadType querypb.LoadType) *Collection {
+func NewCollection(collectionID int64, schema *schemapb.CollectionSchema, indexMeta *segcorepb.CollectionIndexMeta, loadType querypb.LoadType, collectionProperties []*commonpb.KeyValuePair) *Collection {
 	/*
 		CCollection
 		NewCollection(const char* schema_proto_blob);
@@ -235,12 +234,13 @@ func NewCollection(collectionID int64, schema *schemapb.CollectionSchema, indexM
 	}
 
 	coll := &Collection{
-		collectionPtr: collection,
-		id:            collectionID,
-		partitions:    typeutil.NewConcurrentSet[int64](),
-		loadType:      loadType,
-		refCount:      atomic.NewUint32(0),
-		isGpuIndex:    isGpuIndex,
+		collectionPtr:        collection,
+		id:                   collectionID,
+		partitions:           typeutil.NewConcurrentSet[int64](),
+		loadType:             loadType,
+		refCount:             atomic.NewUint32(0),
+		isGpuIndex:           isGpuIndex,
+		collectionProperties: collectionProperties,
 	}
 	coll.schema.Store(schema)
 

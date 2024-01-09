@@ -74,18 +74,20 @@ type baseSegment struct {
 	shard          string
 	collectionID   int64
 	typ            SegmentType
+	level          datapb.SegmentLevel
 	version        *atomic.Int64
 	startPosition  *msgpb.MsgPosition // for growing segment release
 	bloomFilterSet *pkoracle.BloomFilterSet
 }
 
-func newBaseSegment(id, partitionID, collectionID int64, shard string, typ SegmentType, version int64, startPosition *msgpb.MsgPosition) baseSegment {
+func newBaseSegment(id, partitionID, collectionID int64, shard string, typ SegmentType, level datapb.SegmentLevel, version int64, startPosition *msgpb.MsgPosition) baseSegment {
 	return baseSegment{
 		segmentID:      id,
 		partitionID:    partitionID,
 		collectionID:   collectionID,
 		shard:          shard,
 		typ:            typ,
+		level:          level,
 		version:        atomic.NewInt64(version),
 		startPosition:  startPosition,
 		bloomFilterSet: pkoracle.NewBloomFilterSet(id, partitionID, typ),
@@ -114,7 +116,7 @@ func (s *baseSegment) Type() SegmentType {
 }
 
 func (s *baseSegment) Level() datapb.SegmentLevel {
-	return datapb.SegmentLevel_Legacy
+	return s.level
 }
 
 func (s *baseSegment) StartPosition() *msgpb.MsgPosition {
@@ -205,10 +207,12 @@ func NewSegment(ctx context.Context,
 		zap.Int64("collectionID", collectionID),
 		zap.Int64("partitionID", partitionID),
 		zap.Int64("segmentID", segmentID),
-		zap.String("segmentType", segmentType.String()))
+		zap.String("segmentType", segmentType.String()),
+		zap.String("level", level.String()),
+	)
 
 	segment := &LocalSegment{
-		baseSegment:        newBaseSegment(segmentID, partitionID, collectionID, shard, segmentType, version, startPosition),
+		baseSegment:        newBaseSegment(segmentID, partitionID, collectionID, shard, segmentType, level, version, startPosition),
 		ptr:                newPtr,
 		lastDeltaTimestamp: atomic.NewUint64(0),
 		fieldIndexes:       typeutil.NewConcurrentMap[int64, *IndexedFieldInfo](),
@@ -891,6 +895,13 @@ func (s *LocalSegment) LoadIndex(ctx context.Context, indexInfo *querypb.FieldIn
 		return err
 	}
 
+	log := log.Ctx(ctx).With(
+		zap.Int64("collectionID", s.Collection()),
+		zap.Int64("partitionID", s.Partition()),
+		zap.Int64("segmentID", s.ID()),
+		zap.Int64("fieldID", indexInfo.FieldID),
+	)
+
 	err = loadIndexInfo.appendLoadIndexInfo(ctx, indexInfo, s.collectionID, s.partitionID, s.segmentID, fieldType)
 	if err != nil {
 		if loadIndexInfo.cleanLocalData(ctx) != nil {
@@ -909,7 +920,7 @@ func (s *LocalSegment) LoadIndex(ctx context.Context, indexInfo *querypb.FieldIn
 }
 
 func (s *LocalSegment) LoadIndexInfo(ctx context.Context, indexInfo *querypb.FieldIndexInfo, info *LoadIndexInfo) error {
-	log := log.With(
+	log := log.Ctx(ctx).With(
 		zap.Int64("collectionID", s.Collection()),
 		zap.Int64("partitionID", s.Partition()),
 		zap.Int64("segmentID", s.ID()),
@@ -956,7 +967,7 @@ func (s *LocalSegment) UpdateFieldRawDataSize(ctx context.Context, numRows int64
 		return err
 	}
 
-	log.Info("updateFieldRawDataSize done", zap.Int64("segmentID", s.ID()))
+	log.Ctx(ctx).Info("updateFieldRawDataSize done", zap.Int64("segmentID", s.ID()))
 
 	return nil
 }

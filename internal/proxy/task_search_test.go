@@ -37,6 +37,7 @@ import (
 	"github.com/milvus-io/milvus/internal/proto/internalpb"
 	"github.com/milvus-io/milvus/internal/proto/querypb"
 	"github.com/milvus-io/milvus/internal/types"
+	"github.com/milvus-io/milvus/internal/util/clustering"
 	"github.com/milvus-io/milvus/internal/util/dependency"
 	"github.com/milvus-io/milvus/pkg/common"
 	"github.com/milvus-io/milvus/pkg/util/funcutil"
@@ -230,6 +231,36 @@ func TestSearchTask_PreExecute(t *testing.T) {
 
 		task := getSearchTask(t, collName)
 		task.request.SearchParams = getInvalidSearchParams(IgnoreGrowingKey)
+		err = task.PreExecute(ctx)
+		assert.Error(t, err)
+	})
+
+	t.Run("search clustering options normal", func(t *testing.T) {
+		collName := "test_search_clustering" + funcutil.GenRandomStr()
+		createColl(t, collName, rc)
+
+		task := getSearchTask(t, collName)
+		task.request.SearchParams = []*commonpb.KeyValuePair{
+			{
+				Key:   clustering.SearchClusteringFilterRatio,
+				Value: "0.3",
+			},
+		}
+		err = task.PreExecute(ctx)
+		assert.NoError(t, err)
+	})
+
+	t.Run("search clustering options abnormal", func(t *testing.T) {
+		collName := "test_search_clustering" + funcutil.GenRandomStr()
+		createColl(t, collName, rc)
+
+		task := getSearchTask(t, collName)
+		task.request.SearchParams = []*commonpb.KeyValuePair{
+			{
+				Key:   clustering.SearchClusteringFilterRatio,
+				Value: "1f",
+			},
+		}
 		err = task.PreExecute(ctx)
 		assert.Error(t, err)
 	})
@@ -1591,6 +1622,78 @@ func TestTaskSearch_reduceSearchResultData(t *testing.T) {
 	})
 }
 
+func TestTaskSearch_reduceGroupBySearchResultData(t *testing.T) {
+	var (
+		nq   int64 = 2
+		topK int64 = 5
+	)
+	ids := [][]int64{
+		{1, 3, 5, 7, 9, 1, 3, 5, 7, 9},
+		{2, 4, 6, 8, 10, 2, 4, 6, 8, 10},
+	}
+	scores := [][]float32{
+		{10, 8, 6, 4, 2, 10, 8, 6, 4, 2},
+		{9, 7, 5, 3, 1, 9, 7, 5, 3, 1},
+	}
+
+	groupByValuesArr := [][][]int64{
+		{
+			{1, 2, 3, 4, 5, 1, 2, 3, 4, 5},
+			{1, 2, 3, 4, 5, 1, 2, 3, 4, 5},
+		}, // result2 has completely same group_by values, no result from result2 can be selected
+		{
+			{1, 2, 3, 4, 5, 1, 2, 3, 4, 5},
+			{6, 8, 3, 4, 5, 6, 8, 3, 4, 5},
+		}, // result2 will contribute group_by values 6 and 8
+	}
+	expectedIDs := [][]int64{
+		{1, 3, 5, 7, 9, 1, 3, 5, 7, 9},
+		{1, 2, 3, 4, 5, 1, 2, 3, 4, 5},
+	}
+	expectedScores := [][]float32{
+		{-10, -8, -6, -4, -2, -10, -8, -6, -4, -2},
+		{-10, -9, -8, -7, -6, -10, -9, -8, -7, -6},
+	}
+	expectedGroupByValues := [][]int64{
+		{1, 2, 3, 4, 5, 1, 2, 3, 4, 5},
+		{1, 6, 2, 8, 3, 1, 6, 2, 8, 3},
+	}
+
+	for i, groupByValues := range groupByValuesArr {
+		t.Run("Group By correctness", func(t *testing.T) {
+			var results []*schemapb.SearchResultData
+			for j := range ids {
+				result := getSearchResultData(nq, topK)
+				result.Ids.IdField = &schemapb.IDs_IntId{IntId: &schemapb.LongArray{Data: ids[j]}}
+				result.Scores = scores[j]
+				result.Topks = []int64{topK, topK}
+				result.GroupByFieldValue = &schemapb.FieldData{
+					Type: schemapb.DataType_Int64,
+					Field: &schemapb.FieldData_Scalars{
+						Scalars: &schemapb.ScalarField{
+							Data: &schemapb.ScalarField_LongData{
+								LongData: &schemapb.LongArray{
+									Data: groupByValues[j],
+								},
+							},
+						},
+					},
+				}
+				results = append(results, result)
+			}
+
+			reduced, err := reduceSearchResultData(context.TODO(), results, nq, topK, metric.L2, schemapb.DataType_Int64, 0)
+			resultIDs := reduced.GetResults().GetIds().GetIntId().Data
+			resultScores := reduced.GetResults().GetScores()
+			resultGroupByValues := reduced.GetResults().GetGroupByFieldValue().GetScalars().GetLongData().GetData()
+			assert.EqualValues(t, expectedIDs[i], resultIDs)
+			assert.EqualValues(t, expectedScores[i], resultScores)
+			assert.EqualValues(t, expectedGroupByValues[i], resultGroupByValues)
+			assert.NoError(t, err)
+		})
+	}
+}
+
 func TestSearchTask_ErrExecute(t *testing.T) {
 	var (
 		err error
@@ -1784,7 +1887,7 @@ func TestTaskSearch_parseQueryInfo(t *testing.T) {
 
 		for _, test := range tests {
 			t.Run(test.description, func(t *testing.T) {
-				info, offset, err := parseSearchInfo(test.validParams)
+				info, offset, err := parseSearchInfo(test.validParams, nil)
 				assert.NoError(t, err)
 				assert.NotNil(t, info)
 				if test.description == "offsetParam" {
@@ -1873,7 +1976,7 @@ func TestTaskSearch_parseQueryInfo(t *testing.T) {
 
 		for _, test := range tests {
 			t.Run(test.description, func(t *testing.T) {
-				info, offset, err := parseSearchInfo(test.invalidParams)
+				info, offset, err := parseSearchInfo(test.invalidParams, nil)
 				assert.Error(t, err)
 				assert.Nil(t, info)
 				assert.Zero(t, offset)

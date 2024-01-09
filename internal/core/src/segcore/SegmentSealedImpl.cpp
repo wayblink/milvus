@@ -150,21 +150,26 @@ SegmentSealedImpl::LoadScalarIndex(const LoadIndexInfo& info) {
             case DataType::INT64: {
                 auto int64_index = dynamic_cast<index::ScalarIndex<int64_t>*>(
                     scalar_indexings_[field_id].get());
-                for (int i = 0; i < row_count; ++i) {
-                    insert_record_.insert_pk(int64_index->Reverse_Lookup(i), i);
+                if (int64_index->HasRawData()) {
+                    for (int i = 0; i < row_count; ++i) {
+                        insert_record_.insert_pk(int64_index->Reverse_Lookup(i),
+                                                 i);
+                    }
+                    insert_record_.seal_pks();
                 }
-                insert_record_.seal_pks();
                 break;
             }
             case DataType::VARCHAR: {
                 auto string_index =
                     dynamic_cast<index::ScalarIndex<std::string>*>(
                         scalar_indexings_[field_id].get());
-                for (int i = 0; i < row_count; ++i) {
-                    insert_record_.insert_pk(string_index->Reverse_Lookup(i),
-                                             i);
+                if (string_index->HasRawData()) {
+                    for (int i = 0; i < row_count; ++i) {
+                        insert_record_.insert_pk(
+                            string_index->Reverse_Lookup(i), i);
+                    }
+                    insert_record_.seal_pks();
                 }
-                insert_record_.seal_pks();
                 break;
             }
             default: {
@@ -912,6 +917,17 @@ SegmentSealedImpl::check_search(const query::Plan* plan) const {
     AssertInfo(plan->extra_info_opt_.has_value(),
                "Extra info of search plan doesn't have value");
 
+    auto& metric_str = plan->plan_node_->search_info_.metric_type_;
+    auto searched_field_id = plan->plan_node_->search_info_.field_id_;
+    auto index_meta =
+        col_index_meta_->GetFieldIndexMeta(FieldId(searched_field_id));
+    if (metric_str.empty()) {
+        metric_str = index_meta.GeMetricType();
+    } else {
+        AssertInfo(metric_str == index_meta.GeMetricType(),
+                   "metric type not match");
+    }
+
     if (!is_system_field_ready()) {
         PanicInfo(
             FieldNotLoaded,
@@ -1299,6 +1315,12 @@ SegmentSealedImpl::HasRawData(int64_t field_id) const {
         }
     }
     return true;
+}
+
+DataType
+SegmentSealedImpl::GetFieldDataType(milvus::FieldId field_id) const {
+    auto& field_meta = schema_->operator[](field_id);
+    return field_meta.get_data_type();
 }
 
 std::pair<std::unique_ptr<IdArray>, std::vector<SegOffset>>

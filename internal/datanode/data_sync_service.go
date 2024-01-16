@@ -201,6 +201,11 @@ func (dsService *dataSyncService) initNodes(vchanInfo *datapb.VchannelInfo, tick
 	if err != nil {
 		return err
 	}
+	log.Info("Finish get segmentInfos", zap.Int64("collection", vchanInfo.CollectionID),
+		zap.String("Chan", vchanInfo.ChannelName),
+		zap.Int("unflushed", len(vchanInfo.GetUnflushedSegmentIds())),
+		zap.Int("flushed", len(vchanInfo.GetFlushedSegmentIds())),
+	)
 
 	//tickler will update addSegment progress to watchInfo
 	tickler.watch()
@@ -394,31 +399,62 @@ func (dsService *dataSyncService) initNodes(vchanInfo *datapb.VchannelInfo, tick
 		log.Error("set edges failed in node", zap.String("name", ttNode.Name()), zap.Error(err))
 		return err
 	}
+	log.Info("Finish init data sync service", zap.Int64("collection", vchanInfo.CollectionID),
+		zap.String("Chan", vchanInfo.ChannelName),
+	)
 	return nil
 }
 
 // getSegmentInfos return the SegmentInfo details according to the given ids through RPC to datacoord
 func (dsService *dataSyncService) getSegmentInfos(segmentIDs []int64) ([]*datapb.SegmentInfo, error) {
-	infoResp, err := dsService.dataCoord.GetSegmentInfo(dsService.ctx, &datapb.GetSegmentInfoRequest{
-		Base: commonpbutil.NewMsgBase(
-			commonpbutil.WithMsgType(commonpb.MsgType_SegmentInfo),
-			commonpbutil.WithMsgID(0),
-			commonpbutil.WithTimeStamp(0),
-			commonpbutil.WithSourceID(Params.ProxyCfg.GetNodeID()),
-		),
-		SegmentIDs:       segmentIDs,
-		IncludeUnHealthy: true,
-	})
-	if err != nil {
-		log.Error("Fail to get datapb.SegmentInfo by ids from datacoord", zap.Error(err))
-		return nil, err
+	wg := sync.WaitGroup{}
+	res := make([]*datapb.SegmentInfo, 0)
+	getSegmentInfosFunc := func(segmentIDs []int64) error {
+		infoResp, err := dsService.dataCoord.GetSegmentInfo(dsService.ctx, &datapb.GetSegmentInfoRequest{
+			Base: commonpbutil.NewMsgBase(
+				commonpbutil.WithMsgType(commonpb.MsgType_SegmentInfo),
+				commonpbutil.WithMsgID(0),
+				commonpbutil.WithTimeStamp(0),
+				commonpbutil.WithSourceID(Params.ProxyCfg.GetNodeID()),
+			),
+			SegmentIDs:       segmentIDs,
+			IncludeUnHealthy: true,
+		})
+		if err != nil {
+			log.Error("Fail to get datapb.SegmentInfo by ids from datacoord", zap.Error(err))
+			return err
+		}
+		if infoResp.GetStatus().ErrorCode != commonpb.ErrorCode_Success {
+			err = errors.New(infoResp.GetStatus().Reason)
+			log.Error("Fail to get datapb.SegmentInfo by ids from datacoord", zap.Error(err))
+			return err
+		}
+		res = append(res, infoResp.Infos...)
+		return nil
 	}
-	if infoResp.GetStatus().ErrorCode != commonpb.ErrorCode_Success {
-		err = errors.New(infoResp.GetStatus().Reason)
-		log.Error("Fail to get datapb.SegmentInfo by ids from datacoord", zap.Error(err))
-		return nil, err
+	var bucekets [][]int64
+	chunkSize := 500
+	length := len(segmentIDs)
+	for i := 0; i < length; i += chunkSize {
+		end := i + chunkSize
+		if end > length {
+			end = length
+		}
+		bucekets = append(bucekets, segmentIDs[i:end])
 	}
-	return infoResp.Infos, nil
+	var finalErr error
+	for _, bucket := range bucekets {
+		wg.Add(1)
+		go func() {
+			err := getSegmentInfosFunc(bucket)
+			if err != nil {
+				finalErr = err
+			}
+			wg.Done()
+		}()
+	}
+	wg.Wait()
+	return res, finalErr
 }
 
 func (dsService *dataSyncService) getChannelLatestMsgID(ctx context.Context, channelName string, segmentID int64) ([]byte, error) {

@@ -340,6 +340,7 @@ func (s *Server) GetSegmentInfo(ctx context.Context, req *datapb.GetSegmentInfoR
 			ErrorCode: commonpb.ErrorCode_UnexpectedError,
 		},
 	}
+	log.Info("Receive GetSegmentInfo request", zap.Int("segmentNum", len(req.GetSegmentIDs())), zap.Bool("IncludeUnHealthy", req.GetIncludeUnHealthy()))
 	if s.isClosed() {
 		setNotServingStatus(resp.Status, s.GetStateCode())
 		return resp, nil
@@ -383,6 +384,7 @@ func (s *Server) GetSegmentInfo(ctx context.Context, req *datapb.GetSegmentInfoR
 	resp.Status.ErrorCode = commonpb.ErrorCode_Success
 	resp.Infos = infos
 	resp.ChannelCheckpoint = channelCPs
+	log.Info("Finished GetSegmentInfo", zap.Int("segmentNum", len(req.GetSegmentIDs())), zap.Bool("IncludeUnHealthy", req.GetIncludeUnHealthy()))
 	return resp, nil
 }
 

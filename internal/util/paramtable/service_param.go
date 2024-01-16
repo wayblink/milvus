@@ -76,16 +76,17 @@ type EtcdConfig struct {
 	Base *BaseTable
 
 	// --- ETCD ---
-	Endpoints         []string
-	MetaRootPath      string
-	KvRootPath        string
-	EtcdLogLevel      string
-	EtcdLogPath       string
-	EtcdUseSSL        bool
-	EtcdTLSCert       string
-	EtcdTLSKey        string
-	EtcdTLSCACert     string
-	EtcdTLSMinVersion string
+	Endpoints              []string
+	MetaRootPath           string
+	KvRootPath             string
+	EtcdLogLevel           string
+	EtcdLogPath            string
+	EtcdUseSSL             bool
+	EtcdTLSCert            string
+	EtcdTLSKey             string
+	EtcdTLSCACert          string
+	EtcdTLSMinVersion      string
+	EtcdMaxCallSendMsgSize int
 
 	// --- Embed ETCD ---
 	UseEmbedEtcd bool
@@ -115,6 +116,7 @@ func (p *EtcdConfig) LoadCfgToMemory() {
 	p.initEtcdTLSKey()
 	p.initEtcdTLSCACert()
 	p.initEtcdTLSMinVersion()
+	p.initEtcdMaxCallSendMsgSize()
 }
 
 func (p *EtcdConfig) initUseEmbedEtcd() {
@@ -192,6 +194,10 @@ func (p *EtcdConfig) initEtcdTLSCACert() {
 
 func (p *EtcdConfig) initEtcdTLSMinVersion() {
 	p.EtcdTLSMinVersion = p.Base.LoadWithDefault("etcd.ssl.tlsMinVersion", "1.3")
+}
+
+func (p *EtcdConfig) initEtcdMaxCallSendMsgSize() {
+	p.EtcdMaxCallSendMsgSize = p.Base.ParseIntWithDefault("etcd.rpc.maxCallSendMsgSize", 2097152)
 }
 
 type LocalStorageConfig struct {

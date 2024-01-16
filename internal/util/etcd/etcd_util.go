@@ -56,8 +56,9 @@ func GetEtcdClient(
 // GetRemoteEtcdClient returns client of remote etcd by given endpoints
 func GetRemoteEtcdClient(endpoints []string) (*clientv3.Client, error) {
 	return clientv3.New(clientv3.Config{
-		Endpoints:   endpoints,
-		DialTimeout: 5 * time.Second,
+		Endpoints:          endpoints,
+		DialTimeout:        5 * time.Second,
+		MaxCallSendMsgSize: 5242880,
 	})
 }
 
@@ -95,6 +96,7 @@ func GetRemoteEtcdSSLClient(endpoints []string, certFile string, keyFile string,
 	default:
 		cfg.TLS.MinVersion = 0
 	}
+	cfg.MaxCallSendMsgSize = 5242880
 
 	if cfg.TLS.MinVersion == 0 {
 		return nil, errors.Errorf("unknown TLS version,%s", minVersion)

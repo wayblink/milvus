@@ -251,11 +251,17 @@ func (dsService *dataSyncService) initNodes(vchanInfo *datapb.VchannelInfo, tick
 	}
 
 	for _, fs := range flushedSegmentInfos {
-		if fs.CollectionID != dsService.collectionID ||
+		log.Info("recover flushedSegmentInfos ",
+			zap.Int64("Wanted ID", dsService.collectionID),
+			zap.Int64("Actual ID", fs.GetCollectionID()),
+			zap.String("Wanted Channel Name", vchanInfo.ChannelName),
+			zap.String("Actual Channel Name", fs.GetInsertChannel()),
+		)
+		if fs.GetCollectionID() != dsService.collectionID ||
 			fs.GetInsertChannel() != vchanInfo.ChannelName {
 			log.Warn("Collection ID or ChannelName not match",
 				zap.Int64("Wanted ID", dsService.collectionID),
-				zap.Int64("Actual ID", fs.CollectionID),
+				zap.Int64("Actual ID", fs.GetCollectionID()),
 				zap.String("Wanted Channel Name", vchanInfo.ChannelName),
 				zap.String("Actual Channel Name", fs.GetInsertChannel()),
 			)
@@ -408,8 +414,10 @@ func (dsService *dataSyncService) initNodes(vchanInfo *datapb.VchannelInfo, tick
 // getSegmentInfos return the SegmentInfo details according to the given ids through RPC to datacoord
 func (dsService *dataSyncService) getSegmentInfos(segmentIDs []int64) ([]*datapb.SegmentInfo, error) {
 	wg := sync.WaitGroup{}
+	mu := sync.Mutex{}
 	res := make([]*datapb.SegmentInfo, 0)
 	getSegmentInfosFunc := func(segmentIDs []int64) error {
+		log.Info("dataSyncService call GetSegmentInfo", zap.Int("length", len(segmentIDs)), zap.Int64s("ids", segmentIDs))
 		infoResp, err := dsService.dataCoord.GetSegmentInfo(dsService.ctx, &datapb.GetSegmentInfoRequest{
 			Base: commonpbutil.NewMsgBase(
 				commonpbutil.WithMsgType(commonpb.MsgType_SegmentInfo),
@@ -429,10 +437,12 @@ func (dsService *dataSyncService) getSegmentInfos(segmentIDs []int64) ([]*datapb
 			log.Error("Fail to get datapb.SegmentInfo by ids from datacoord", zap.Error(err))
 			return err
 		}
+		mu.Lock()
 		res = append(res, infoResp.Infos...)
+		mu.Unlock()
 		return nil
 	}
-	var bucekets [][]int64
+	var buckets [][]int64
 	chunkSize := 500
 	length := len(segmentIDs)
 	for i := 0; i < length; i += chunkSize {
@@ -440,13 +450,14 @@ func (dsService *dataSyncService) getSegmentInfos(segmentIDs []int64) ([]*datapb
 		if end > length {
 			end = length
 		}
-		bucekets = append(bucekets, segmentIDs[i:end])
+		buckets = append(buckets, segmentIDs[i:end])
 	}
 	var finalErr error
-	for _, bucket := range bucekets {
+	for _, bucket := range buckets {
+		bucketClone := bucket
 		wg.Add(1)
 		go func() {
-			err := getSegmentInfosFunc(bucket)
+			err := getSegmentInfosFunc(bucketClone)
 			if err != nil {
 				finalErr = err
 			}

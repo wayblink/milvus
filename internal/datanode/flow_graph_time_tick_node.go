@@ -112,7 +112,7 @@ func (ttn *ttNode) updateChannelCP(ttPos *internalpb.MsgPosition) {
 		return
 	}
 
-	log.Info("UpdateChannelCheckpoint success",
+	log.RatedInfo(10, "UpdateChannelCheckpoint success",
 		zap.String("channel", ttn.vChannelName),
 		zap.Uint64("cpTs", channelPos.Timestamp),
 		zap.Time("cpTime", channelCPTs))

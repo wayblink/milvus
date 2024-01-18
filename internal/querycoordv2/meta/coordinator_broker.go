@@ -20,8 +20,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
-
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
@@ -31,6 +29,7 @@ import (
 	"github.com/milvus-io/milvus/internal/proto/indexpb"
 	"github.com/milvus-io/milvus/internal/proto/querypb"
 	"github.com/milvus-io/milvus/internal/types"
+	"github.com/milvus-io/milvus/internal/util/paramtable"
 
 	"go.uber.org/zap"
 
@@ -38,9 +37,7 @@ import (
 	. "github.com/milvus-io/milvus/internal/util/typeutil"
 )
 
-const (
-	brokerRPCTimeout = 10 * time.Second
-)
+var Params paramtable.ComponentParam
 
 type Broker interface {
 	GetCollectionSchema(ctx context.Context, collectionID UniqueID) (*schemapb.CollectionSchema, error)
@@ -70,7 +67,7 @@ func NewCoordinatorBroker(
 }
 
 func (broker *CoordinatorBroker) GetCollectionSchema(ctx context.Context, collectionID UniqueID) (*schemapb.CollectionSchema, error) {
-	ctx, cancel := context.WithTimeout(ctx, brokerRPCTimeout)
+	ctx, cancel := context.WithTimeout(ctx, Params.QueryCoordCfg.BrokerTimeout)
 	defer cancel()
 
 	req := &milvuspb.DescribeCollectionRequest{
@@ -95,7 +92,7 @@ func (broker *CoordinatorBroker) GetCollectionSchema(ctx context.Context, collec
 }
 
 func (broker *CoordinatorBroker) GetPartitions(ctx context.Context, collectionID UniqueID) ([]UniqueID, error) {
-	ctx, cancel := context.WithTimeout(ctx, brokerRPCTimeout)
+	ctx, cancel := context.WithTimeout(ctx, Params.QueryCoordCfg.BrokerTimeout)
 	defer cancel()
 	req := &milvuspb.ShowPartitionsRequest{
 		Base: commonpbutil.NewMsgBase(
@@ -122,8 +119,12 @@ func (broker *CoordinatorBroker) GetPartitions(ctx context.Context, collectionID
 }
 
 func (broker *CoordinatorBroker) GetRecoveryInfo(ctx context.Context, collectionID UniqueID, partitionID UniqueID) ([]*datapb.VchannelInfo, []*datapb.SegmentBinlogs, error) {
-	ctx, cancel := context.WithTimeout(ctx, brokerRPCTimeout)
-	defer cancel()
+	ctx, cancel := context.WithTimeout(ctx, Params.QueryCoordCfg.BrokerTimeout)
+	log.Info("GetRecoveryInfo start", zap.Int64("collectionID", collectionID), zap.Int64("partitionID", partitionID))
+	defer func() {
+		log.Info("GetRecoveryInfo Finished", zap.Int64("collectionID", collectionID), zap.Int64("partitionID", partitionID))
+		cancel()
+	}()
 
 	getRecoveryInfoRequest := &datapb.GetRecoveryInfoRequest{
 		Base: commonpbutil.NewMsgBase(
@@ -148,8 +149,12 @@ func (broker *CoordinatorBroker) GetRecoveryInfo(ctx context.Context, collection
 }
 
 func (broker *CoordinatorBroker) GetRecoveryInfoV2(ctx context.Context, collectionID UniqueID, partitionIDs ...UniqueID) ([]*datapb.VchannelInfo, []*datapb.SegmentInfo, error) {
-	ctx, cancel := context.WithTimeout(ctx, brokerRPCTimeout)
-	defer cancel()
+	ctx, cancel := context.WithTimeout(ctx, Params.QueryCoordCfg.BrokerTimeout)
+	log.Info("GetRecoveryInfoV2 start", zap.Int64("collectionID", collectionID), zap.Int64s("partitionID", partitionIDs))
+	defer func() {
+		log.Info("GetRecoveryInfoV2 Finished", zap.Int64("collectionID", collectionID), zap.Int64s("partitionID", partitionIDs))
+		cancel()
+	}()
 
 	getRecoveryInfoRequest := &datapb.GetRecoveryInfoRequestV2{
 		Base: commonpbutil.NewMsgBase(
@@ -174,7 +179,7 @@ func (broker *CoordinatorBroker) GetRecoveryInfoV2(ctx context.Context, collecti
 }
 
 func (broker *CoordinatorBroker) GetSegmentInfo(ctx context.Context, ids ...UniqueID) (*datapb.GetSegmentInfoResponse, error) {
-	ctx, cancel := context.WithTimeout(ctx, brokerRPCTimeout)
+	ctx, cancel := context.WithTimeout(ctx, Params.QueryCoordCfg.BrokerTimeout)
 	defer cancel()
 
 	req := &datapb.GetSegmentInfoRequest{
@@ -199,7 +204,7 @@ func (broker *CoordinatorBroker) GetSegmentInfo(ctx context.Context, ids ...Uniq
 }
 
 func (broker *CoordinatorBroker) GetIndexInfo(ctx context.Context, collectionID UniqueID, segmentID UniqueID) ([]*querypb.FieldIndexInfo, error) {
-	ctx, cancel := context.WithTimeout(ctx, brokerRPCTimeout)
+	ctx, cancel := context.WithTimeout(ctx, Params.QueryCoordCfg.BrokerTimeout)
 	defer cancel()
 
 	resp, err := broker.indexCoord.GetIndexInfos(ctx, &indexpb.GetIndexInfoRequest{
@@ -239,7 +244,7 @@ func (broker *CoordinatorBroker) GetIndexInfo(ctx context.Context, collectionID 
 }
 
 func (broker *CoordinatorBroker) DescribeIndex(ctx context.Context, collectionID UniqueID) ([]*indexpb.IndexInfo, error) {
-	ctx, cancel := context.WithTimeout(ctx, brokerRPCTimeout)
+	ctx, cancel := context.WithTimeout(ctx, Params.QueryCoordCfg.BrokerTimeout)
 	defer cancel()
 	resp, err := broker.indexCoord.DescribeIndex(ctx, &indexpb.DescribeIndexRequest{
 		CollectionID: collectionID,

@@ -140,7 +140,7 @@ func (mgr *TargetManager) updateCollectionNextTarget(collectionID int64, partiti
 }
 
 func (mgr *TargetManager) PullNextTargetV1(broker Broker, collectionID int64, partitionIDs ...int64) (*CollectionTarget, error) {
-	log.Debug("start to pull next targets for partition",
+	log.Info("start to pull next targets for partition",
 		zap.Int64("collectionID", collectionID),
 		zap.Int64s("partitionIDs", partitionIDs))
 
@@ -192,7 +192,7 @@ func (mgr *TargetManager) PullNextTargetV1(broker Broker, collectionID int64, pa
 }
 
 func (mgr *TargetManager) PullNextTargetV2(broker Broker, collectionID int64, partitionIDs ...int64) (*CollectionTarget, error) {
-	log.Debug("start to pull next targets for partition",
+	log.Info("start to pull next targets for partition",
 		zap.Int64("collectionID", collectionID),
 		zap.Int64s("partitionIDs", partitionIDs))
 

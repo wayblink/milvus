@@ -806,6 +806,7 @@ type queryCoordConfig struct {
 	EnableRGAutoRecover        bool
 	CheckHealthInterval        time.Duration
 	CheckHealthRPCTimeout      time.Duration
+	BrokerTimeout              time.Duration
 }
 
 func (p *queryCoordConfig) init(base *BaseTable) {
@@ -846,6 +847,9 @@ func (p *queryCoordConfig) init(base *BaseTable) {
 	// Check QN Health
 	p.initCheckHealthInterval()
 	p.initCheckHealthRPCTimeout()
+
+	// broker timeout
+	p.initBrokerTimeout()
 }
 
 func (p *queryCoordConfig) initTaskRetryNum() {
@@ -1089,6 +1093,15 @@ func (p *queryCoordConfig) initCheckHealthRPCTimeout() {
 		panic(err)
 	}
 	p.CheckHealthRPCTimeout = time.Duration(checkHealthRPCTimeout) * time.Millisecond
+}
+
+func (p *queryCoordConfig) initBrokerTimeout() {
+	interval := p.Base.LoadWithDefault("queryCoord.brokerTimeout", "20000")
+	brokerTimeout, err := strconv.ParseInt(interval, 10, 64)
+	if err != nil {
+		panic(err)
+	}
+	p.BrokerTimeout = time.Duration(brokerTimeout) * time.Millisecond
 }
 
 // /////////////////////////////////////////////////////////////////////////////

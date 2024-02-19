@@ -67,11 +67,12 @@ SegmentInternalInterface::FillTargetEntry(const query::Plan* plan,
 std::unique_ptr<SearchResult>
 SegmentInternalInterface::Search(
     const query::Plan* plan,
-    const query::PlaceholderGroup* placeholder_group) const {
+    const query::PlaceholderGroup* placeholder_group,
+    Timestamp timestamp) const {
     std::shared_lock lck(mutex_);
     milvus::tracer::AddEvent("obtained_segment_lock_mutex");
     check_search(plan);
-    query::ExecPlanNodeVisitor visitor(*this, 1L << 63, placeholder_group);
+    query::ExecPlanNodeVisitor visitor(*this, timestamp, placeholder_group);
     auto results = std::make_unique<SearchResult>();
     *results = visitor.get_moved_result(*plan->plan_node_);
     results->segment_ = (void*)this;
@@ -295,7 +296,7 @@ SegmentInternalInterface::timestamp_filter(BitsetType& bitset,
 
 const SkipIndex&
 SegmentInternalInterface::GetSkipIndex() const {
-    return skipIndex_;
+    return skip_index_;
 }
 
 void
@@ -304,7 +305,7 @@ SegmentInternalInterface::LoadPrimitiveSkipIndex(milvus::FieldId field_id,
                                                  milvus::DataType data_type,
                                                  const void* chunk_data,
                                                  int64_t count) {
-    skipIndex_.LoadPrimitive(field_id, chunk_id, data_type, chunk_data, count);
+    skip_index_.LoadPrimitive(field_id, chunk_id, data_type, chunk_data, count);
 }
 
 void
@@ -312,7 +313,7 @@ SegmentInternalInterface::LoadStringSkipIndex(
     milvus::FieldId field_id,
     int64_t chunk_id,
     const milvus::VariableColumn<std::string>& var_column) {
-    skipIndex_.LoadString(field_id, chunk_id, var_column);
+    skip_index_.LoadString(field_id, chunk_id, var_column);
 }
 
 }  // namespace milvus::segcore

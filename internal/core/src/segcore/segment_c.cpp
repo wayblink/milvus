@@ -41,14 +41,14 @@ NewSegment(CCollection collection,
         switch (seg_type) {
             case Growing: {
                 auto seg = milvus::segcore::CreateGrowingSegment(
-                    col->get_schema(), col->GetIndexMeta(), segment_id);
+                    col->get_schema(), col->get_index_meta(), segment_id);
                 segment = std::move(seg);
                 break;
             }
             case Sealed:
             case Indexing:
                 segment = milvus::segcore::CreateSealedSegment(
-                    col->get_schema(), col->GetIndexMeta(), segment_id);
+                    col->get_schema(), col->get_index_meta(), segment_id);
                 break;
             default:
                 PanicInfo(milvus::UnexpectedError,
@@ -80,6 +80,7 @@ Search(CSegmentInterface c_segment,
        CSearchPlan c_plan,
        CPlaceholderGroup c_placeholder_group,
        CTraceContext c_trace,
+       uint64_t timestamp,
        CSearchResult* result) {
     try {
         auto segment = (milvus::segcore::SegmentInterface*)c_segment;
@@ -90,7 +91,7 @@ Search(CSegmentInterface c_segment,
             c_trace.traceID, c_trace.spanID, c_trace.flag};
         auto span = milvus::tracer::StartSpan("SegCoreSearch", &ctx);
         milvus::tracer::SetRootSpan(span);
-        auto search_result = segment->Search(plan, phg_ptr);
+        auto search_result = segment->Search(plan, phg_ptr, timestamp);
         if (!milvus::PositivelyRelated(
                 plan->plan_node_->search_info_.metric_type_)) {
             for (auto& dis : search_result->distances_) {
@@ -404,6 +405,21 @@ AddFieldDataInfoForSealed(CSegmentInterface c_segment,
         auto load_info =
             static_cast<LoadFieldDataInfo*>(c_load_field_data_info);
         segment->AddFieldDataInfoForSealed(*load_info);
+        return milvus::SuccessCStatus();
+    } catch (std::exception& e) {
+        return milvus::FailureCStatus(milvus::UnexpectedError, e.what());
+    }
+}
+
+CStatus
+WarmupChunkCache(CSegmentInterface c_segment, int64_t field_id) {
+    try {
+        auto segment_interface =
+            reinterpret_cast<milvus::segcore::SegmentInterface*>(c_segment);
+        auto segment =
+            dynamic_cast<milvus::segcore::SegmentSealed*>(segment_interface);
+        AssertInfo(segment != nullptr, "segment conversion failed");
+        segment->WarmupChunkCache(milvus::FieldId(field_id));
         return milvus::SuccessCStatus();
     } catch (std::exception& e) {
         return milvus::FailureCStatus(milvus::UnexpectedError, e.what());

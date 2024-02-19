@@ -13,6 +13,7 @@
 
 #include <fcntl.h>
 #include <fmt/core.h>
+#include <sys/stat.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -119,6 +120,36 @@ SegmentSealedImpl::LoadVecIndex(const LoadIndexInfo& info) {
 }
 
 void
+SegmentSealedImpl::WarmupChunkCache(const FieldId field_id) {
+    auto& field_meta = schema_->operator[](field_id);
+    AssertInfo(field_meta.is_vector(), "vector field is not vector type");
+
+    if (!get_bit(index_ready_bitset_, field_id) &&
+        !get_bit(binlog_index_bitset_, field_id)) {
+        return;
+    }
+
+    AssertInfo(vector_indexings_.is_ready(field_id),
+               "vector index is not ready");
+    auto field_indexing = vector_indexings_.get_field_indexing(field_id);
+    auto vec_index =
+        dynamic_cast<index::VectorIndex*>(field_indexing->indexing_.get());
+    AssertInfo(vec_index, "invalid vector indexing");
+
+    auto it = field_data_info_.field_infos.find(field_id.get());
+    AssertInfo(it != field_data_info_.field_infos.end(),
+               "cannot find binlog file for field: {}, seg: {}",
+               field_id.get(),
+               id_);
+    auto field_info = it->second;
+
+    auto cc = storage::ChunkCacheSingleton::GetInstance().GetChunkCache();
+    for (const auto& data_path : field_info.insert_files) {
+        auto column = cc->Read(data_path);
+    }
+}
+
+void
 SegmentSealedImpl::LoadScalarIndex(const LoadIndexInfo& info) {
     // NOTE: lock only when data is ready to avoid starvation
     auto field_id = FieldId(info.field_id);
@@ -145,26 +176,30 @@ SegmentSealedImpl::LoadScalarIndex(const LoadIndexInfo& info) {
     // reverse pk from scalar index and set pks to offset
     if (schema_->get_primary_field_id() == field_id) {
         AssertInfo(field_id.get() != -1, "Primary key is -1");
-        AssertInfo(insert_record_.empty_pks(), "already exists");
         switch (field_meta.get_data_type()) {
             case DataType::INT64: {
                 auto int64_index = dynamic_cast<index::ScalarIndex<int64_t>*>(
                     scalar_indexings_[field_id].get());
-                for (int i = 0; i < row_count; ++i) {
-                    insert_record_.insert_pk(int64_index->Reverse_Lookup(i), i);
+                if (insert_record_.empty_pks() && int64_index->HasRawData()) {
+                    for (int i = 0; i < row_count; ++i) {
+                        insert_record_.insert_pk(int64_index->Reverse_Lookup(i),
+                                                 i);
+                    }
+                    insert_record_.seal_pks();
                 }
-                insert_record_.seal_pks();
                 break;
             }
             case DataType::VARCHAR: {
                 auto string_index =
                     dynamic_cast<index::ScalarIndex<std::string>*>(
                         scalar_indexings_[field_id].get());
-                for (int i = 0; i < row_count; ++i) {
-                    insert_record_.insert_pk(string_index->Reverse_Lookup(i),
-                                             i);
+                if (insert_record_.empty_pks() && string_index->HasRawData()) {
+                    for (int i = 0; i < row_count; ++i) {
+                        insert_record_.insert_pk(
+                            string_index->Reverse_Lookup(i), i);
+                    }
+                    insert_record_.seal_pks();
                 }
-                insert_record_.seal_pks();
                 break;
             }
             default: {
@@ -177,9 +212,12 @@ SegmentSealedImpl::LoadScalarIndex(const LoadIndexInfo& info) {
 
     set_bit(index_ready_bitset_, field_id, true);
     update_row_count(row_count);
-    // release field column
-    fields_.erase(field_id);
-    set_bit(field_data_ready_bitset_, field_id, false);
+    // release field column if the index contains raw data
+    if (scalar_indexings_[field_id]->HasRawData() &&
+        get_bit(field_data_ready_bitset_, field_id)) {
+        fields_.erase(field_id);
+        set_bit(field_data_ready_bitset_, field_id, false);
+    }
 
     lck.unlock();
 }
@@ -195,9 +233,15 @@ SegmentSealedImpl::LoadFieldData(const LoadFieldDataInfo& load_info) {
 
         auto field_id = FieldId(id);
         auto insert_files = info.insert_files;
+        std::sort(insert_files.begin(),
+                  insert_files.end(),
+                  [](const std::string& a, const std::string& b) {
+                      return std::stol(a.substr(a.find_last_of('/') + 1)) <
+                             std::stol(b.substr(b.find_last_of('/') + 1));
+                  });
+
         auto field_data_info =
             FieldDataInfo(field_id.get(), num_rows, load_info.mmap_dir_path);
-
         LOG_INFO("segment {} loads field {} with num_rows {}",
                  this->get_segment_id(),
                  field_id.get(),
@@ -310,6 +354,7 @@ SegmentSealedImpl::LoadFieldData(FieldId field_id, FieldDataInfo& data) {
             insert_record_.timestamp_index_ = std::move(index);
             AssertInfo(insert_record_.timestamps_.num_chunk() == 1,
                        "num chunk not equal to 1 for sealed segment");
+            stats_.mem_size += sizeof(Timestamp) * data.row_count;
         } else {
             AssertInfo(system_field_type == SystemFieldType::RowId,
                        "System field type of id column is not RowId");
@@ -322,6 +367,7 @@ SegmentSealedImpl::LoadFieldData(FieldId field_id, FieldDataInfo& data) {
             insert_record_.row_ids_.fill_chunk_data(field_data);
             AssertInfo(insert_record_.row_ids_.num_chunk() == 1,
                        "num chunk not equal to 1 for sealed segment");
+            stats_.mem_size += sizeof(idx_t) * data.row_count;
         }
         ++system_ready_count_;
     } else {
@@ -350,6 +396,9 @@ SegmentSealedImpl::LoadFieldData(FieldId field_id, FieldDataInfo& data) {
                             auto str_size = str->size();
                             var_column->Append(str->data(), str_size);
                             field_data_size += str_size;
+
+                            // we stores the offset for each string, so there is a additional uint64_t for each string
+                            stats_.mem_size += str_size + sizeof(uint64_t);
                         }
                     }
                     var_column->Seal();
@@ -372,6 +421,10 @@ SegmentSealedImpl::LoadFieldData(FieldId field_id, FieldDataInfo& data) {
                             var_column->Append(padded_string.data(),
                                                padded_string_size);
                             field_data_size += padded_string_size;
+
+                            // we stores the offset for each JSON, so there is a additional uint64_t for each JSON
+                            stats_.mem_size +=
+                                padded_string_size + sizeof(uint64_t);
                         }
                     }
                     var_column->Seal();
@@ -388,6 +441,10 @@ SegmentSealedImpl::LoadFieldData(FieldId field_id, FieldDataInfo& data) {
                             auto array =
                                 static_cast<const milvus::Array*>(rawValue);
                             var_column->Append(*array);
+
+                            // we stores the offset for each array element, so there is a additional uint64_t for each array element
+                            stats_.mem_size +=
+                                array->byte_size() + sizeof(uint64_t);
                         }
                     }
                     var_column->Seal();
@@ -408,6 +465,8 @@ SegmentSealedImpl::LoadFieldData(FieldId field_id, FieldDataInfo& data) {
             FieldDataPtr field_data;
             while (data.channel->pop(field_data)) {
                 column->AppendBatch(field_data);
+
+                stats_.mem_size += field_data->Size();
             }
             LoadPrimitiveSkipIndex(
                 field_id, 0, data_type, column->Span().data(), num_rows);
@@ -472,18 +531,21 @@ SegmentSealedImpl::MapFieldData(const FieldId field_id, FieldDataInfo& data) {
     auto data_type = field_meta.get_data_type();
 
     // write the field data to disk
-    size_t total_written{0};
-    auto data_size = 0;
     std::vector<uint64_t> indices{};
     std::vector<std::vector<uint64_t>> element_indices{};
     FieldDataPtr field_data;
+    size_t total_written = 0;
     while (data.channel->pop(field_data)) {
-        data_size += field_data->Size();
         auto written =
             WriteFieldData(file, data_type, field_data, element_indices);
-        if (written != field_data->Size()) {
-            break;
-        }
+
+        AssertInfo(written == field_data->Size(),
+                   fmt::format("failed to write data file {}, written {} but "
+                               "total {}, err: {}",
+                               filepath.c_str(),
+                               written,
+                               field_data->Size(),
+                               strerror(errno)));
 
         for (auto i = 0; i < field_data->get_num_rows(); i++) {
             auto size = field_data->Size(i);
@@ -491,14 +553,6 @@ SegmentSealedImpl::MapFieldData(const FieldId field_id, FieldDataInfo& data) {
             total_written += size;
         }
     }
-    AssertInfo(
-        total_written == data_size,
-        fmt::format(
-            "failed to write data file {}, written {} but total {}, err: {}",
-            filepath.c_str(),
-            total_written,
-            data_size,
-            strerror(errno)));
 
     auto num_rows = data.row_count;
     std::shared_ptr<ColumnBase> column{};
@@ -576,6 +630,8 @@ SegmentSealedImpl::LoadDeletedRecord(const LoadDeletedRecordInfo& info) {
 
     // step 2: fill pks and timestamps
     deleted_record_.push(pks, timestamps);
+
+    stats_.mem_size += sizeof(Timestamp) * info.row_count + CalcPksSize(pks);
 }
 
 void
@@ -634,14 +690,6 @@ SegmentSealedImpl::chunk_index_impl(FieldId field_id, int64_t chunk_id) const {
                    std::to_string(field_id.get()));
     auto ptr = scalar_indexings_.at(field_id).get();
     return ptr;
-}
-
-int64_t
-SegmentSealedImpl::GetMemoryUsageInBytes() const {
-    // TODO: add estimate for index
-    std::shared_lock lck(mutex_);
-    auto row_count = num_rows_.value_or(0);
-    return schema_->get_total_sizeof() * row_count;
 }
 
 int64_t
@@ -850,10 +898,12 @@ SegmentSealedImpl::get_vector(FieldId field_id,
             AssertInfo(path_to_column.count(data_path) != 0,
                        "column not found");
             const auto& column = path_to_column.at(data_path);
-            AssertInfo(offset_in_binlog * row_bytes < column->ByteSize(),
-                       fmt::format("column idx out of range, idx: {}, size: {}",
-                                   offset_in_binlog * row_bytes,
-                                   column->ByteSize()));
+            AssertInfo(
+                offset_in_binlog * row_bytes < column->ByteSize(),
+                "column idx out of range, idx: {}, size: {}, data_path: {}",
+                offset_in_binlog * row_bytes,
+                column->ByteSize(),
+                data_path);
             auto vector = &column->Data()[offset_in_binlog * row_bytes];
             std::memcpy(buf.data() + i * row_bytes, vector, row_bytes);
         }
@@ -880,8 +930,8 @@ SegmentSealedImpl::DropFieldData(const FieldId field_id) {
         auto& field_meta = schema_->operator[](field_id);
         std::unique_lock lck(mutex_);
         if (get_bit(field_data_ready_bitset_, field_id)) {
+            fields_.erase(field_id);
             set_bit(field_data_ready_bitset_, field_id, false);
-            insert_record_.drop_field_data(field_id);
         }
         if (get_bit(binlog_index_bitset_, field_id)) {
             set_bit(binlog_index_bitset_, field_id, false);
@@ -1211,6 +1261,15 @@ SegmentSealedImpl::get_raw_data(FieldId field_id,
                 ret->mutable_vectors()->mutable_float16_vector()->data());
             break;
         }
+        case DataType::VECTOR_BFLOAT16: {
+            bulk_subscript_impl(
+                field_meta.get_sizeof(),
+                column->Data(),
+                seg_offsets,
+                count,
+                ret->mutable_vectors()->mutable_bfloat16_vector()->data());
+            break;
+        }
         case DataType::VECTOR_BINARY: {
             bulk_subscript_impl(
                 field_meta.get_sizeof(),
@@ -1301,6 +1360,12 @@ SegmentSealedImpl::HasRawData(int64_t field_id) const {
     return true;
 }
 
+DataType
+SegmentSealedImpl::GetFieldDataType(milvus::FieldId field_id) const {
+    auto& field_meta = schema_->operator[](field_id);
+    return field_meta.get_data_type();
+}
+
 std::pair<std::unique_ptr<IdArray>, std::vector<SegOffset>>
 SegmentSealedImpl::search_ids(const IdArray& id_array,
                               Timestamp timestamp) const {
@@ -1380,6 +1445,9 @@ SegmentSealedImpl::Delete(int64_t reserved_offset,  // deprecated
     }
 
     deleted_record_.push(sort_pks, sort_timestamps.data());
+
+    stats_.mem_size +=
+        sizeof(Timestamp) * sort_pks.size() + CalcPksSize(sort_pks);
     return SegcoreError::success();
 }
 
@@ -1442,64 +1510,90 @@ SegmentSealedImpl::mask_with_timestamps(BitsetType& bitset_chunk,
 
 bool
 SegmentSealedImpl::generate_binlog_index(const FieldId field_id) {
-    if (col_index_meta_ == nullptr)
+    if (col_index_meta_ == nullptr || !col_index_meta_->HasFiled(field_id)) {
         return false;
+    }
     auto& field_meta = schema_->operator[](field_id);
+    auto& field_index_meta = col_index_meta_->GetFieldIndexMeta(field_id);
+    auto& index_params = field_index_meta.GetIndexParams();
 
-    if (field_meta.is_vector() &&
-        field_meta.get_data_type() == DataType::VECTOR_FLOAT &&
-        segcore_config_.get_enable_interim_segment_index()) {
-        try {
-            auto& field_index_meta =
-                col_index_meta_->GetFieldIndexMeta(field_id);
-            auto& index_params = field_index_meta.GetIndexParams();
-            if (index_params.find(knowhere::meta::INDEX_TYPE) ==
-                    index_params.end() ||
-                index_params.at(knowhere::meta::INDEX_TYPE) ==
-                    knowhere::IndexEnum::INDEX_FAISS_IDMAP) {
-                return false;
-            }
-            // get binlog data and meta
-            auto row_count = num_rows_.value();
-            auto dim = field_meta.get_dim();
-            std::shared_ptr<ColumnBase> vec_data{};
-            {
-                // field should be exists.
-                // otherwise, out_of_range exception is thrown by fields_.at
-                std::shared_lock lck(mutex_);
-                vec_data = fields_.at(field_id);
-            }
-            auto dataset =
-                knowhere::GenDataSet(row_count, dim, (void*)vec_data->Data());
-            dataset->SetIsOwner(false);
-            // generate index params
-            auto field_binlog_config = std::unique_ptr<VecIndexConfig>(
-                new VecIndexConfig(row_count,
-                                   field_index_meta,
-                                   segcore_config_,
-                                   SegmentType::Sealed));
-            auto build_config = field_binlog_config->GetBuildBaseParams();
-            build_config[knowhere::meta::DIM] = std::to_string(dim);
-            build_config[knowhere::meta::NUM_BUILD_THREAD] = std::to_string(1);
-            auto index_metric = field_binlog_config->GetMetricType();
+    auto enable_binlog_index = [&]() {
+        // checkout config
+        if (!segcore_config_.get_enable_interim_segment_index()) {
+            return false;
+        }
+        // check data type
+        if (!field_meta.is_vector() ||
+            field_meta.get_data_type() != DataType::VECTOR_FLOAT) {
+            return false;
+        }
+        // check index type
+        if (index_params.find(knowhere::meta::INDEX_TYPE) ==
+                index_params.end() ||
+            field_index_meta.IsFlatIndex()) {
+            return false;
+        }
+        // check index exist
+        if (vector_indexings_.is_ready(field_id)) {
+            return false;
+        }
+        return true;
+    };
+    if (!enable_binlog_index()) {
+        return false;
+    }
+    try {
+        // get binlog data and meta
+        int64_t row_count;
+        {
+            std::shared_lock lck(mutex_);
+            row_count = num_rows_.value();
+        }
+        auto dim = field_meta.get_dim();
+        // generate index params
+        auto field_binlog_config = std::unique_ptr<VecIndexConfig>(
+            new VecIndexConfig(row_count,
+                               field_index_meta,
+                               segcore_config_,
+                               SegmentType::Sealed));
+        if (row_count < field_binlog_config->GetBuildThreshold()) {
+            return false;
+        }
+        auto build_config = field_binlog_config->GetBuildBaseParams();
+        build_config[knowhere::meta::DIM] = std::to_string(dim);
+        build_config[knowhere::meta::NUM_BUILD_THREAD] = std::to_string(1);
+        auto index_metric = field_binlog_config->GetMetricType();
 
-            index::IndexBasePtr vec_index =
-                std::make_unique<index::VectorMemIndex<float>>(
-                    field_binlog_config->GetIndexType(),
-                    index_metric,
-                    knowhere::Version::GetCurrentVersion().VersionNumber());
-            vec_index->BuildWithDataset(dataset, build_config);
+        std::shared_ptr<ColumnBase> vec_data{};
+        {
+            std::shared_lock lck(mutex_);
+            vec_data = fields_.at(field_id);
+        }
+        auto dataset =
+            knowhere::GenDataSet(row_count, dim, (void*)vec_data->Data());
+        dataset->SetIsOwner(false);
+
+        index::IndexBasePtr vec_index =
+            std::make_unique<index::VectorMemIndex<float>>(
+                field_binlog_config->GetIndexType(),
+                index_metric,
+                knowhere::Version::GetCurrentVersion().VersionNumber());
+        vec_index->BuildWithDataset(dataset, build_config);
+        if (enable_binlog_index()) {
+            std::unique_lock lck(mutex_);
             vector_indexings_.append_field_indexing(
                 field_id, index_metric, std::move(vec_index));
 
             vec_binlog_config_[field_id] = std::move(field_binlog_config);
             set_bit(binlog_index_bitset_, field_id, true);
-
-            return true;
-        } catch (std::exception& e) {
-            return false;
+            LOG_INFO(
+                "replace binlog with binlog index in segment {}, field {}.",
+                this->get_segment_id(),
+                field_id.get());
         }
-    } else {
+        return true;
+    } catch (std::exception& e) {
+        LOG_WARN("fail to generate binlog index, because {}", e.what());
         return false;
     }
 }

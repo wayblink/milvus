@@ -158,6 +158,7 @@ func (s *SyncTaskSuite) getSuiteSyncTask() *SyncTask {
 		WithChunkManager(s.chunkManager).
 		WithAllocator(s.allocator).
 		WithMetaCache(s.metacache)
+	task.binlogMemsize = map[int64]int64{0: 1, 1: 1, 100: 100}
 
 	return task
 }
@@ -327,6 +328,24 @@ func (s *SyncTaskSuite) TestCompactToNull() {
 }
 
 func (s *SyncTaskSuite) TestRunError() {
+	s.Run("target_segment_not_match", func() {
+		flag := false
+		seg := metacache.NewSegmentInfo(&datapb.SegmentInfo{
+			ID: s.segmentID,
+		}, metacache.NewBloomFilterSet())
+		metacache.CompactTo(s.segmentID + 1)(seg)
+		s.metacache.EXPECT().GetSegmentByID(s.segmentID).Return(seg, true).Once()
+
+		handler := func(_ error) { flag = true }
+		task := s.getSuiteSyncTask().WithFailureCallback(handler)
+
+		task.targetSegmentID.Store(s.segmentID)
+		err := task.Run()
+
+		s.Error(err)
+		s.False(flag, "target not match shall not trigger error handler")
+	})
+
 	s.Run("segment_not_found", func() {
 		s.metacache.EXPECT().GetSegmentByID(s.segmentID).Return(nil, false)
 		flag := false
@@ -344,6 +363,17 @@ func (s *SyncTaskSuite) TestRunError() {
 	metacache.UpdateNumOfRows(1000)(seg)
 	s.metacache.EXPECT().GetSegmentByID(s.segmentID).Return(seg, true)
 	s.metacache.EXPECT().GetSegmentsBy(mock.Anything).Return([]*metacache.SegmentInfo{seg})
+
+	s.Run("allocate_id_fail", func() {
+		mockAllocator := allocator.NewMockAllocator(s.T())
+		mockAllocator.EXPECT().Alloc(mock.Anything).Return(0, 0, errors.New("mocked"))
+
+		task := s.getSuiteSyncTask()
+		task.allocator = mockAllocator
+
+		err := task.Run()
+		s.Error(err)
+	})
 
 	s.Run("metawrite_fail", func() {
 		s.broker.EXPECT().SaveBinlogPaths(mock.Anything, mock.Anything).Return(errors.New("mocked"))
@@ -379,6 +409,78 @@ func (s *SyncTaskSuite) TestRunError() {
 
 		s.Error(err)
 		s.True(flag)
+	})
+}
+
+func (s *SyncTaskSuite) TestNextID() {
+	task := s.getSuiteSyncTask()
+
+	task.ids = []int64{0}
+	s.Run("normal_next", func() {
+		id := task.nextID()
+		s.EqualValues(0, id)
+	})
+	s.Run("id_exhausted", func() {
+		s.Panics(func() {
+			task.nextID()
+		})
+	})
+}
+
+func (s *SyncTaskSuite) TestCalcTargetID() {
+	task := s.getSuiteSyncTask()
+
+	s.Run("normal_calc_segment", func() {
+		s.Run("not_compacted", func() {
+			segment := metacache.NewSegmentInfo(&datapb.SegmentInfo{
+				ID:           s.segmentID,
+				PartitionID:  s.partitionID,
+				CollectionID: s.collectionID,
+			}, metacache.NewBloomFilterSet())
+			s.metacache.EXPECT().GetSegmentByID(s.segmentID).Return(segment, true).Once()
+
+			targetID, err := task.CalcTargetSegment()
+			s.Require().NoError(err)
+			s.Equal(s.segmentID, targetID)
+			s.Equal(s.segmentID, task.targetSegmentID.Load())
+		})
+
+		s.Run("compacted_normal", func() {
+			segment := metacache.NewSegmentInfo(&datapb.SegmentInfo{
+				ID:           s.segmentID,
+				PartitionID:  s.partitionID,
+				CollectionID: s.collectionID,
+			}, metacache.NewBloomFilterSet())
+			metacache.CompactTo(1000)(segment)
+			s.metacache.EXPECT().GetSegmentByID(s.segmentID).Return(segment, true).Once()
+
+			targetID, err := task.CalcTargetSegment()
+			s.Require().NoError(err)
+			s.EqualValues(1000, targetID)
+			s.EqualValues(1000, task.targetSegmentID.Load())
+		})
+
+		s.Run("compacted_null", func() {
+			segment := metacache.NewSegmentInfo(&datapb.SegmentInfo{
+				ID:           s.segmentID,
+				PartitionID:  s.partitionID,
+				CollectionID: s.collectionID,
+			}, metacache.NewBloomFilterSet())
+			metacache.CompactTo(metacache.NullSegment)(segment)
+			s.metacache.EXPECT().GetSegmentByID(s.segmentID).Return(segment, true).Once()
+
+			targetID, err := task.CalcTargetSegment()
+			s.Require().NoError(err)
+			s.Equal(s.segmentID, targetID)
+			s.Equal(s.segmentID, task.targetSegmentID.Load())
+		})
+	})
+
+	s.Run("segment_not_found", func() {
+		s.metacache.EXPECT().GetSegmentByID(s.segmentID).Return(nil, false).Once()
+
+		_, err := task.CalcTargetSegment()
+		s.Error(err)
 	})
 }
 

@@ -54,13 +54,15 @@ enum class CloudProviderType : int8_t {
     GCP = 2,
     ALIYUN = 3,
     AZURE = 4,
+    TENCENTCLOUD = 5,
 };
 
 std::map<std::string, CloudProviderType> CloudProviderType_Map = {
     {"aws", CloudProviderType::AWS},
     {"gcp", CloudProviderType::GCP},
     {"aliyun", CloudProviderType::ALIYUN},
-    {"azure", CloudProviderType::AZURE}};
+    {"azure", CloudProviderType::AZURE},
+    {"tencent", CloudProviderType::TENCENTCLOUD}};
 
 std::map<std::string, int> ReadAheadPolicy_Map = {
     {"normal", MADV_NORMAL},
@@ -160,6 +162,7 @@ AddPayloadToArrowBuilder(std::shared_ptr<arrow::ArrayBuilder> builder,
             break;
         }
         case DataType::VECTOR_FLOAT16:
+        case DataType::VECTOR_BFLOAT16:
         case DataType::VECTOR_BINARY:
         case DataType::VECTOR_FLOAT: {
             add_vector_payload(builder, const_cast<uint8_t*>(raw_data), length);
@@ -262,6 +265,11 @@ CreateArrowBuilder(DataType data_type, int dim) {
             return std::make_shared<arrow::FixedSizeBinaryBuilder>(
                 arrow::fixed_size_binary(dim * sizeof(float16)));
         }
+        case DataType::VECTOR_BFLOAT16: {
+            AssertInfo(dim > 0, "invalid dim value");
+            return std::make_shared<arrow::FixedSizeBinaryBuilder>(
+                arrow::fixed_size_binary(dim * sizeof(bfloat16)));
+        }
         default: {
             PanicInfo(
                 DataTypeInvalid, "unsupported vector data type {}", data_type);
@@ -326,6 +334,11 @@ CreateArrowSchema(DataType data_type, int dim) {
             return arrow::schema({arrow::field(
                 "val", arrow::fixed_size_binary(dim * sizeof(float16)))});
         }
+        case DataType::VECTOR_BFLOAT16: {
+            AssertInfo(dim > 0, "invalid dim value");
+            return arrow::schema({arrow::field(
+                "val", arrow::fixed_size_binary(dim * sizeof(bfloat16)))});
+        }
         default: {
             PanicInfo(
                 DataTypeInvalid, "unsupported vector data type {}", data_type);
@@ -345,6 +358,9 @@ GetDimensionFromFileMetaData(const parquet::ColumnDescriptor* schema,
         }
         case DataType::VECTOR_FLOAT16: {
             return schema->type_length() / sizeof(float16);
+        }
+        case DataType::VECTOR_BFLOAT16: {
+            return schema->type_length() / sizeof(bfloat16);
         }
         default:
             PanicInfo(DataTypeInvalid, "unsupported data type {}", data_type);
@@ -465,7 +481,7 @@ EncodeAndUploadIndexSlice2(std::shared_ptr<milvus_storage::Space> space,
     indexData->SetFieldDataMeta(field_meta);
     auto serialized_index_data = indexData->serialize_to_remote_file();
     auto serialized_index_size = serialized_index_data.size();
-    auto status = space->WriteBolb(
+    auto status = space->WriteBlob(
         object_key, serialized_index_data.data(), serialized_index_size);
     AssertInfo(status.ok(), "write to space error: {}", status.ToString());
     return std::make_pair(std::move(object_key), serialized_index_size);
@@ -490,23 +506,17 @@ EncodeAndUploadFieldSlice(ChunkManager* chunk_manager,
     return std::make_pair(std::move(object_key), serialized_index_size);
 }
 
-std::vector<FieldDataPtr>
+std::vector<std::future<std::unique_ptr<DataCodec>>>
 GetObjectData(ChunkManager* remote_chunk_manager,
               const std::vector<std::string>& remote_files) {
     auto& pool = ThreadPools::GetThreadPool(milvus::ThreadPoolPriority::HIGH);
     std::vector<std::future<std::unique_ptr<DataCodec>>> futures;
+    futures.reserve(remote_files.size());
     for (auto& file : remote_files) {
         futures.emplace_back(pool.Submit(
             DownloadAndDecodeRemoteFile, remote_chunk_manager, file));
     }
-
-    std::vector<FieldDataPtr> datas;
-    for (int i = 0; i < futures.size(); ++i) {
-        auto res = futures[i].get();
-        datas.emplace_back(res->GetFieldData());
-    }
-    ReleaseArrowUnused();
-    return datas;
+    return futures;
 }
 
 std::vector<FieldDataPtr>
@@ -662,6 +672,10 @@ CreateChunkManager(const StorageConfig& storage_config) {
                 case CloudProviderType::ALIYUN: {
                     return std::make_shared<AliyunChunkManager>(storage_config);
                 }
+                case CloudProviderType::TENCENTCLOUD: {
+                    return std::make_shared<TencentCloudChunkManager>(
+                        storage_config);
+                }
 #ifdef AZURE_BUILD_DIR
                 case CloudProviderType::AZURE: {
                     return std::make_shared<AzureChunkManager>(storage_config);
@@ -717,6 +731,9 @@ CreateFieldData(const DataType& type, int64_t dim, int64_t total_num_rows) {
                 dim, type, total_num_rows);
         case DataType::VECTOR_FLOAT16:
             return std::make_shared<FieldData<Float16Vector>>(
+                dim, type, total_num_rows);
+        case DataType::VECTOR_BFLOAT16:
+            return std::make_shared<FieldData<BFloat16Vector>>(
                 dim, type, total_num_rows);
         default:
             throw SegcoreError(

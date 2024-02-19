@@ -316,6 +316,7 @@ func TestComponentParam(t *testing.T) {
 
 		// chunk cache
 		assert.Equal(t, "willneed", Params.ReadAheadPolicy.GetValue())
+		assert.Equal(t, "async", Params.ChunkCacheWarmingUp.GetValue())
 
 		// test small indexNlist/NProbe default
 		params.Remove("queryNode.segcore.smallIndex.nlist")
@@ -406,6 +407,10 @@ func TestComponentParam(t *testing.T) {
 		updateChannelCheckpointMaxParallel := Params.UpdateChannelCheckpointMaxParallel.GetAsInt()
 		t.Logf("updateChannelCheckpointMaxParallel: %d", updateChannelCheckpointMaxParallel)
 		assert.Equal(t, 1000, Params.UpdateChannelCheckpointMaxParallel.GetAsInt())
+
+		maxConcurrentImportTaskNum := Params.MaxConcurrentImportTaskNum.GetAsInt()
+		t.Logf("maxConcurrentImportTaskNum: %d", maxConcurrentImportTaskNum)
+		assert.Equal(t, 16, maxConcurrentImportTaskNum)
 	})
 
 	t.Run("test indexNodeConfig", func(t *testing.T) {

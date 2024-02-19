@@ -26,6 +26,7 @@ import (
 	"github.com/cockroachdb/errors"
 	"github.com/golang/protobuf/proto"
 	"github.com/samber/lo"
+	"go.opentelemetry.io/otel"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 
@@ -51,6 +52,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/util/timerecord"
 	"github.com/milvus-io/milvus/pkg/util/tsoutil"
+	"github.com/milvus-io/milvus/pkg/util/typeutil"
 )
 
 // ShardDelegator is the interface definition.
@@ -60,6 +62,7 @@ type ShardDelegator interface {
 	GetSegmentInfo(readable bool) (sealed []SnapshotItem, growing []SegmentEntry)
 	SyncDistribution(ctx context.Context, entries ...SegmentEntry)
 	Search(ctx context.Context, req *querypb.SearchRequest) ([]*internalpb.SearchResults, error)
+	HybridSearch(ctx context.Context, req *querypb.HybridSearchRequest) (*querypb.HybridSearchResult, error)
 	Query(ctx context.Context, req *querypb.QueryRequest) ([]*internalpb.RetrieveResults, error)
 	QueryStream(ctx context.Context, req *querypb.QueryRequest, srv streamrpc.QueryStreamServer) error
 	GetStatistics(ctx context.Context, req *querypb.GetStatisticsRequest) ([]*internalpb.GetStatisticsResponse, error)
@@ -183,47 +186,8 @@ func (sd *shardDelegator) modifyQueryRequest(req *querypb.QueryRequest, scope qu
 }
 
 // Search preforms search operation on shard.
-func (sd *shardDelegator) Search(ctx context.Context, req *querypb.SearchRequest) ([]*internalpb.SearchResults, error) {
+func (sd *shardDelegator) search(ctx context.Context, req *querypb.SearchRequest, sealed []SnapshotItem, growing []SegmentEntry) ([]*internalpb.SearchResults, error) {
 	log := sd.getLogger(ctx)
-	if err := sd.lifetime.Add(lifetime.IsWorking); err != nil {
-		return nil, err
-	}
-	defer sd.lifetime.Done()
-
-	if !funcutil.SliceContain(req.GetDmlChannels(), sd.vchannelName) {
-		log.Warn("deletgator received search request not belongs to it",
-			zap.Strings("reqChannels", req.GetDmlChannels()),
-		)
-		return nil, fmt.Errorf("dml channel not match, delegator channel %s, search channels %v", sd.vchannelName, req.GetDmlChannels())
-	}
-
-	partitions := req.GetReq().GetPartitionIDs()
-	if !sd.collection.ExistPartition(partitions...) {
-		return nil, merr.WrapErrPartitionNotLoaded(partitions)
-	}
-
-	// wait tsafe
-	waitTr := timerecord.NewTimeRecorder("wait tSafe")
-	err := sd.waitTSafe(ctx, req.Req.GuaranteeTimestamp)
-	if err != nil {
-		log.Warn("delegator search failed to wait tsafe", zap.Error(err))
-		return nil, err
-	}
-	metrics.QueryNodeSQLatencyWaitTSafe.WithLabelValues(
-		fmt.Sprint(paramtable.GetNodeID()), metrics.SearchLabel).
-		Observe(float64(waitTr.ElapseSpan().Milliseconds()))
-
-	sealed, growing, version, err := sd.distribution.PinReadableSegments(req.GetReq().GetPartitionIDs()...)
-	if err != nil {
-		log.Warn("delegator failed to search, current distribution is not serviceable")
-		return nil, merr.WrapErrChannelNotAvailable(sd.vchannelName, "distribution is not servcieable")
-	}
-	defer sd.distribution.Unpin(version)
-	existPartitions := sd.collection.GetPartitions()
-	growing = lo.Filter(growing, func(segment SegmentEntry, _ int) bool {
-		return funcutil.SliceContain(existPartitions, segment.PartitionID)
-	})
-
 	if req.Req.IgnoreGrowing {
 		growing = []SegmentEntry{}
 	}
@@ -234,7 +198,7 @@ func (sd *shardDelegator) Search(ctx context.Context, req *querypb.SearchRequest
 		zap.Int("growingNum", len(growing)),
 	)
 
-	req, err = optimizers.OptimizeSearchParams(ctx, req, sd.queryHook, sealedNum)
+	req, err := optimizers.OptimizeSearchParams(ctx, req, sd.queryHook, sealedNum)
 	if err != nil {
 		log.Warn("failed to optimize search params", zap.Error(err))
 		return nil, err
@@ -259,6 +223,160 @@ func (sd *shardDelegator) Search(ctx context.Context, req *querypb.SearchRequest
 	return results, nil
 }
 
+// Search preforms search operation on shard.
+func (sd *shardDelegator) Search(ctx context.Context, req *querypb.SearchRequest) ([]*internalpb.SearchResults, error) {
+	log := sd.getLogger(ctx)
+	if err := sd.lifetime.Add(lifetime.IsWorking); err != nil {
+		return nil, err
+	}
+	defer sd.lifetime.Done()
+
+	if !funcutil.SliceContain(req.GetDmlChannels(), sd.vchannelName) {
+		log.Warn("deletgator received search request not belongs to it",
+			zap.Strings("reqChannels", req.GetDmlChannels()),
+		)
+		return nil, fmt.Errorf("dml channel not match, delegator channel %s, search channels %v", sd.vchannelName, req.GetDmlChannels())
+	}
+
+	partitions := req.GetReq().GetPartitionIDs()
+	if !sd.collection.ExistPartition(partitions...) {
+		return nil, merr.WrapErrPartitionNotLoaded(partitions)
+	}
+
+	// wait tsafe
+	waitTr := timerecord.NewTimeRecorder("wait tSafe")
+	tSafe, err := sd.waitTSafe(ctx, req.Req.GuaranteeTimestamp)
+	if err != nil {
+		log.Warn("delegator search failed to wait tsafe", zap.Error(err))
+		return nil, err
+	}
+	if req.GetReq().GetMvccTimestamp() == 0 {
+		req.Req.MvccTimestamp = tSafe
+	}
+	metrics.QueryNodeSQLatencyWaitTSafe.WithLabelValues(
+		fmt.Sprint(paramtable.GetNodeID()), metrics.SearchLabel).
+		Observe(float64(waitTr.ElapseSpan().Milliseconds()))
+
+	sealed, growing, version, err := sd.distribution.PinReadableSegments(req.GetReq().GetPartitionIDs()...)
+	if err != nil {
+		log.Warn("delegator failed to search, current distribution is not serviceable")
+		return nil, merr.WrapErrChannelNotAvailable(sd.vchannelName, "distribution is not servcieable")
+	}
+	defer sd.distribution.Unpin(version)
+	existPartitions := sd.collection.GetPartitions()
+	growing = lo.Filter(growing, func(segment SegmentEntry, _ int) bool {
+		return funcutil.SliceContain(existPartitions, segment.PartitionID)
+	})
+
+	return sd.search(ctx, req, sealed, growing)
+}
+
+// HybridSearch preforms hybrid search operation on shard.
+func (sd *shardDelegator) HybridSearch(ctx context.Context, req *querypb.HybridSearchRequest) (*querypb.HybridSearchResult, error) {
+	log := sd.getLogger(ctx)
+	if err := sd.lifetime.Add(lifetime.IsWorking); err != nil {
+		return nil, err
+	}
+	defer sd.lifetime.Done()
+
+	if !funcutil.SliceContain(req.GetDmlChannels(), sd.vchannelName) {
+		log.Warn("deletgator received hybrid search request not belongs to it",
+			zap.Strings("reqChannels", req.GetDmlChannels()),
+		)
+		return nil, fmt.Errorf("dml channel not match, delegator channel %s, search channels %v", sd.vchannelName, req.GetDmlChannels())
+	}
+
+	partitions := req.GetReq().GetPartitionIDs()
+	if !sd.collection.ExistPartition(partitions...) {
+		return nil, merr.WrapErrPartitionNotLoaded(partitions)
+	}
+
+	// wait tsafe
+	waitTr := timerecord.NewTimeRecorder("wait tSafe")
+	tSafe, err := sd.waitTSafe(ctx, req.Req.GuaranteeTimestamp)
+	if err != nil {
+		log.Warn("delegator hybrid search failed to wait tsafe", zap.Error(err))
+		return nil, err
+	}
+	if req.GetReq().GetMvccTimestamp() == 0 {
+		req.Req.MvccTimestamp = tSafe
+	}
+	metrics.QueryNodeSQLatencyWaitTSafe.WithLabelValues(
+		fmt.Sprint(paramtable.GetNodeID()), metrics.HybridSearchLabel).
+		Observe(float64(waitTr.ElapseSpan().Milliseconds()))
+
+	sealed, growing, version, err := sd.distribution.PinReadableSegments(req.GetReq().GetPartitionIDs()...)
+	if err != nil {
+		log.Warn("delegator failed to hybrid search, current distribution is not serviceable")
+		return nil, merr.WrapErrChannelNotAvailable(sd.vchannelName, "distribution is not servcieable")
+	}
+	defer sd.distribution.Unpin(version)
+	existPartitions := sd.collection.GetPartitions()
+	growing = lo.Filter(growing, func(segment SegmentEntry, _ int) bool {
+		return funcutil.SliceContain(existPartitions, segment.PartitionID)
+	})
+
+	futures := make([]*conc.Future[*internalpb.SearchResults], len(req.GetReq().GetReqs()))
+	for index := range req.GetReq().GetReqs() {
+		request := req.GetReq().Reqs[index]
+		future := conc.Go(func() (*internalpb.SearchResults, error) {
+			searchReq := &querypb.SearchRequest{
+				Req:             request,
+				DmlChannels:     req.GetDmlChannels(),
+				TotalChannelNum: req.GetTotalChannelNum(),
+				FromShardLeader: true,
+			}
+			searchReq.Req.GuaranteeTimestamp = req.GetReq().GetGuaranteeTimestamp()
+			searchReq.Req.TimeoutTimestamp = req.GetReq().GetTimeoutTimestamp()
+			if searchReq.GetReq().GetMvccTimestamp() == 0 {
+				searchReq.GetReq().MvccTimestamp = tSafe
+			}
+
+			results, err := sd.search(ctx, searchReq, sealed, growing)
+			if err != nil {
+				return nil, err
+			}
+
+			return segments.ReduceSearchResults(ctx,
+				results,
+				searchReq.Req.GetNq(),
+				searchReq.Req.GetTopk(),
+				searchReq.Req.GetMetricType())
+		})
+		futures[index] = future
+	}
+
+	err = conc.AwaitAll(futures...)
+	if err != nil {
+		return nil, err
+	}
+
+	ret := &querypb.HybridSearchResult{
+		Status:  merr.Success(),
+		Results: make([]*internalpb.SearchResults, len(futures)),
+	}
+
+	channelsMvcc := make(map[string]uint64)
+	for i, future := range futures {
+		result := future.Value()
+		if result.GetStatus().GetErrorCode() != commonpb.ErrorCode_Success {
+			log.Debug("delegator hybrid search failed",
+				zap.String("reason", result.GetStatus().GetReason()))
+			return nil, merr.Error(result.GetStatus())
+		}
+
+		ret.Results[i] = result
+		for ch, ts := range result.GetChannelsMvcc() {
+			channelsMvcc[ch] = ts
+		}
+	}
+	ret.ChannelsMvcc = channelsMvcc
+
+	log.Debug("Delegator hybrid search done")
+
+	return ret, nil
+}
+
 func (sd *shardDelegator) QueryStream(ctx context.Context, req *querypb.QueryRequest, srv streamrpc.QueryStreamServer) error {
 	log := sd.getLogger(ctx)
 	if !sd.Serviceable() {
@@ -279,10 +397,13 @@ func (sd *shardDelegator) QueryStream(ctx context.Context, req *querypb.QueryReq
 
 	// wait tsafe
 	waitTr := timerecord.NewTimeRecorder("wait tSafe")
-	err := sd.waitTSafe(ctx, req.Req.GuaranteeTimestamp)
+	tSafe, err := sd.waitTSafe(ctx, req.Req.GuaranteeTimestamp)
 	if err != nil {
 		log.Warn("delegator query failed to wait tsafe", zap.Error(err))
 		return err
+	}
+	if req.GetReq().GetMvccTimestamp() == 0 {
+		req.Req.MvccTimestamp = tSafe
 	}
 	metrics.QueryNodeSQLatencyWaitTSafe.WithLabelValues(
 		fmt.Sprint(paramtable.GetNodeID()), metrics.QueryLabel).
@@ -347,10 +468,13 @@ func (sd *shardDelegator) Query(ctx context.Context, req *querypb.QueryRequest) 
 
 	// wait tsafe
 	waitTr := timerecord.NewTimeRecorder("wait tSafe")
-	err := sd.waitTSafe(ctx, req.Req.GuaranteeTimestamp)
+	tSafe, err := sd.waitTSafe(ctx, req.Req.GuaranteeTimestamp)
 	if err != nil {
 		log.Warn("delegator query failed to wait tsafe", zap.Error(err))
 		return nil, err
+	}
+	if req.GetReq().GetMvccTimestamp() == 0 {
+		req.Req.MvccTimestamp = tSafe
 	}
 	metrics.QueryNodeSQLatencyWaitTSafe.WithLabelValues(
 		fmt.Sprint(paramtable.GetNodeID()), metrics.QueryLabel).
@@ -410,7 +534,7 @@ func (sd *shardDelegator) GetStatistics(ctx context.Context, req *querypb.GetSta
 	}
 
 	// wait tsafe
-	err := sd.waitTSafe(ctx, req.Req.GuaranteeTimestamp)
+	_, err := sd.waitTSafe(ctx, req.Req.GuaranteeTimestamp)
 	if err != nil {
 		log.Warn("delegator GetStatistics failed to wait tsafe", zap.Error(err))
 		return nil, err
@@ -552,14 +676,17 @@ func executeSubTasks[T any, R interface {
 }
 
 // waitTSafe returns when tsafe listener notifies a timestamp which meet the guarantee ts.
-func (sd *shardDelegator) waitTSafe(ctx context.Context, ts uint64) error {
+func (sd *shardDelegator) waitTSafe(ctx context.Context, ts uint64) (uint64, error) {
+	ctx, sp := otel.Tracer(typeutil.QueryNodeRole).Start(ctx, "Delegator-waitTSafe")
+	defer sp.End()
 	log := sd.getLogger(ctx)
 	// already safe to search
-	if sd.latestTsafe.Load() >= ts {
-		return nil
+	latestTSafe := sd.latestTsafe.Load()
+	if latestTSafe >= ts {
+		return latestTSafe, nil
 	}
 	// check lag duration too large
-	st, _ := tsoutil.ParseTS(sd.latestTsafe.Load())
+	st, _ := tsoutil.ParseTS(latestTSafe)
 	gt, _ := tsoutil.ParseTS(ts)
 	lag := gt.Sub(st)
 	maxLag := paramtable.Get().QueryNodeCfg.MaxTimestampLag.GetAsDuration(time.Second)
@@ -570,7 +697,7 @@ func (sd *shardDelegator) waitTSafe(ctx context.Context, ts uint64) error {
 			zap.Duration("lag", lag),
 			zap.Duration("maxTsLag", maxLag),
 		)
-		return WrapErrTsLagTooLarge(lag, maxLag)
+		return 0, WrapErrTsLagTooLarge(lag, maxLag)
 	}
 
 	ch := make(chan struct{})
@@ -592,12 +719,12 @@ func (sd *shardDelegator) waitTSafe(ctx context.Context, ts uint64) error {
 		case <-ctx.Done():
 			// notify wait goroutine to quit
 			sd.tsCond.Broadcast()
-			return ctx.Err()
+			return 0, ctx.Err()
 		case <-ch:
 			if !sd.Serviceable() {
-				return merr.WrapErrChannelNotAvailable(sd.vchannelName, "delegator closed during wait tsafe")
+				return 0, merr.WrapErrChannelNotAvailable(sd.vchannelName, "delegator closed during wait tsafe")
 			}
-			return nil
+			return sd.latestTsafe.Load(), nil
 		}
 	}
 }

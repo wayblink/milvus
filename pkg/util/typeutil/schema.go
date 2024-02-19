@@ -23,6 +23,7 @@ import (
 	"unsafe"
 
 	"github.com/cockroachdb/errors"
+	"github.com/golang/protobuf/proto"
 	"github.com/samber/lo"
 	"go.uber.org/zap"
 
@@ -33,7 +34,15 @@ import (
 
 const DynamicFieldMaxLength = 512
 
-func GetAvgLengthOfVarLengthField(fieldSchema *schemapb.FieldSchema) (int, error) {
+type getVariableFieldLengthPolicy int
+
+const (
+	max    getVariableFieldLengthPolicy = 0
+	avg    getVariableFieldLengthPolicy = 1
+	custom getVariableFieldLengthPolicy = 2
+)
+
+func getVarFieldLength(fieldSchema *schemapb.FieldSchema, policy getVariableFieldLengthPolicy) (int, error) {
 	maxLength := 0
 	var err error
 
@@ -52,22 +61,43 @@ func GetAvgLengthOfVarLengthField(fieldSchema *schemapb.FieldSchema) (int, error
 		if err != nil {
 			return 0, err
 		}
+		switch policy {
+		case max:
+			return maxLength, nil
+		case avg:
+			return maxLength / 2, nil
+		case custom:
+			// TODO this is a hack and may not accurate, we should rely on estimate size per record
+			// However we should report size and datacoord calculate based on size
+			// https://github.com/milvus-io/milvus/issues/17687
+			if maxLength > 256 {
+				return 256, nil
+			}
+			return maxLength, nil
+		default:
+			return 0, fmt.Errorf("unrecognized getVariableFieldLengthPolicy %v", policy)
+		}
 	case schemapb.DataType_Array, schemapb.DataType_JSON:
 		return DynamicFieldMaxLength, nil
 	default:
 		return 0, fmt.Errorf("field %s is not a variable-length type", fieldSchema.DataType.String())
 	}
-
-	// TODO this is a hack and may not accurate, we should rely on estimate size per record
-	// However we should report size and datacoord calculate based on size
-	if maxLength > 256 {
-		return 256, nil
-	}
-	return maxLength, nil
 }
 
 // EstimateSizePerRecord returns the estimate size of a record in a collection
 func EstimateSizePerRecord(schema *schemapb.CollectionSchema) (int, error) {
+	return estimateSizeBy(schema, custom)
+}
+
+func EstimateMaxSizePerRecord(schema *schemapb.CollectionSchema) (int, error) {
+	return estimateSizeBy(schema, max)
+}
+
+func EstimateAvgSizePerRecord(schema *schemapb.CollectionSchema) (int, error) {
+	return estimateSizeBy(schema, avg)
+}
+
+func estimateSizeBy(schema *schemapb.CollectionSchema, policy getVariableFieldLengthPolicy) (int, error) {
 	res := 0
 	for _, fs := range schema.Fields {
 		switch fs.DataType {
@@ -80,7 +110,7 @@ func EstimateSizePerRecord(schema *schemapb.CollectionSchema) (int, error) {
 		case schemapb.DataType_Int64, schemapb.DataType_Double:
 			res += 8
 		case schemapb.DataType_VarChar, schemapb.DataType_Array, schemapb.DataType_JSON:
-			maxLengthPerRow, err := GetAvgLengthOfVarLengthField(fs)
+			maxLengthPerRow, err := getVarFieldLength(fs, policy)
 			if err != nil {
 				return 0, err
 			}
@@ -108,6 +138,17 @@ func EstimateSizePerRecord(schema *schemapb.CollectionSchema) (int, error) {
 				}
 			}
 		case schemapb.DataType_Float16Vector:
+			for _, kv := range fs.TypeParams {
+				if kv.Key == common.DimKey {
+					v, err := strconv.Atoi(kv.Value)
+					if err != nil {
+						return -1, err
+					}
+					res += v * 2
+					break
+				}
+			}
+		case schemapb.DataType_BFloat16Vector:
 			for _, kv := range fs.TypeParams {
 				if kv.Key == common.DimKey {
 					v, err := strconv.Atoi(kv.Value)
@@ -318,7 +359,7 @@ func (helper *SchemaHelper) GetVectorDimFromID(fieldID int64) (int, error) {
 // IsVectorType returns true if input is a vector type, otherwise false
 func IsVectorType(dataType schemapb.DataType) bool {
 	switch dataType {
-	case schemapb.DataType_FloatVector, schemapb.DataType_BinaryVector, schemapb.DataType_Float16Vector:
+	case schemapb.DataType_FloatVector, schemapb.DataType_BinaryVector, schemapb.DataType_Float16Vector, schemapb.DataType_BFloat16Vector:
 		return true
 	default:
 		return false
@@ -381,6 +422,106 @@ func IsStringType(dataType schemapb.DataType) bool {
 
 func IsVariableDataType(dataType schemapb.DataType) bool {
 	return IsStringType(dataType) || IsArrayType(dataType) || IsJSONType(dataType)
+}
+
+// PrepareResultFieldData construct this slice fo FieldData for final result reduce
+// this shall preallocate the space for field data internal slice prevent slice growing cost.
+func PrepareResultFieldData(sample []*schemapb.FieldData, topK int64) []*schemapb.FieldData {
+	result := make([]*schemapb.FieldData, 0, len(sample))
+	for _, fieldData := range sample {
+		fd := &schemapb.FieldData{
+			Type:      fieldData.Type,
+			FieldName: fieldData.FieldName,
+			FieldId:   fieldData.FieldId,
+			IsDynamic: fieldData.IsDynamic,
+		}
+		switch fieldType := fieldData.Field.(type) {
+		case *schemapb.FieldData_Scalars:
+			scalarField := fieldData.GetScalars()
+			scalar := &schemapb.FieldData_Scalars{
+				Scalars: &schemapb.ScalarField{},
+			}
+			switch fieldType.Scalars.Data.(type) {
+			case *schemapb.ScalarField_BoolData:
+				scalar.Scalars.Data = &schemapb.ScalarField_BoolData{
+					BoolData: &schemapb.BoolArray{
+						Data: make([]bool, 0, topK),
+					},
+				}
+			case *schemapb.ScalarField_IntData:
+				scalar.Scalars.Data = &schemapb.ScalarField_IntData{
+					IntData: &schemapb.IntArray{
+						Data: make([]int32, 0, topK),
+					},
+				}
+			case *schemapb.ScalarField_LongData:
+				scalar.Scalars.Data = &schemapb.ScalarField_LongData{
+					LongData: &schemapb.LongArray{
+						Data: make([]int64, 0, topK),
+					},
+				}
+			case *schemapb.ScalarField_FloatData:
+				scalar.Scalars.Data = &schemapb.ScalarField_FloatData{
+					FloatData: &schemapb.FloatArray{
+						Data: make([]float32, 0, topK),
+					},
+				}
+			case *schemapb.ScalarField_DoubleData:
+				scalar.Scalars.Data = &schemapb.ScalarField_DoubleData{
+					DoubleData: &schemapb.DoubleArray{
+						Data: make([]float64, 0, topK),
+					},
+				}
+			case *schemapb.ScalarField_StringData:
+				scalar.Scalars.Data = &schemapb.ScalarField_StringData{
+					StringData: &schemapb.StringArray{
+						Data: make([]string, 0, topK),
+					},
+				}
+			case *schemapb.ScalarField_JsonData:
+				scalar.Scalars.Data = &schemapb.ScalarField_JsonData{
+					JsonData: &schemapb.JSONArray{
+						Data: make([][]byte, 0, topK),
+					},
+				}
+			case *schemapb.ScalarField_ArrayData:
+				scalar.Scalars.Data = &schemapb.ScalarField_ArrayData{
+					ArrayData: &schemapb.ArrayArray{
+						Data:        make([]*schemapb.ScalarField, 0, topK),
+						ElementType: scalarField.GetArrayData().GetElementType(),
+					},
+				}
+			}
+			fd.Field = scalar
+		case *schemapb.FieldData_Vectors:
+			vectorField := fieldData.GetVectors()
+			dim := vectorField.GetDim()
+			vectors := &schemapb.FieldData_Vectors{
+				Vectors: &schemapb.VectorField{
+					Dim: dim,
+				},
+			}
+			switch fieldType.Vectors.Data.(type) {
+			case *schemapb.VectorField_FloatVector:
+				vectors.Vectors.Data = &schemapb.VectorField_FloatVector{
+					FloatVector: &schemapb.FloatArray{
+						Data: make([]float32, 0, dim*topK),
+					},
+				}
+			case *schemapb.VectorField_Float16Vector:
+				vectors.Vectors.Data = &schemapb.VectorField_Float16Vector{
+					Float16Vector: make([]byte, 0, topK*dim*2),
+				}
+			case *schemapb.VectorField_BinaryVector:
+				vectors.Vectors.Data = &schemapb.VectorField_BinaryVector{
+					BinaryVector: make([]byte, 0, topK*dim/8),
+				}
+			}
+			fd.Field = vectors
+		}
+		result = append(result, fd)
+	}
+	return result
 }
 
 // AppendFieldData appends fields data of specified index from src to dst
@@ -557,6 +698,19 @@ func AppendFieldData(dst []*schemapb.FieldData, src []*schemapb.FieldData, idx i
 				}
 				/* #nosec G103 */
 				appendSize += int64(unsafe.Sizeof(srcVector.Float16Vector[idx*(dim*2) : (idx+1)*(dim*2)]))
+			case *schemapb.VectorField_Bfloat16Vector:
+				if dstVector.GetBfloat16Vector() == nil {
+					srcToCopy := srcVector.Bfloat16Vector[idx*(dim*2) : (idx+1)*(dim*2)]
+					dstVector.Data = &schemapb.VectorField_Bfloat16Vector{
+						Bfloat16Vector: make([]byte, len(srcToCopy)),
+					}
+					copy(dstVector.Data.(*schemapb.VectorField_Bfloat16Vector).Bfloat16Vector, srcToCopy)
+				} else {
+					dstBfloat16Vector := dstVector.Data.(*schemapb.VectorField_Bfloat16Vector)
+					dstBfloat16Vector.Bfloat16Vector = append(dstBfloat16Vector.Bfloat16Vector, srcVector.Bfloat16Vector[idx*(dim*2):(idx+1)*(dim*2)]...)
+				}
+				/* #nosec G103 */
+				appendSize += int64(unsafe.Sizeof(srcVector.Bfloat16Vector[idx*(dim*2) : (idx+1)*(dim*2)]))
 			default:
 				log.Error("Not supported field type", zap.String("field type", fieldData.Type.String()))
 			}
@@ -610,6 +764,9 @@ func DeleteFieldData(dst []*schemapb.FieldData) {
 			case *schemapb.VectorField_Float16Vector:
 				dstFloat16Vector := dstVector.Data.(*schemapb.VectorField_Float16Vector)
 				dstFloat16Vector.Float16Vector = dstFloat16Vector.Float16Vector[:len(dstFloat16Vector.Float16Vector)-int(dim*2)]
+			case *schemapb.VectorField_Bfloat16Vector:
+				dstBfloat16Vector := dstVector.Data.(*schemapb.VectorField_Bfloat16Vector)
+				dstBfloat16Vector.Bfloat16Vector = dstBfloat16Vector.Bfloat16Vector[:len(dstBfloat16Vector.Bfloat16Vector)-int(dim*2)]
 			default:
 				log.Error("wrong field type added", zap.String("field type", fieldData.Type.String()))
 			}
@@ -721,6 +878,16 @@ func MergeFieldData(dst []*schemapb.FieldData, src []*schemapb.FieldData) error 
 				} else {
 					dstScalar.GetJsonData().Data = append(dstScalar.GetJsonData().Data, srcScalar.JsonData.Data...)
 				}
+			case *schemapb.ScalarField_BytesData:
+				if dstScalar.GetBytesData() == nil {
+					dstScalar.Data = &schemapb.ScalarField_BytesData{
+						BytesData: &schemapb.BytesArray{
+							Data: srcScalar.BytesData.Data,
+						},
+					}
+				} else {
+					dstScalar.GetBytesData().Data = append(dstScalar.GetBytesData().Data, srcScalar.BytesData.Data...)
+				}
 			default:
 				log.Error("Not supported data type", zap.String("data type", srcFieldData.Type.String()))
 				return errors.New("unsupported data type: " + srcFieldData.Type.String())
@@ -816,6 +983,16 @@ func GetPartitionKeyFieldSchema(schema *schemapb.CollectionSchema) (*schemapb.Fi
 	return nil, errors.New("partition key field is not found")
 }
 
+// GetDynamicField returns the dynamic field if it exists.
+func GetDynamicField(schema *schemapb.CollectionSchema) *schemapb.FieldSchema {
+	for _, fieldSchema := range schema.GetFields() {
+		if fieldSchema.GetIsDynamic() {
+			return fieldSchema
+		}
+	}
+	return nil
+}
+
 // HasPartitionKey check if a collection schema has PartitionKey field
 func HasPartitionKey(schema *schemapb.CollectionSchema) bool {
 	for _, fieldSchema := range schema.Fields {
@@ -865,6 +1042,23 @@ func IsPrimaryFieldDataExist(datas []*schemapb.FieldData, primaryFieldSchema *sc
 	}
 
 	return primaryFieldData != nil
+}
+
+func AppendSystemFields(schema *schemapb.CollectionSchema) *schemapb.CollectionSchema {
+	newSchema := proto.Clone(schema).(*schemapb.CollectionSchema)
+	newSchema.Fields = append(newSchema.Fields, &schemapb.FieldSchema{
+		FieldID:      int64(common.RowIDField),
+		Name:         common.RowIDFieldName,
+		IsPrimaryKey: false,
+		DataType:     schemapb.DataType_Int64,
+	})
+	newSchema.Fields = append(newSchema.Fields, &schemapb.FieldSchema{
+		FieldID:      int64(common.TimeStampField),
+		Name:         common.TimeStampFieldName,
+		IsPrimaryKey: false,
+		DataType:     schemapb.DataType_Int64,
+	})
+	return newSchema
 }
 
 func AppendIDs(dst *schemapb.IDs, src *schemapb.IDs, idx int) {
@@ -968,6 +1162,10 @@ func GetData(field *schemapb.FieldData, idx int) interface{} {
 		dim := int(field.GetVectors().GetDim())
 		dataBytes := dim * 2
 		return field.GetVectors().GetFloat16Vector()[idx*dataBytes : (idx+1)*dataBytes]
+	case schemapb.DataType_BFloat16Vector:
+		dim := int(field.GetVectors().GetDim())
+		dataBytes := dim * 2
+		return field.GetVectors().GetBfloat16Vector()[idx*dataBytes : (idx+1)*dataBytes]
 	}
 	return nil
 }
@@ -1068,4 +1266,62 @@ func SelectMinPK[T ResultWithID](results []T, cursors []int64) (int, bool) {
 	}
 
 	return sel, drainResult
+}
+
+func AppendGroupByValue(dstResData *schemapb.SearchResultData,
+	groupByVal interface{}, srcDataType schemapb.DataType,
+) error {
+	if dstResData.GroupByFieldValue == nil {
+		dstResData.GroupByFieldValue = &schemapb.FieldData{
+			Type: srcDataType,
+			Field: &schemapb.FieldData_Scalars{
+				Scalars: &schemapb.ScalarField{},
+			},
+		}
+	}
+	dstScalarField := dstResData.GroupByFieldValue.GetScalars()
+	switch srcDataType {
+	case schemapb.DataType_Bool:
+		if dstScalarField.GetBoolData() == nil {
+			dstScalarField.Data = &schemapb.ScalarField_BoolData{
+				BoolData: &schemapb.BoolArray{
+					Data: []bool{},
+				},
+			}
+		}
+		dstScalarField.GetBoolData().Data = append(dstScalarField.GetBoolData().Data, groupByVal.(bool))
+	case schemapb.DataType_Int8, schemapb.DataType_Int16, schemapb.DataType_Int32:
+		if dstScalarField.GetIntData() == nil {
+			dstScalarField.Data = &schemapb.ScalarField_IntData{
+				IntData: &schemapb.IntArray{
+					Data: []int32{},
+				},
+			}
+		}
+		dstScalarField.GetIntData().Data = append(dstScalarField.GetIntData().Data, groupByVal.(int32))
+	case schemapb.DataType_Int64:
+		if dstScalarField.GetLongData() == nil {
+			dstScalarField.Data = &schemapb.ScalarField_LongData{
+				LongData: &schemapb.LongArray{
+					Data: []int64{},
+				},
+			}
+		}
+		dstScalarField.GetLongData().Data = append(dstScalarField.GetLongData().Data, groupByVal.(int64))
+	case schemapb.DataType_VarChar:
+		if dstScalarField.GetStringData() == nil {
+			dstScalarField.Data = &schemapb.ScalarField_StringData{
+				StringData: &schemapb.StringArray{
+					Data: []string{},
+				},
+			}
+		}
+		dstScalarField.GetStringData().Data = append(dstScalarField.GetStringData().Data, groupByVal.(string))
+	default:
+		log.Error("Not supported field type from group_by value field", zap.String("field type",
+			srcDataType.String()))
+		return fmt.Errorf("not supported field type from group_by value field: %s",
+			srcDataType.String())
+	}
+	return nil
 }

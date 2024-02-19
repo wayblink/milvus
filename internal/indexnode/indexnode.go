@@ -179,6 +179,13 @@ func (i *IndexNode) initSegcore() {
 	C.InitCpuNum(cCPUNum)
 
 	cKnowhereThreadPoolSize := C.uint32_t(hardware.GetCPUNum() * paramtable.DefaultKnowhereThreadPoolNumRatioInBuild)
+	if paramtable.GetRole() == typeutil.StandaloneRole {
+		threadPoolSize := int(float64(hardware.GetCPUNum()) * Params.CommonCfg.BuildIndexThreadPoolRatio.GetAsFloat())
+		if threadPoolSize < 1 {
+			threadPoolSize = 1
+		}
+		cKnowhereThreadPoolSize = C.uint32_t(threadPoolSize)
+	}
 	C.SegcoreSetKnowhereBuildThreadPoolNum(cKnowhereThreadPoolSize)
 
 	localDataRootPath := filepath.Join(Params.LocalStorageCfg.Path.GetValue(), typeutil.IndexNodeRole)
@@ -230,7 +237,7 @@ func (i *IndexNode) Start() error {
 		startErr = i.sched.Start()
 
 		i.UpdateStateCode(commonpb.StateCode_Healthy)
-		log.Info("IndexNode", zap.Any("State", i.lifetime.GetState().String()))
+		log.Info("IndexNode", zap.String("State", i.lifetime.GetState().String()))
 	})
 
 	log.Info("IndexNode start finished", zap.Error(startErr))

@@ -205,7 +205,6 @@ func (node *QueryNode) WatchDmChannels(ctx context.Context, req *querypb.WatchDm
 
 	log.Info("received watch channel request",
 		zap.Int64("version", req.GetVersion()),
-		zap.String("metricType", req.GetLoadMeta().GetMetricType()),
 	)
 
 	// check node healthy
@@ -216,12 +215,6 @@ func (node *QueryNode) WatchDmChannels(ctx context.Context, req *querypb.WatchDm
 
 	// check target matches
 	if err := merr.CheckTargetID(req.GetBase()); err != nil {
-		return merr.Status(err), nil
-	}
-
-	// check metric type
-	if req.GetLoadMeta().GetMetricType() == "" {
-		err := fmt.Errorf("empty metric type, collection = %d", req.GetCollectionID())
 		return merr.Status(err), nil
 	}
 
@@ -253,8 +246,7 @@ func (node *QueryNode) WatchDmChannels(ctx context.Context, req *querypb.WatchDm
 
 	node.manager.Collection.PutOrRef(req.GetCollectionID(), req.GetSchema(),
 		node.composeIndexMeta(req.GetIndexInfoList(), req.Schema), req.GetLoadMeta())
-	collection := node.manager.Collection.Get(req.GetCollectionID())
-	collection.SetMetricType(req.GetLoadMeta().GetMetricType())
+
 	delegator, err := delegator.NewShardDelegator(
 		ctx,
 		req.GetCollectionID(),
@@ -426,12 +418,12 @@ func (node *QueryNode) LoadSegments(ctx context.Context, req *querypb.LoadSegmen
 	log.Info("received load segments request",
 		zap.Int64("version", req.GetVersion()),
 		zap.Bool("needTransfer", req.GetNeedTransfer()),
-	)
+		zap.String("loadScope", req.GetLoadScope().String()))
 	// check node healthy
 	if err := node.lifetime.Add(merr.IsHealthy); err != nil {
 		return merr.Status(err), nil
 	}
-	node.lifetime.Done()
+	defer node.lifetime.Done()
 
 	// check target matches
 	if err := merr.CheckTargetID(req.GetBase()); err != nil {
@@ -664,8 +656,13 @@ func (node *QueryNode) SearchSegments(ctx context.Context, req *querypb.SearchRe
 		zap.String("channel", channel),
 		zap.String("scope", req.GetScope().String()),
 	)
-
-	resp := &internalpb.SearchResults{}
+	channelsMvcc := make(map[string]uint64)
+	for _, ch := range req.GetDmlChannels() {
+		channelsMvcc[ch] = req.GetReq().GetMvccTimestamp()
+	}
+	resp := &internalpb.SearchResults{
+		ChannelsMvcc: channelsMvcc,
+	}
 	if err := node.lifetime.Add(merr.IsHealthy); err != nil {
 		resp.Status = merr.Status(err)
 		return resp, nil
@@ -674,7 +671,7 @@ func (node *QueryNode) SearchSegments(ctx context.Context, req *querypb.SearchRe
 
 	metrics.QueryNodeSQCount.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), metrics.SearchLabel, metrics.TotalLabel, metrics.FromLeader).Inc()
 	defer func() {
-		if resp.GetStatus().GetErrorCode() != commonpb.ErrorCode_Success {
+		if !merr.Ok(resp.GetStatus()) {
 			metrics.QueryNodeSQCount.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), metrics.SearchLabel, metrics.FailLabel, metrics.FromLeader).Inc()
 		}
 	}()
@@ -741,7 +738,8 @@ func (node *QueryNode) Search(ctx context.Context, req *querypb.SearchRequest) (
 
 	log.Debug("Received SearchRequest",
 		zap.Int64s("segmentIDs", req.GetSegmentIDs()),
-		zap.Uint64("guaranteeTimestamp", req.GetReq().GetGuaranteeTimestamp()))
+		zap.Uint64("guaranteeTimestamp", req.GetReq().GetGuaranteeTimestamp()),
+		zap.Uint64("mvccTimestamp", req.GetReq().GetMvccTimestamp()))
 
 	tr := timerecord.NewTimeRecorderWithTrace(ctx, "SearchRequest")
 
@@ -769,22 +767,9 @@ func (node *QueryNode) Search(ctx context.Context, req *querypb.SearchRequest) (
 		return resp, nil
 	}
 
-	// Check if the metric type specified in search params matches the metric type in the index info.
-	if !req.GetFromShardLeader() && req.GetReq().GetMetricType() != "" {
-		if req.GetReq().GetMetricType() != collection.GetMetricType() {
-			resp.Status = merr.Status(merr.WrapErrParameterInvalid(collection.GetMetricType(), req.GetReq().GetMetricType(),
-				fmt.Sprintf("collection:%d, metric type not match", collection.ID())))
-			return resp, nil
-		}
-	}
-
-	// Define the metric type when it has not been explicitly assigned by the user.
-	if !req.GetFromShardLeader() && req.GetReq().GetMetricType() == "" {
-		req.Req.MetricType = collection.GetMetricType()
-	}
-
 	toReduceResults := make([]*internalpb.SearchResults, len(req.GetDmlChannels()))
 	runningGp, runningCtx := errgroup.WithContext(ctx)
+
 	for i, ch := range req.GetDmlChannels() {
 		ch := ch
 		req := &querypb.SearchRequest{
@@ -834,6 +819,114 @@ func (node *QueryNode) Search(ctx context.Context, req *querypb.SearchRequest) (
 		result.GetCostAggregation().ResponseTime = tr.ElapseSpan().Milliseconds()
 	}
 	return result, nil
+}
+
+// HybridSearch performs replica search tasks.
+func (node *QueryNode) HybridSearch(ctx context.Context, req *querypb.HybridSearchRequest) (*querypb.HybridSearchResult, error) {
+	log := log.Ctx(ctx).With(
+		zap.Int64("collectionID", req.GetReq().GetCollectionID()),
+		zap.Strings("channels", req.GetDmlChannels()))
+
+	log.Debug("Received HybridSearchRequest",
+		zap.Uint64("guaranteeTimestamp", req.GetReq().GetGuaranteeTimestamp()),
+		zap.Uint64("mvccTimestamp", req.GetReq().GetMvccTimestamp()))
+
+	tr := timerecord.NewTimeRecorderWithTrace(ctx, "HybridSearchRequest")
+
+	if err := node.lifetime.Add(merr.IsHealthy); err != nil {
+		return &querypb.HybridSearchResult{
+			Base: &commonpb.MsgBase{
+				SourceID: paramtable.GetNodeID(),
+			},
+			Status: merr.Status(err),
+		}, nil
+	}
+	defer node.lifetime.Done()
+
+	err := merr.CheckTargetID(req.GetReq().GetBase())
+	if err != nil {
+		log.Warn("target ID check failed", zap.Error(err))
+		return &querypb.HybridSearchResult{
+			Base: &commonpb.MsgBase{
+				SourceID: paramtable.GetNodeID(),
+			},
+			Status: merr.Status(err),
+		}, nil
+	}
+
+	resp := &querypb.HybridSearchResult{
+		Base: &commonpb.MsgBase{
+			SourceID: paramtable.GetNodeID(),
+		},
+		Status: merr.Success(),
+	}
+	collection := node.manager.Collection.Get(req.GetReq().GetCollectionID())
+	if collection == nil {
+		resp.Status = merr.Status(merr.WrapErrCollectionNotFound(req.GetReq().GetCollectionID()))
+		return resp, nil
+	}
+
+	MultipleResults := make([]*querypb.HybridSearchResult, len(req.GetDmlChannels()))
+	runningGp, runningCtx := errgroup.WithContext(ctx)
+
+	for i, ch := range req.GetDmlChannels() {
+		ch := ch
+		req := &querypb.HybridSearchRequest{
+			Req:             req.Req,
+			DmlChannels:     []string{ch},
+			TotalChannelNum: 1,
+		}
+
+		i := i
+		runningGp.Go(func() error {
+			ret, err := node.hybridSearchChannel(runningCtx, req, ch)
+			if err != nil {
+				return err
+			}
+			if err := merr.Error(ret.GetStatus()); err != nil {
+				return err
+			}
+			MultipleResults[i] = ret
+			return nil
+		})
+	}
+	if err := runningGp.Wait(); err != nil {
+		resp.Status = merr.Status(err)
+		return resp, nil
+	}
+
+	tr.RecordSpan()
+	channelsMvcc := make(map[string]uint64)
+	for i, searchReq := range req.GetReq().GetReqs() {
+		toReduceResults := make([]*internalpb.SearchResults, len(MultipleResults))
+		for index, hs := range MultipleResults {
+			toReduceResults[index] = hs.Results[i]
+		}
+		result, err := segments.ReduceSearchResults(ctx, toReduceResults, searchReq.GetNq(), searchReq.GetTopk(), searchReq.GetMetricType())
+		if err != nil {
+			log.Warn("failed to reduce search results", zap.Error(err))
+			resp.Status = merr.Status(err)
+			return resp, nil
+		}
+		for ch, ts := range result.GetChannelsMvcc() {
+			channelsMvcc[ch] = ts
+		}
+		resp.Results = append(resp.Results, result)
+	}
+	resp.ChannelsMvcc = channelsMvcc
+
+	reduceLatency := tr.RecordSpan()
+	metrics.QueryNodeReduceLatency.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), metrics.HybridSearchLabel, metrics.ReduceShards).
+		Observe(float64(reduceLatency.Milliseconds()))
+
+	collector.Rate.Add(metricsinfo.SearchThroughput, float64(proto.Size(req)))
+	metrics.QueryNodeExecuteCounter.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), metrics.HybridSearchLabel).
+		Add(float64(proto.Size(req)))
+
+	if resp.GetCostAggregation() != nil {
+		resp.GetCostAggregation().ResponseTime = tr.ElapseSpan().Milliseconds()
+	}
+	return resp, nil
 }
 
 // only used for delegator query segments from worker
@@ -1422,10 +1515,7 @@ func (node *QueryNode) Delete(ctx context.Context, req *querypb.DeleteRequest) (
 	}
 
 	log.Info("QueryNode received worker delete request")
-	log.Debug("Worker delete detail",
-		zap.String("pks", req.GetPrimaryKeys().String()),
-		zap.Uint64s("tss", req.GetTimestamps()),
-	)
+	log.Debug("Worker delete detail", zap.Stringer("info", &deleteRequestStringer{DeleteRequest: req}))
 
 	filters := []segments.SegmentFilter{
 		segments.WithID(req.GetSegmentId()),
@@ -1456,4 +1546,22 @@ func (node *QueryNode) Delete(ctx context.Context, req *querypb.DeleteRequest) (
 	}
 
 	return merr.Success(), nil
+}
+
+type deleteRequestStringer struct {
+	*querypb.DeleteRequest
+}
+
+func (req *deleteRequestStringer) String() string {
+	var pkInfo string
+	switch {
+	case req.GetPrimaryKeys().GetIntId() != nil:
+		ids := req.GetPrimaryKeys().GetIntId().GetData()
+		pkInfo = fmt.Sprintf("Pks range[%d-%d], len: %d", ids[0], ids[len(ids)-1], len(ids))
+	case req.GetPrimaryKeys().GetStrId() != nil:
+		ids := req.GetPrimaryKeys().GetStrId().GetData()
+		pkInfo = fmt.Sprintf("Pks range[%s-%s], len: %d", ids[0], ids[len(ids)-1], len(ids))
+	}
+	tss := req.GetTimestamps()
+	return fmt.Sprintf("%s, timestamp range: [%d-%d]", pkInfo, tss[0], tss[len(tss)-1])
 }

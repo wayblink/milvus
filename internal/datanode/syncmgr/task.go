@@ -21,7 +21,9 @@ import (
 	"fmt"
 	"path"
 
+	"github.com/cockroachdb/errors"
 	"github.com/samber/lo"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
@@ -42,6 +44,8 @@ import (
 	"github.com/milvus-io/milvus/pkg/util/typeutil"
 )
 
+var errTargetSegmentNotMatch = errors.New("target segment not match")
+
 type SyncTask struct {
 	chunkManager storage.ChunkManager
 	allocator    allocator.Interface
@@ -59,6 +63,9 @@ type SyncTask struct {
 	// not the total num of rows of segemnt
 	batchSize int64
 	level     datapb.SegmentLevel
+
+	// targetSegmentID stores the "current" segmentID task shall be handling
+	targetSegmentID atomic.Int64
 
 	tsFrom typeutil.Timestamp
 	tsTo   typeutil.Timestamp
@@ -80,6 +87,9 @@ type SyncTask struct {
 	deltaBlob       *storage.Blob
 	deltaRowCount   int64
 
+	// prefetched log ids
+	ids []int64
+
 	segmentData map[string][]byte
 
 	writeRetryOpts []retry.Option
@@ -95,28 +105,31 @@ func (t *SyncTask) getLogger() *log.MLogger {
 		zap.Int64("partitionID", t.partitionID),
 		zap.Int64("segmentID", t.segmentID),
 		zap.String("channel", t.channelName),
+		zap.String("level", t.level.String()),
 	)
 }
 
-func (t *SyncTask) handleError(err error, metricSegLevel string) {
+func (t *SyncTask) handleError(err error) {
+	if errors.Is(err, errTargetSegmentNotMatch) {
+		return
+	}
 	if t.failureCallback != nil {
 		t.failureCallback(err)
 	}
 
-	metrics.DataNodeFlushBufferCount.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), metrics.FailLabel, metricSegLevel).Inc()
+	metrics.DataNodeFlushBufferCount.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), metrics.FailLabel, t.level.String()).Inc()
 	if !t.isFlush {
-		metrics.DataNodeAutoFlushBufferCount.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), metrics.FailLabel, metricSegLevel).Inc()
+		metrics.DataNodeAutoFlushBufferCount.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), metrics.FailLabel, t.level.String()).Inc()
 	}
 }
 
 func (t *SyncTask) Run() (err error) {
 	t.tr = timerecord.NewTimeRecorder("syncTask")
-	metricSegLevel := t.level.String()
 
 	log := t.getLogger()
 	defer func() {
 		if err != nil {
-			t.handleError(err, metricSegLevel)
+			t.handleError(err)
 		}
 	}()
 
@@ -125,7 +138,7 @@ func (t *SyncTask) Run() (err error) {
 	if !has {
 		log.Warn("failed to sync data, segment not found in metacache")
 		err := merr.WrapErrSegmentNotFound(t.segmentID)
-		t.handleError(err, metricSegLevel)
+		t.handleError(err)
 		return err
 	}
 
@@ -135,38 +148,34 @@ func (t *SyncTask) Run() (err error) {
 	}
 
 	if t.segment.CompactTo() > 0 {
+		// current task does not hold the key lock for "true" target segment id
+		if t.segment.CompactTo() != t.targetSegmentID.Load() {
+			log.Info("sync task does not hold target segment id lock, return error and retry",
+				zap.Int64("compactTo", t.segment.CompactTo()),
+				zap.Int64("currentTarget", t.targetSegmentID.Load()),
+			)
+			return errors.Wrap(errTargetSegmentNotMatch, "task does not hold target segment id lock")
+		}
 		log.Info("syncing segment compacted, update segment id", zap.Int64("compactTo", t.segment.CompactTo()))
 		// update sync task segment id
 		// it's ok to use compactTo segmentID here, since there shall be no insert for compacted segment
 		t.segmentID = t.segment.CompactTo()
 	}
 
-	err = t.processInsertBlobs()
+	err = t.prefetchIDs()
 	if err != nil {
-		log.Warn("failed to process insert blobs", zap.Error(err))
+		log.Warn("failed allocate ids for sync task", zap.Error(err))
 		return err
 	}
 
-	err = t.processStatsBlob()
-	if err != nil {
-		log.Warn("failed to serialize insert data", zap.Error(err))
-		t.handleError(err, metricSegLevel)
-		log.Warn("failed to process stats blobs", zap.Error(err))
-		return err
-	}
-
-	err = t.processDeltaBlob()
-	if err != nil {
-		log.Warn("failed to serialize delete data", zap.Error(err))
-		t.handleError(err, metricSegLevel)
-		log.Warn("failed to process delta blobs", zap.Error(err))
-		return err
-	}
+	t.processInsertBlobs()
+	t.processStatsBlob()
+	t.processDeltaBlob()
 
 	err = t.writeLogs()
 	if err != nil {
 		log.Warn("failed to save serialized data into storage", zap.Error(err))
-		t.handleError(err, metricSegLevel)
+		t.handleError(err)
 		return err
 	}
 
@@ -178,15 +187,15 @@ func (t *SyncTask) Run() (err error) {
 		totalSize += float64(len(t.deltaBlob.Value))
 	}
 
-	metrics.DataNodeFlushedSize.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), metrics.AllLabel, metricSegLevel).Add(totalSize)
+	metrics.DataNodeFlushedSize.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), metrics.AllLabel, t.level.String()).Add(totalSize)
 
-	metrics.DataNodeSave2StorageLatency.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), metricSegLevel).Observe(float64(t.tr.RecordSpan().Milliseconds()))
+	metrics.DataNodeSave2StorageLatency.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), t.level.String()).Observe(float64(t.tr.RecordSpan().Milliseconds()))
 
 	if t.metaWriter != nil {
 		err = t.writeMeta()
 		if err != nil {
 			log.Warn("failed to save serialized data into storage", zap.Error(err))
-			t.handleError(err, metricSegLevel)
+			t.handleError(err)
 			return err
 		}
 	}
@@ -201,27 +210,44 @@ func (t *SyncTask) Run() (err error) {
 
 	t.metacache.UpdateSegments(metacache.MergeSegmentAction(actions...), metacache.WithSegmentIDs(t.segment.SegmentID()))
 
-	log.Info("task done")
+	log.Info("task done", zap.Float64("flushedSize", totalSize))
 
 	if !t.isFlush {
-		metrics.DataNodeAutoFlushBufferCount.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), metrics.SuccessLabel, metricSegLevel).Inc()
+		metrics.DataNodeAutoFlushBufferCount.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), metrics.SuccessLabel, t.level.String()).Inc()
 	}
-	metrics.DataNodeFlushBufferCount.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), metrics.SuccessLabel, metricSegLevel).Inc()
+	metrics.DataNodeFlushBufferCount.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), metrics.SuccessLabel, t.level.String()).Inc()
 	return nil
 }
 
-func (t *SyncTask) processInsertBlobs() error {
-	if len(t.binlogBlobs) == 0 {
-		return nil
+// prefetchIDs pre-allcates ids depending on the number of blobs current task contains.
+func (t *SyncTask) prefetchIDs() error {
+	totalIDCount := len(t.binlogBlobs)
+	if t.batchStatsBlob != nil {
+		totalIDCount++
 	}
-
-	logidx, _, err := t.allocator.Alloc(uint32(len(t.binlogBlobs)))
+	if t.deltaBlob != nil {
+		totalIDCount++
+	}
+	start, _, err := t.allocator.Alloc(uint32(totalIDCount))
 	if err != nil {
 		return err
 	}
+	t.ids = lo.RangeFrom(start, totalIDCount)
+	return nil
+}
 
+func (t *SyncTask) nextID() int64 {
+	if len(t.ids) == 0 {
+		panic("pre-fetched ids exhausted")
+	}
+	r := t.ids[0]
+	t.ids = t.ids[1:]
+	return r
+}
+
+func (t *SyncTask) processInsertBlobs() {
 	for fieldID, blob := range t.binlogBlobs {
-		k := metautil.JoinIDPath(t.collectionID, t.partitionID, t.segmentID, fieldID, logidx)
+		k := metautil.JoinIDPath(t.collectionID, t.partitionID, t.segmentID, fieldID, t.nextID())
 		key := path.Join(t.chunkManager.RootPath(), common.SegmentInsertLogPath, k)
 		t.segmentData[key] = blob.GetValue()
 		t.appendBinlog(fieldID, &datapb.Binlog{
@@ -231,38 +257,25 @@ func (t *SyncTask) processInsertBlobs() error {
 			LogPath:       key,
 			LogSize:       t.binlogMemsize[fieldID],
 		})
-		logidx++
 	}
-	return nil
 }
 
-func (t *SyncTask) processStatsBlob() error {
+func (t *SyncTask) processStatsBlob() {
 	if t.batchStatsBlob != nil {
-		logidx, err := t.allocator.AllocOne()
-		if err != nil {
-			return err
-		}
-		t.convertBlob2StatsBinlog(t.batchStatsBlob, t.pkField.GetFieldID(), logidx, t.batchSize)
+		t.convertBlob2StatsBinlog(t.batchStatsBlob, t.pkField.GetFieldID(), t.nextID(), t.batchSize)
 	}
 	if t.mergedStatsBlob != nil {
 		totalRowNum := t.segment.NumOfRows()
 		t.convertBlob2StatsBinlog(t.mergedStatsBlob, t.pkField.GetFieldID(), int64(storage.CompoundStatsType), totalRowNum)
 	}
-	return nil
 }
 
-func (t *SyncTask) processDeltaBlob() error {
+func (t *SyncTask) processDeltaBlob() {
 	if t.deltaBlob != nil {
-		logID, err := t.allocator.AllocOne()
-		if err != nil {
-			log.Error("failed to alloc ID", zap.Error(err))
-			return err
-		}
-
 		value := t.deltaBlob.GetValue()
 		data := &datapb.Binlog{}
 
-		blobKey := metautil.JoinIDPath(t.collectionID, t.partitionID, t.segmentID, logID)
+		blobKey := metautil.JoinIDPath(t.collectionID, t.partitionID, t.segmentID, t.nextID())
 		blobPath := path.Join(t.chunkManager.RootPath(), common.SegmentDeltaLogPath, blobKey)
 
 		t.segmentData[blobPath] = value
@@ -273,7 +286,6 @@ func (t *SyncTask) processDeltaBlob() error {
 		data.EntriesNum = t.deltaRowCount
 		t.appendDeltalog(data)
 	}
-	return nil
 }
 
 func (t *SyncTask) convertBlob2StatsBinlog(blob *storage.Blob, fieldID, logID int64, rowNum int64) {
@@ -334,6 +346,20 @@ func (t *SyncTask) SegmentID() int64 {
 	return t.segmentID
 }
 
+func (t *SyncTask) CalcTargetSegment() (int64, error) {
+	segment, has := t.metacache.GetSegmentByID(t.segmentID)
+	if !has {
+		return -1, merr.WrapErrSegmentNotFound(t.segmentID)
+	}
+	target := segment.SegmentID()
+	if compactTo := segment.CompactTo(); compactTo > 0 {
+		target = compactTo
+	}
+	t.targetSegmentID.Store(target)
+
+	return target, nil
+}
+
 func (t *SyncTask) Checkpoint() *msgpb.MsgPosition {
 	return t.checkpoint
 }
@@ -344,4 +370,8 @@ func (t *SyncTask) StartPosition() *msgpb.MsgPosition {
 
 func (t *SyncTask) ChannelName() string {
 	return t.channelName
+}
+
+func (t *SyncTask) Binlogs() (map[int64]*datapb.FieldBinlog, map[int64]*datapb.FieldBinlog, *datapb.FieldBinlog) {
+	return t.insertBinlogs, t.statsBinlogs, t.deltaBinlog
 }

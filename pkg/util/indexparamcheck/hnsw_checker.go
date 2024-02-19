@@ -18,7 +18,7 @@ func (c hnswChecker) StaticCheck(params map[string]string) error {
 		return errOutOfRange(HNSWM, HNSWMinM, HNSWMaxM)
 	}
 	if !CheckStrByValues(params, Metric, HnswMetrics) {
-		return fmt.Errorf("metric type not found or not supported, supported: %v", HnswMetrics)
+		return fmt.Errorf("metric type %s not found or not supported, supported: %v", params[Metric], HnswMetrics)
 	}
 	return nil
 }
@@ -31,7 +31,7 @@ func (c hnswChecker) CheckTrain(params map[string]string) error {
 }
 
 func (c hnswChecker) CheckValidDataType(dType schemapb.DataType) error {
-	if dType != schemapb.DataType_FloatVector && dType != schemapb.DataType_BinaryVector && dType != schemapb.DataType_Float16Vector {
+	if dType != schemapb.DataType_FloatVector && dType != schemapb.DataType_BinaryVector && dType != schemapb.DataType_Float16Vector && dType != schemapb.DataType_BFloat16Vector {
 		return fmt.Errorf("only support float vector or binary vector")
 	}
 	return nil

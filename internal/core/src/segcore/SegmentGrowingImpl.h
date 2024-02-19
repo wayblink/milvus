@@ -59,9 +59,6 @@ class SegmentGrowingImpl : public SegmentGrowing {
            const IdArray* pks,
            const Timestamp* timestamps) override;
 
-    int64_t
-    GetMemoryUsageInBytes() const override;
-
     void
     LoadDeletedRecord(const LoadDeletedRecordInfo& info) override;
 
@@ -223,6 +220,9 @@ class SegmentGrowingImpl : public SegmentGrowing {
                   Timestamp timestamp,
                   const BitsetView& bitset,
                   SearchResult& output) const override;
+
+    DataType
+    GetFieldDataType(FieldId fieldId) const override;
 
  public:
     void

@@ -90,6 +90,9 @@ CreateIndex(CIndex* res_index, CBuildIndexInfo c_build_index_info) {
 
         auto& config = build_index_info->config;
         config["insert_files"] = build_index_info->insert_files;
+        if (build_index_info->opt_fields.size()) {
+            config["opt_fields"] = build_index_info->opt_fields;
+        }
 
         // get index type
         auto index_type = milvus::index::GetValueFromConfig<std::string>(
@@ -152,6 +155,7 @@ CreateIndexV2(CIndex* res_index, CBuildIndexInfo c_build_index_info) {
         auto field_type = build_index_info->field_type;
         milvus::index::CreateIndexInfo index_info;
         index_info.field_type = build_index_info->field_type;
+        index_info.dim = build_index_info->dim;
 
         auto& config = build_index_info->config;
         // get index type
@@ -217,6 +221,7 @@ CreateIndexV2(CIndex* res_index, CBuildIndexInfo c_build_index_info) {
             milvus::indexbuilder::IndexFactory::GetInstance().CreateIndex(
                 build_index_info->field_type,
                 build_index_info->field_name,
+                build_index_info->dim,
                 config,
                 fileManagerContext,
                 std::move(store_space.value()));
@@ -259,6 +264,58 @@ BuildFloatVecIndex(CIndex index,
             dynamic_cast<milvus::indexbuilder::VecIndexCreator*>(real_index);
         auto dim = cIndex->dim();
         auto row_nums = float_value_num / dim;
+        auto ds = knowhere::GenDataSet(row_nums, dim, vectors);
+        cIndex->Build(ds);
+        status.error_code = Success;
+        status.error_msg = "";
+    } catch (std::exception& e) {
+        status.error_code = UnexpectedError;
+        status.error_msg = strdup(e.what());
+    }
+    return status;
+}
+
+CStatus
+BuildFloat16VecIndex(CIndex index,
+                     int64_t float16_value_num,
+                     const uint8_t* vectors) {
+    auto status = CStatus();
+    try {
+        AssertInfo(
+            index,
+            "failed to build float16 vector index, passed index was null");
+        auto real_index =
+            reinterpret_cast<milvus::indexbuilder::IndexCreatorBase*>(index);
+        auto cIndex =
+            dynamic_cast<milvus::indexbuilder::VecIndexCreator*>(real_index);
+        auto dim = cIndex->dim();
+        auto row_nums = float16_value_num / dim / 2;
+        auto ds = knowhere::GenDataSet(row_nums, dim, vectors);
+        cIndex->Build(ds);
+        status.error_code = Success;
+        status.error_msg = "";
+    } catch (std::exception& e) {
+        status.error_code = UnexpectedError;
+        status.error_msg = strdup(e.what());
+    }
+    return status;
+}
+
+CStatus
+BuildBFloat16VecIndex(CIndex index,
+                      int64_t bfloat16_value_num,
+                      const uint8_t* vectors) {
+    auto status = CStatus();
+    try {
+        AssertInfo(
+            index,
+            "failed to build bfloat16 vector index, passed index was null");
+        auto real_index =
+            reinterpret_cast<milvus::indexbuilder::IndexCreatorBase*>(index);
+        auto cIndex =
+            dynamic_cast<milvus::indexbuilder::VecIndexCreator*>(real_index);
+        auto dim = cIndex->dim();
+        auto row_nums = bfloat16_value_num / dim / 2;
         auto ds = knowhere::GenDataSet(row_nums, dim, vectors);
         cIndex->Build(ds);
         status.error_code = Success;
@@ -658,4 +715,25 @@ SerializeIndexAndUpLoadV2(CIndex index, CBinarySet* c_binary_set) {
         status.error_msg = strdup(e.what());
     }
     return status;
+}
+
+CStatus
+AppendOptionalFieldDataPath(CBuildIndexInfo c_build_index_info,
+                            const int64_t field_id,
+                            const char* field_name,
+                            const int32_t field_type,
+                            const char* c_file_path) {
+    try {
+        auto build_index_info = (BuildIndexInfo*)c_build_index_info;
+        std::string field_name_str(field_name);
+        auto& opt_fields_map = build_index_info->opt_fields;
+        if (opt_fields_map.find(field_id) == opt_fields_map.end()) {
+            opt_fields_map[field_id] = {
+                field_name, static_cast<milvus::DataType>(field_type), {}};
+        }
+        std::get<2>(opt_fields_map[field_id]).emplace_back(c_file_path);
+        return CStatus{Success, ""};
+    } catch (std::exception& e) {
+        return milvus::FailureCStatus(&e);
+    }
 }

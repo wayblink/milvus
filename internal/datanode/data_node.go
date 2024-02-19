@@ -37,6 +37,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/internal/datanode/allocator"
 	"github.com/milvus-io/milvus/internal/datanode/broker"
+	"github.com/milvus-io/milvus/internal/datanode/importv2"
 	"github.com/milvus-io/milvus/internal/datanode/syncmgr"
 	"github.com/milvus-io/milvus/internal/datanode/writebuffer"
 	"github.com/milvus-io/milvus/internal/kv"
@@ -92,6 +93,7 @@ type DataNode struct {
 
 	syncMgr            syncmgr.SyncManager
 	writeBufferManager writebuffer.BufferManager
+	importManager      *importv2.Manager
 
 	clearSignal              chan string // vchannel name
 	segmentCache             *Cache
@@ -286,6 +288,8 @@ func (node *DataNode) Init() error {
 
 		node.writeBufferManager = writebuffer.NewManager(syncMgr)
 
+		node.importManager = importv2.NewManager(node.syncMgr, node.chunkManager)
+
 		node.channelCheckpointUpdater = newChannelCheckpointUpdater(node)
 
 		log.Info("init datanode done", zap.Int64("nodeID", paramtable.GetNodeID()), zap.String("Address", node.address))
@@ -372,10 +376,14 @@ func (node *DataNode) Start() error {
 			return
 		}
 
+		node.writeBufferManager.Start()
+
 		node.stopWaiter.Add(1)
 		go node.BackGroundGC(node.clearSignal)
 
 		go node.compactionExecutor.start(node.ctx)
+
+		go node.importManager.Start()
 
 		if Params.DataNodeCfg.DataNodeTimeTickByRPC.GetAsBool() {
 			node.timeTickSender = newTimeTickSender(node.broker, node.session.ServerID,
@@ -383,9 +391,8 @@ func (node *DataNode) Start() error {
 			node.timeTickSender.start()
 		}
 
-		node.stopWaiter.Add(1)
 		// Start node watch node
-		go node.StartWatchChannels(node.ctx)
+		node.startWatchChannelsAtBackground(node.ctx)
 
 		node.UpdateStateCode(commonpb.StateCode_Healthy)
 	})
@@ -427,6 +434,10 @@ func (node *DataNode) Stop() error {
 			return true
 		})
 
+		if node.writeBufferManager != nil {
+			node.writeBufferManager.Stop()
+		}
+
 		if node.allocator != nil {
 			log.Info("close id allocator", zap.String("role", typeutil.DataNodeRole))
 			node.allocator.Close()
@@ -446,6 +457,10 @@ func (node *DataNode) Stop() error {
 
 		if node.channelCheckpointUpdater != nil {
 			node.channelCheckpointUpdater.close()
+		}
+
+		if node.importManager != nil {
+			node.importManager.Close()
 		}
 
 		node.stopWaiter.Wait()

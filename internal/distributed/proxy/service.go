@@ -172,6 +172,25 @@ func (s *Server) startHTTPServer(errChan chan error) {
 	ginHandler := gin.New()
 	ginLogger := gin.LoggerWithConfig(gin.LoggerConfig{
 		SkipPaths: proxy.Params.ProxyCfg.GinLogSkipPaths.GetAsStrings(),
+		Formatter: func(param gin.LogFormatterParams) string {
+			if param.Latency > time.Minute {
+				param.Latency = param.Latency.Truncate(time.Second)
+			}
+			traceID, ok := param.Keys["traceID"]
+			if !ok {
+				traceID = ""
+			}
+			return fmt.Sprintf("[%v] [GIN] [%s] [traceID=%s] [code=%3d] [latency=%v] [client=%s] [method=%s] [error=%s]\n",
+				param.TimeStamp.Format("2006/01/02 15:04:05.000 Z07:00"),
+				param.Path,
+				traceID,
+				param.StatusCode,
+				param.Latency,
+				param.ClientIP,
+				param.Method,
+				param.ErrorMessage,
+			)
+		},
 	})
 	ginHandler.Use(ginLogger, gin.Recovery())
 	httpHeaderAllowInt64 := "false"
@@ -202,6 +221,8 @@ func (s *Server) startHTTPServer(errChan chan error) {
 	}
 	app := ginHandler.Group("/v1")
 	httpserver.NewHandlersV1(s.proxy).RegisterRoutesToV1(app)
+	appV2 := ginHandler.Group("/v2/vectordb")
+	httpserver.NewHandlersV2(s.proxy).RegisterRoutesToV2(appV2)
 	s.httpServer = &http.Server{Handler: ginHandler, ReadHeaderTimeout: time.Second}
 	errChan <- nil
 	if err := s.httpServer.Serve(s.httpListener); err != nil && err != cmux.ErrServerClosed {
@@ -438,13 +459,19 @@ func (s *Server) init() error {
 		log.Warn("Proxy get available port when init", zap.Int("Port", Params.Port.GetAsInt()))
 	}
 
-	log.Debug("init Proxy's parameter table done", zap.String("internal address", Params.GetInternalAddress()), zap.String("external address", Params.GetAddress()))
+	log.Debug("init Proxy's parameter table done",
+		zap.String("internalAddress", Params.GetInternalAddress()),
+		zap.String("externalAddress", Params.GetAddress()),
+	)
 
 	serviceName := fmt.Sprintf("Proxy ip: %s, port: %d", Params.IP, Params.Port.GetAsInt())
 	log.Debug("init Proxy's tracer done", zap.String("service name", serviceName))
 
-	etcdCli, err := etcd.GetEtcdClient(
+	etcdCli, err := etcd.CreateEtcdClient(
 		etcdConfig.UseEmbedEtcd.GetAsBool(),
+		etcdConfig.EtcdEnableAuth.GetAsBool(),
+		etcdConfig.EtcdAuthUserName.GetValue(),
+		etcdConfig.EtcdAuthPassword.GetValue(),
 		etcdConfig.EtcdUseSSL.GetAsBool(),
 		etcdConfig.Endpoints.GetAsStrings(),
 		etcdConfig.EtcdTLSCert.GetValue(),
@@ -468,19 +495,21 @@ func (s *Server) init() error {
 		}
 	}
 	{
-		log.Info("Proxy server listen on tcp", zap.Int("port", Params.Port.GetAsInt()))
+		port := Params.Port.GetAsInt()
+		httpPort := HTTPParams.Port.GetAsInt()
+		log.Info("Proxy server listen on tcp", zap.Int("port", port))
 		var lis net.Listener
-		var listenErr error
 
-		log.Info("Proxy server already listen on tcp", zap.Int("port", Params.Port.GetAsInt()))
-		lis, listenErr = net.Listen("tcp", ":"+strconv.Itoa(Params.Port.GetAsInt()))
-		if listenErr != nil {
-			log.Error("Proxy server(grpc/http) failed to listen on", zap.Error(err), zap.Int("port", Params.Port.GetAsInt()))
+		log.Info("Proxy server already listen on tcp", zap.Int("port", port))
+		lis, err = net.Listen("tcp", ":"+strconv.Itoa(port))
+		if err != nil {
+			log.Error("Proxy server(grpc/http) failed to listen on", zap.Int("port", port), zap.Error(err))
 			return err
 		}
 
-		if HTTPParams.Enabled.GetAsBool() && Params.TLSMode.GetAsInt() == 0 &&
-			(HTTPParams.Port.GetValue() == "" || HTTPParams.Port.GetAsInt() == Params.Port.GetAsInt()) {
+		if HTTPParams.Enabled.GetAsBool() &&
+			Params.TLSMode.GetAsInt() == 0 &&
+			(HTTPParams.Port.GetValue() == "" || httpPort == port) {
 			s.tcpServer = cmux.New(lis)
 			s.grpcListener = s.tcpServer.MatchWithWriters(cmux.HTTP2MatchHeaderFieldSendSettings("content-type", "application/grpc"))
 			s.httpListener = s.tcpServer.Match(cmux.Any())
@@ -488,11 +517,13 @@ func (s *Server) init() error {
 			s.grpcListener = lis
 		}
 
-		if HTTPParams.Enabled.GetAsBool() && HTTPParams.Port.GetValue() != "" && HTTPParams.Port.GetAsInt() != Params.Port.GetAsInt() {
+		if HTTPParams.Enabled.GetAsBool() &&
+			HTTPParams.Port.GetValue() != "" &&
+			httpPort != port {
 			if Params.TLSMode.GetAsInt() == 0 {
-				s.httpListener, listenErr = net.Listen("tcp", ":"+strconv.Itoa(HTTPParams.Port.GetAsInt()))
-				if listenErr != nil {
-					log.Error("Proxy server(grpc/http) failed to listen on", zap.Error(err), zap.Int("port", Params.Port.GetAsInt()))
+				s.httpListener, err = net.Listen("tcp", ":"+strconv.Itoa(httpPort))
+				if err != nil {
+					log.Error("Proxy server(grpc/http) failed to listen on", zap.Int("port", port), zap.Error(err))
 					return err
 				}
 			} else if Params.TLSMode.GetAsInt() == 1 {
@@ -501,12 +532,12 @@ func (s *Server) init() error {
 					log.Error("proxy can't create creds", zap.Error(err))
 					return err
 				}
-				s.httpListener, listenErr = tls.Listen("tcp", ":"+strconv.Itoa(HTTPParams.Port.GetAsInt()), &tls.Config{
+				s.httpListener, err = tls.Listen("tcp", ":"+strconv.Itoa(httpPort), &tls.Config{
 					Certificates: []tls.Certificate{creds},
 				})
-				if listenErr != nil {
-					log.Error("Proxy server(grpc/http) failed to listen on", zap.Error(err), zap.Int("port", Params.Port.GetAsInt()))
-					return listenErr
+				if err != nil {
+					log.Error("Proxy server(grpc/http) failed to listen on", zap.Int("port", port), zap.Error(err))
+					return err
 				}
 			} else if Params.TLSMode.GetAsInt() == 2 {
 				cert, err := tls.LoadX509KeyPair(Params.ServerPemPath.GetValue(), Params.ServerKeyPath.GetValue())
@@ -532,10 +563,10 @@ func (s *Server) init() error {
 					ClientCAs:    certPool,
 					MinVersion:   tls.VersionTLS13,
 				}
-				s.httpListener, listenErr = tls.Listen("tcp", ":"+strconv.Itoa(HTTPParams.Port.GetAsInt()), tlsConf)
-				if listenErr != nil {
-					log.Error("Proxy server(grpc/http) failed to listen on", zap.Error(err), zap.Int("port", Params.Port.GetAsInt()))
-					return listenErr
+				s.httpListener, err = tls.Listen("tcp", ":"+strconv.Itoa(httpPort), tlsConf)
+				if err != nil {
+					log.Error("Proxy server(grpc/http) failed to listen on", zap.Int("port", port), zap.Error(err))
+					return err
 				}
 			}
 		}
@@ -872,8 +903,8 @@ func (s *Server) Search(ctx context.Context, request *milvuspb.SearchRequest) (*
 	return s.proxy.Search(ctx, request)
 }
 
-func (s *Server) SearchV2(ctx context.Context, request *milvuspb.SearchRequestV2) (*milvuspb.SearchResults, error) {
-	return s.proxy.SearchV2(ctx, request)
+func (s *Server) HybridSearch(ctx context.Context, request *milvuspb.HybridSearchRequest) (*milvuspb.SearchResults, error) {
+	return s.proxy.HybridSearch(ctx, request)
 }
 
 func (s *Server) Flush(ctx context.Context, request *milvuspb.FlushRequest) (*milvuspb.FlushResponse, error) {
@@ -938,16 +969,14 @@ func (s *Server) AlterAlias(ctx context.Context, request *milvuspb.AlterAliasReq
 	return s.proxy.AlterAlias(ctx, request)
 }
 
+// DescribeAlias show the alias-collection relation for the specified alias.
 func (s *Server) DescribeAlias(ctx context.Context, request *milvuspb.DescribeAliasRequest) (*milvuspb.DescribeAliasResponse, error) {
-	return &milvuspb.DescribeAliasResponse{
-		Status: merr.Status(merr.WrapErrServiceUnavailable("DescribeAlias unimplemented")),
-	}, nil
+	return s.proxy.DescribeAlias(ctx, request)
 }
 
+// ListAliases list all the alias for the specified db, collection.
 func (s *Server) ListAliases(ctx context.Context, request *milvuspb.ListAliasesRequest) (*milvuspb.ListAliasesResponse, error) {
-	return &milvuspb.ListAliasesResponse{
-		Status: merr.Status(merr.WrapErrServiceUnavailable("ListAliases unimplemented")),
-	}, nil
+	return s.proxy.ListAliases(ctx, request)
 }
 
 // GetCompactionState gets the state of a compaction

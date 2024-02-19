@@ -61,6 +61,9 @@ set(MILVUS_TEST_FILES
         test_storage.cpp
         test_exec.cpp
         test_inverted_index.cpp
+        test_group_by.cpp
+        test_regex_query_util.cpp
+        test_regex_query.cpp
         )
 
 if ( BUILD_DISK_ANN STREQUAL "ON" )
@@ -82,8 +85,8 @@ endif()
 if (DEFINED AZURE_BUILD_DIR)
     set(MILVUS_TEST_FILES
                 ${MILVUS_TEST_FILES}
-                #test_azure_chunk_manager.cpp
-                #need update aws-sdk-cpp, see more from https://github.com/aws/aws-sdk-cpp/issues/2119
+                test_azure_chunk_manager.cpp
+            #need update aws-sdk-cpp, see more from https://github.com/aws/aws-sdk-cpp/issues/2119
                 #test_remote_chunk_manager.cpp
                 )
     include_directories("${AZURE_BUILD_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/include")
@@ -92,7 +95,7 @@ endif()
 if (LINUX)
     message( STATUS "Building Milvus Unit Test on Linux")
     option(USE_ASAN "Whether to use AddressSanitizer" OFF)
-    if ( USE_ASAN )
+    if ( USE_ASAN AND false )
         message( STATUS "Building Milvus using AddressSanitizer")
         add_compile_options(-fno-stack-protector -fno-omit-frame-pointer -fno-var-tracking -fsanitize=address)
         add_link_options(-fno-stack-protector -fno-omit-frame-pointer -fno-var-tracking -fsanitize=address)

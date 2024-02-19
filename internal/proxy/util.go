@@ -62,6 +62,8 @@ const (
 
 	defaultMaxArrayCapacity = 4096
 
+	defaultMaxSearchRequest = 1024
+
 	// DefaultArithmeticIndexType name of default index type for scalar field
 	DefaultArithmeticIndexType = "STL_SORT"
 
@@ -69,6 +71,9 @@ const (
 	DefaultStringIndexType = "Trie"
 
 	InvertedIndexType = "INVERTED"
+
+	defaultRRFParamsValue = 60
+	maxRRFParamsValue     = 16384
 )
 
 var logger = log.L().WithOptions(zap.Fields(zap.String("role", typeutil.ProxyRole)))
@@ -92,7 +97,8 @@ func isNumber(c uint8) bool {
 func isVectorType(dataType schemapb.DataType) bool {
 	return dataType == schemapb.DataType_FloatVector ||
 		dataType == schemapb.DataType_BinaryVector ||
-		dataType == schemapb.DataType_Float16Vector
+		dataType == schemapb.DataType_Float16Vector ||
+		dataType == schemapb.DataType_BFloat16Vector
 }
 
 func validateMaxQueryResultWindow(offset int64, limit int64) error {
@@ -493,7 +499,7 @@ func isVector(dataType schemapb.DataType) (bool, error) {
 		schemapb.DataType_Float, schemapb.DataType_Double:
 		return false, nil
 
-	case schemapb.DataType_FloatVector, schemapb.DataType_BinaryVector, schemapb.DataType_Float16Vector:
+	case schemapb.DataType_FloatVector, schemapb.DataType_BinaryVector, schemapb.DataType_Float16Vector, schemapb.DataType_BFloat16Vector:
 		return true, nil
 	}
 
@@ -504,7 +510,7 @@ func validateMetricType(dataType schemapb.DataType, metricTypeStrRaw string) err
 	metricTypeStr := strings.ToUpper(metricTypeStrRaw)
 	switch metricTypeStr {
 	case metric.L2, metric.IP, metric.COSINE:
-		if dataType == schemapb.DataType_FloatVector || dataType == schemapb.DataType_Float16Vector {
+		if dataType == schemapb.DataType_FloatVector || dataType == schemapb.DataType_Float16Vector || dataType == schemapb.DataType_BFloat16Vector {
 			return nil
 		}
 	case metric.JACCARD, metric.HAMMING, metric.SUBSTRUCTURE, metric.SUPERSTRUCTURE:
@@ -608,7 +614,7 @@ func validateMultipleVectorFields(schema *schemapb.CollectionSchema) error {
 	for i := range schema.Fields {
 		name := schema.Fields[i].Name
 		dType := schema.Fields[i].DataType
-		isVec := dType == schemapb.DataType_BinaryVector || dType == schemapb.DataType_FloatVector || dType == schemapb.DataType_Float16Vector
+		isVec := dType == schemapb.DataType_BinaryVector || dType == schemapb.DataType_FloatVector || dType == schemapb.DataType_Float16Vector || dType == schemapb.DataType_BFloat16Vector
 		if isVec && vecExist && !enableMultipleVectorFields {
 			return fmt.Errorf(
 				"multiple vector fields is not supported, fields name: %s, %s",
@@ -744,7 +750,7 @@ func ValidateUsername(username string) error {
 
 	firstChar := username[0]
 	if !isAlpha(firstChar) {
-		return merr.WrapErrParameterInvalidMsg("invalid user name %s, the first character must be a letter, but got %s", username, firstChar)
+		return merr.WrapErrParameterInvalidMsg("invalid user name %s, the first character must be a letter, but got %s", username, string(firstChar))
 	}
 
 	usernameSize := len(username)
@@ -870,7 +876,7 @@ func GetCurUserFromContext(ctx context.Context) (string, error) {
 	}
 	authorization, ok := md[strings.ToLower(util.HeaderAuthorize)]
 	if !ok || len(authorization) < 1 {
-		return "", fmt.Errorf("fail to get authorization from the md, authorize:[%s]", util.HeaderAuthorize)
+		return "", fmt.Errorf("fail to get authorization from the md, %s:[token]", strings.ToLower(util.HeaderAuthorize))
 	}
 	token := authorization[0]
 	rawToken, err := crypto.Base64Decode(token)
@@ -898,10 +904,13 @@ func GetCurDBNameFromContextOrDefault(ctx context.Context) string {
 }
 
 func NewContextWithMetadata(ctx context.Context, username string, dbName string) context.Context {
+	dbKey := strings.ToLower(util.HeaderDBName)
+	if username == "" {
+		return contextutil.AppendToIncomingContext(ctx, dbKey, dbName)
+	}
 	originValue := fmt.Sprintf("%s%s%s", username, util.CredentialSeperator, username)
 	authKey := strings.ToLower(util.HeaderAuthorize)
 	authValue := crypto.Base64Encode(originValue)
-	dbKey := strings.ToLower(util.HeaderDBName)
 	return contextutil.AppendToIncomingContext(ctx, authKey, authValue, dbKey, dbName)
 }
 

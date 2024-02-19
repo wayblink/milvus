@@ -37,6 +37,7 @@ SearchOnSealedIndex(const Schema& schema,
     auto dim = field.get_dim();
 
     AssertInfo(record.is_ready(field_id), "[SearchOnSealed]Record isn't ready");
+    // Keep the field_indexing smart pointer, until all reference by raw dropped.
     auto field_indexing = record.get_field_indexing(field_id);
     AssertInfo(field_indexing->metric_type_ == search_info.metric_type_,
                "Metric type of field index isn't the same with search info");
@@ -49,18 +50,22 @@ SearchOnSealedIndex(const Schema& schema,
         auto index_type = vec_index->GetIndexType();
         return vec_index->Query(ds, search_info, bitset);
     }();
+    if (final->iterators.has_value()) {
+        result.iterators = std::move(final->iterators);
+    } else {
+        float* distances = final->distances_.data();
 
-    float* distances = final->distances_.data();
-
-    auto total_num = num_queries * topk;
-    if (round_decimal != -1) {
-        const float multiplier = pow(10.0, round_decimal);
-        for (int i = 0; i < total_num; i++) {
-            distances[i] = std::round(distances[i] * multiplier) / multiplier;
+        auto total_num = num_queries * topk;
+        if (round_decimal != -1) {
+            const float multiplier = pow(10.0, round_decimal);
+            for (int i = 0; i < total_num; i++) {
+                distances[i] =
+                    std::round(distances[i] * multiplier) / multiplier;
+            }
         }
+        result.seg_offsets_ = std::move(final->seg_offsets_);
+        result.distances_ = std::move(final->distances_);
     }
-    result.seg_offsets_ = std::move(final->seg_offsets_);
-    result.distances_ = std::move(final->distances_);
     result.total_nq_ = num_queries;
     result.unity_topK_ = topk;
 }

@@ -61,6 +61,10 @@ type queryTask struct {
 	plan             *planpb.PlanNode
 	partitionKeyMode bool
 	lb               LBPolicy
+	channelsMvcc     map[string]Timestamp
+	fastSkip         bool
+
+	reQuery bool
 }
 
 type queryParams struct {
@@ -74,7 +78,7 @@ func translateToOutputFieldIDs(outputFields []string, schema *schemapb.Collectio
 	outputFieldIDs := make([]UniqueID, 0, len(outputFields)+1)
 	if len(outputFields) == 0 {
 		for _, field := range schema.Fields {
-			if field.FieldID >= common.StartOfUserFieldID && field.DataType != schemapb.DataType_FloatVector && field.DataType != schemapb.DataType_BinaryVector && field.DataType != schemapb.DataType_Float16Vector {
+			if field.FieldID >= common.StartOfUserFieldID && !isVectorType(field.DataType) {
 				outputFieldIDs = append(outputFieldIDs, field.FieldID)
 			}
 		}
@@ -325,23 +329,26 @@ func (t *queryTask) PreExecute(ctx context.Context) error {
 		return fmt.Errorf("empty expression should be used with limit")
 	}
 
-	partitionNames := t.request.GetPartitionNames()
-	if t.partitionKeyMode {
-		expr, err := ParseExprFromPlan(t.plan)
-		if err != nil {
-			return err
-		}
-		partitionKeys := ParsePartitionKeys(expr)
-		hashedPartitionNames, err := assignPartitionKeys(ctx, t.request.GetDbName(), t.request.CollectionName, partitionKeys)
-		if err != nil {
-			return err
-		}
+	// convert partition names only when requery is false
+	if !t.reQuery {
+		partitionNames := t.request.GetPartitionNames()
+		if t.partitionKeyMode {
+			expr, err := ParseExprFromPlan(t.plan)
+			if err != nil {
+				return err
+			}
+			partitionKeys := ParsePartitionKeys(expr)
+			hashedPartitionNames, err := assignPartitionKeys(ctx, t.request.GetDbName(), t.request.CollectionName, partitionKeys)
+			if err != nil {
+				return err
+			}
 
-		partitionNames = append(partitionNames, hashedPartitionNames...)
-	}
-	t.RetrieveRequest.PartitionIDs, err = getPartitionIDs(ctx, t.request.GetDbName(), t.request.CollectionName, partitionNames)
-	if err != nil {
-		return err
+			partitionNames = append(partitionNames, hashedPartitionNames...)
+		}
+		t.RetrieveRequest.PartitionIDs, err = getPartitionIDs(ctx, t.request.GetDbName(), t.request.CollectionName, partitionNames)
+		if err != nil {
+			return err
+		}
 	}
 
 	// count with pagination
@@ -467,19 +474,33 @@ func (t *queryTask) PostExecute(ctx context.Context) error {
 	return nil
 }
 
-func (t *queryTask) queryShard(ctx context.Context, nodeID int64, qn types.QueryNodeClient, channelIDs ...string) error {
+func (t *queryTask) queryShard(ctx context.Context, nodeID int64, qn types.QueryNodeClient, channel string) error {
+	needOverrideMvcc := false
+	mvccTs := t.MvccTimestamp
+	if len(t.channelsMvcc) > 0 {
+		mvccTs, needOverrideMvcc = t.channelsMvcc[channel]
+		// In fast mode, if there is no corresponding channel in channelsMvcc, quickly skip this query.
+		if !needOverrideMvcc && t.fastSkip {
+			return nil
+		}
+	}
+
 	retrieveReq := typeutil.Clone(t.RetrieveRequest)
 	retrieveReq.GetBase().TargetID = nodeID
+	if needOverrideMvcc && mvccTs > 0 {
+		retrieveReq.MvccTimestamp = mvccTs
+	}
+
 	req := &querypb.QueryRequest{
 		Req:         retrieveReq,
-		DmlChannels: channelIDs,
+		DmlChannels: []string{channel},
 		Scope:       querypb.DataScope_All,
 	}
 
 	log := log.Ctx(ctx).With(zap.Int64("collection", t.GetCollectionID()),
 		zap.Int64s("partitionIDs", t.GetPartitionIDs()),
 		zap.Int64("nodeID", nodeID),
-		zap.Strings("channels", channelIDs))
+		zap.String("channel", channel))
 
 	result, err := qn.Query(ctx, req)
 	if err != nil {

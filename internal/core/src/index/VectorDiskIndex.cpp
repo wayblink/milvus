@@ -16,6 +16,8 @@
 
 #include "index/VectorDiskIndex.h"
 
+#include "common/Tracer.h"
+#include "common/Types.h"
 #include "common/Utils.h"
 #include "config/ConfigKnowhere.h"
 #include "index/Meta.h"
@@ -24,6 +26,7 @@
 #include "storage/Util.h"
 #include "common/Consts.h"
 #include "common/RangeSearchHelper.h"
+#include "indexbuilder/types.h"
 
 namespace milvus::index {
 
@@ -56,7 +59,7 @@ VectorDiskAnnIndex<T>::VectorDiskAnnIndex(
     local_chunk_manager->CreateDir(local_index_path_prefix);
     auto diskann_index_pack =
         knowhere::Pack(std::shared_ptr<knowhere::FileManager>(file_manager_));
-    index_ = knowhere::IndexFactory::Instance().Create(
+    index_ = knowhere::IndexFactory::Instance().Create<T>(
         GetIndexType(), version, diskann_index_pack);
 }
 
@@ -85,7 +88,7 @@ VectorDiskAnnIndex<T>::VectorDiskAnnIndex(
     local_chunk_manager->CreateDir(local_index_path_prefix);
     auto diskann_index_pack =
         knowhere::Pack(std::shared_ptr<knowhere::FileManager>(file_manager_));
-    index_ = knowhere::IndexFactory::Instance().Create(
+    index_ = knowhere::IndexFactory::Instance().Create<T>(
         GetIndexType(), version, diskann_index_pack);
 }
 
@@ -93,24 +96,39 @@ template <typename T>
 void
 VectorDiskAnnIndex<T>::Load(const BinarySet& binary_set /* not used */,
                             const Config& config) {
-    Load(config);
+    Load(milvus::tracer::TraceContext{}, config);
 }
 
 template <typename T>
 void
-VectorDiskAnnIndex<T>::Load(const Config& config) {
+VectorDiskAnnIndex<T>::Load(milvus::tracer::TraceContext ctx,
+                            const Config& config) {
     knowhere::Json load_config = update_load_json(config);
 
-    auto index_files =
-        GetValueFromConfig<std::vector<std::string>>(config, "index_files");
-    AssertInfo(index_files.has_value(),
-               "index file paths is empty when load disk ann index data");
-    file_manager_->CacheIndexToDisk(index_files.value());
+    // start read file span with active scope
+    {
+        auto read_file_span =
+            milvus::tracer::StartSpan("SegCoreReadDiskIndexFile", &ctx);
+        auto read_scope =
+            milvus::tracer::GetTracer()->WithActiveSpan(read_file_span);
+        auto index_files =
+            GetValueFromConfig<std::vector<std::string>>(config, "index_files");
+        AssertInfo(index_files.has_value(),
+                   "index file paths is empty when load disk ann index data");
+        file_manager_->CacheIndexToDisk(index_files.value());
+        read_file_span->End();
+    }
 
+    // start engine load index span
+    auto span_load_engine =
+        milvus::tracer::StartSpan("SegCoreEngineLoadDiskIndex", &ctx);
+    auto engine_scope =
+        milvus::tracer::GetTracer()->WithActiveSpan(span_load_engine);
     auto stat = index_.Deserialize(knowhere::BinarySet(), load_config);
     if (stat != knowhere::Status::success)
         PanicInfo(ErrorCode::UnexpectedError,
                   "failed to Deserialize index, " + KnowhereStatusString(stat));
+    span_load_engine->End();
 
     SetDim(index_.Dim());
 }
@@ -134,7 +152,11 @@ template <typename T>
 BinarySet
 VectorDiskAnnIndex<T>::Upload(const Config& config) {
     BinarySet ret;
-    index_.Serialize(ret);
+    auto stat = index_.Serialize(ret);
+    if (stat != knowhere::Status::success) {
+        PanicInfo(ErrorCode::UnexpectedError,
+                  "failed to serialize index, " + KnowhereStatusString(stat));
+    }
     auto remote_paths_to_size = file_manager_->GetRemotePathsToFileSize();
     for (auto& file : remote_paths_to_size) {
         ret.Append(file.first, nullptr, file.second);
@@ -170,7 +192,15 @@ VectorDiskAnnIndex<T>::BuildV2(const Config& config) {
         build_config[DISK_ANN_THREADS_NUM] =
             std::atoi(num_threads.value().c_str());
     }
+
+    auto opt_fields = GetValueFromConfig<OptFieldT>(config, VEC_OPT_FIELDS);
+    if (opt_fields.has_value() && index_.IsAdditionalScalarSupported()) {
+        build_config[VEC_OPT_FIELDS_PATH] =
+            file_manager_->CacheOptFieldToDisk(opt_fields.value());
+    }
+
     build_config.erase("insert_files");
+    build_config.erase(VEC_OPT_FIELDS);
     index_.Build({}, build_config);
 
     auto local_chunk_manager =
@@ -209,7 +239,15 @@ VectorDiskAnnIndex<T>::Build(const Config& config) {
         build_config[DISK_ANN_THREADS_NUM] =
             std::atoi(num_threads.value().c_str());
     }
+
+    auto opt_fields = GetValueFromConfig<OptFieldT>(config, VEC_OPT_FIELDS);
+    if (opt_fields.has_value() && index_.IsAdditionalScalarSupported()) {
+        build_config[VEC_OPT_FIELDS_PATH] =
+            file_manager_->CacheOptFieldToDisk(opt_fields.value());
+    }
+
     build_config.erase("insert_files");
+    build_config.erase(VEC_OPT_FIELDS);
     auto stat = index_.Build({}, build_config);
     if (stat != knowhere::Status::success)
         PanicInfo(ErrorCode::IndexBuildError,
@@ -260,7 +298,7 @@ VectorDiskAnnIndex<T>::BuildWithDataset(const DatasetPtr& dataset,
     local_chunk_manager->Write(local_data_path, offset, &dim, sizeof(dim));
     offset += sizeof(dim);
 
-    auto data_size = num * dim * sizeof(float);
+    auto data_size = num * dim * sizeof(T);
     auto raw_data = const_cast<void*>(milvus::GetDatasetTensor(dataset));
     local_chunk_manager->Write(local_data_path, offset, raw_data, data_size);
 
@@ -290,13 +328,11 @@ VectorDiskAnnIndex<T>::Query(const DatasetPtr dataset,
     search_config[knowhere::meta::TOPK] = topk;
     search_config[knowhere::meta::METRIC_TYPE] = GetMetricType();
 
-    // set search list size
-    auto search_list_size = GetValueFromConfig<uint32_t>(
-        search_info.search_params_, DISK_ANN_QUERY_LIST);
-
     if (GetIndexType() == knowhere::IndexEnum::INDEX_DISKANN) {
-        if (search_list_size.has_value()) {
-            search_config[DISK_ANN_SEARCH_LIST_SIZE] = search_list_size.value();
+        // set search list size
+        if (CheckKeyInConfig(search_info.search_params_, DISK_ANN_QUERY_LIST)) {
+            search_config[DISK_ANN_SEARCH_LIST_SIZE] =
+                search_info.search_params_[DISK_ANN_QUERY_LIST];
         }
         // set beamwidth
         search_config[DISK_ANN_QUERY_BEAMWIDTH] = int(search_beamwidth_);
@@ -446,5 +482,7 @@ VectorDiskAnnIndex<T>::update_load_json(const Config& config) {
 }
 
 template class VectorDiskAnnIndex<float>;
+template class VectorDiskAnnIndex<float16>;
+template class VectorDiskAnnIndex<bfloat16>;
 
 }  // namespace milvus::index

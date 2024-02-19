@@ -155,14 +155,14 @@ func TestExpr_Like(t *testing.T) {
 	}
 
 	// TODO: enable these after regex-match is supported.
-	unsupported := []string{
-		`VarCharField like "not_%_supported"`,
-		`JSONField["A"] like "not_%_supported"`,
-		`$meta["A"] like "not_%_supported"`,
-	}
-	for _, exprStr := range unsupported {
-		assertInvalidExpr(t, helper, exprStr)
-	}
+	//unsupported := []string{
+	//	`VarCharField like "not_%_supported"`,
+	//	`JSONField["A"] like "not_%_supported"`,
+	//	`$meta["A"] like "not_%_supported"`,
+	//}
+	//for _, exprStr := range unsupported {
+	//	assertInvalidExpr(t, helper, exprStr)
+	//}
 }
 
 func TestExpr_BinaryRange(t *testing.T) {
@@ -388,6 +388,28 @@ func TestCreateRetrievePlan(t *testing.T) {
 func TestCreateSearchPlan(t *testing.T) {
 	schema := newTestSchema()
 	_, err := CreateSearchPlan(schema, `$meta["A"] != 10`, "FloatVectorField", &planpb.QueryInfo{
+		Topk:         0,
+		MetricType:   "",
+		SearchParams: "",
+		RoundDecimal: 0,
+	})
+	assert.NoError(t, err)
+}
+
+func TestCreateFloat16SearchPlan(t *testing.T) {
+	schema := newTestSchema()
+	_, err := CreateSearchPlan(schema, `$meta["A"] != 10`, "Float16VectorField", &planpb.QueryInfo{
+		Topk:         0,
+		MetricType:   "",
+		SearchParams: "",
+		RoundDecimal: 0,
+	})
+	assert.NoError(t, err)
+}
+
+func TestCreateBFloat16earchPlan(t *testing.T) {
+	schema := newTestSchema()
+	_, err := CreateSearchPlan(schema, `$meta["A"] != 10`, "BFloat16VectorField", &planpb.QueryInfo{
 		Topk:         0,
 		MetricType:   "",
 		SearchParams: "",

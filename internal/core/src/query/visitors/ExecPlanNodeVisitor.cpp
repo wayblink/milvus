@@ -22,6 +22,8 @@
 #include "log/Log.h"
 #include "plan/PlanNode.h"
 #include "exec/Task.h"
+#include "segcore/SegmentInterface.h"
+#include "query/GroupByOperator.h"
 
 namespace milvus::query {
 
@@ -79,10 +81,10 @@ ExecPlanNodeVisitor::ExecuteExprNodeInternal(
     bool& cache_offset_getted,
     std::vector<int64_t>& cache_offset) {
     bitset_holder.clear();
-    LOG_INFO("plannode: {}, active_count: {}, timestamp: {}",
-             plannode->ToString(),
-             active_count,
-             timestamp_);
+    LOG_DEBUG("plannode: {}, active_count: {}, timestamp: {}",
+              plannode->ToString(),
+              active_count,
+              timestamp_);
     auto plan = plan::PlanFragment(plannode);
     // TODO: get query id from proxy
     auto query_context = std::make_shared<milvus::exec::QueryContext>(
@@ -188,7 +190,20 @@ ExecPlanNodeVisitor::VectorVisitorImpl(VectorPlanNode& node) {
                            timestamp_,
                            final_view,
                            search_result);
-
+    if (search_result.iterators.has_value()) {
+        GroupBy(search_result.iterators.value(),
+                node.search_info_,
+                search_result.group_by_values_,
+                *segment,
+                search_result.seg_offsets_,
+                search_result.distances_);
+        AssertInfo(search_result.seg_offsets_.size() ==
+                       search_result.group_by_values_.size(),
+                   "Wrong state! search_result group_by_values_ size:{} is not "
+                   "equal to search_result.seg_offsets.size:{}",
+                   search_result.group_by_values_.size(),
+                   search_result.seg_offsets_.size());
+    }
     search_result_opt_ = std::move(search_result);
 }
 
@@ -286,6 +301,11 @@ ExecPlanNodeVisitor::visit(BinaryVectorANNS& node) {
 void
 ExecPlanNodeVisitor::visit(Float16VectorANNS& node) {
     VectorVisitorImpl<Float16Vector>(node);
+}
+
+void
+ExecPlanNodeVisitor::visit(BFloat16VectorANNS& node) {
+    VectorVisitorImpl<BFloat16Vector>(node);
 }
 
 }  // namespace milvus::query

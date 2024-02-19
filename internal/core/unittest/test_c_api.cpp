@@ -94,6 +94,58 @@ get_default_schema_config() {
 }
 
 const char*
+get_float16_schema_config() {
+    static std::string conf = R"(name: "float16-collection"
+                                fields: <
+                                  fieldID: 100
+                                  name: "fakevec"
+                                  data_type: Float16Vector
+                                  type_params: <
+                                    key: "dim"
+                                    value: "16"
+                                  >
+                                  index_params: <
+                                    key: "metric_type"
+                                    value: "L2"
+                                  >
+                                >
+                                fields: <
+                                  fieldID: 101
+                                  name: "age"
+                                  data_type: Int64
+                                  is_primary_key: true
+                                >)";
+    static std::string fake_conf = "";
+    return conf.c_str();
+}
+
+const char*
+get_bfloat16_schema_config() {
+    static std::string conf = R"(name: "bfloat16-collection"
+                                fields: <
+                                  fieldID: 100
+                                  name: "fakevec"
+                                  data_type: BFloat16Vector
+                                  type_params: <
+                                    key: "dim"
+                                    value: "16"
+                                  >
+                                  index_params: <
+                                    key: "metric_type"
+                                    value: "L2"
+                                  >
+                                >
+                                fields: <
+                                  fieldID: 101
+                                  name: "age"
+                                  data_type: Int64
+                                  is_primary_key: true
+                                >)";
+    static std::string fake_conf = "";
+    return conf.c_str();
+}
+
+const char*
 get_default_index_meta() {
     static std::string conf = R"(maxIndexRowCount: 1000
                                 index_metas: <
@@ -192,7 +244,58 @@ generate_query_data(int nq) {
 }
 
 std::string
-generate_collection_schema(std::string metric_type, int dim, bool is_binary) {
+generate_query_data_float16(int nq) {
+    namespace ser = milvus::proto::common;
+    std::default_random_engine e(67);
+    int dim = DIM;
+    std::normal_distribution<double> dis(0.0, 1.0);
+    ser::PlaceholderGroup raw_group;
+    auto value = raw_group.add_placeholders();
+    value->set_tag("$0");
+    value->set_type(ser::PlaceholderType::Float16Vector);
+    for (int i = 0; i < nq; ++i) {
+        std::vector<float16> vec;
+        for (int d = 0; d < dim; ++d) {
+            vec.push_back(float16(dis(e)));
+        }
+        value->add_values(vec.data(), vec.size() * sizeof(float16));
+    }
+    auto blob = raw_group.SerializeAsString();
+    return blob;
+}
+
+std::string
+generate_query_data_bfloat16(int nq) {
+    namespace ser = milvus::proto::common;
+    std::default_random_engine e(67);
+    int dim = DIM;
+    std::normal_distribution<double> dis(0.0, 1.0);
+    ser::PlaceholderGroup raw_group;
+    auto value = raw_group.add_placeholders();
+    value->set_tag("$0");
+    value->set_type(ser::PlaceholderType::BFloat16Vector);
+    for (int i = 0; i < nq; ++i) {
+        std::vector<bfloat16> vec;
+        for (int d = 0; d < dim; ++d) {
+            vec.push_back(bfloat16(dis(e)));
+        }
+        value->add_values(vec.data(), vec.size() * sizeof(bfloat16));
+    }
+    auto blob = raw_group.SerializeAsString();
+    return blob;
+}
+// 创建枚举，包含schema::DataType::BinaryVector，schema::DataType::FloatVector
+enum VectorType {
+    BinaryVector = 0,
+    FloatVector = 1,
+    Float16Vector = 2,
+    BFloat16Vector = 3,
+};
+
+std::string
+generate_collection_schema(std::string metric_type,
+                           int dim,
+                           VectorType vector_type) {
     namespace schema = milvus::proto::schema;
     schema::CollectionSchema collection_schema;
     collection_schema.set_name("collection_test");
@@ -200,8 +303,12 @@ generate_collection_schema(std::string metric_type, int dim, bool is_binary) {
     auto vec_field_schema = collection_schema.add_fields();
     vec_field_schema->set_name("fakevec");
     vec_field_schema->set_fieldid(100);
-    if (is_binary) {
+    if (vector_type == VectorType::BinaryVector) {
         vec_field_schema->set_data_type(schema::DataType::BinaryVector);
+    } else if (vector_type == VectorType::Float16Vector) {
+        vec_field_schema->set_data_type(schema::DataType::Float16Vector);
+    } else if (vector_type == VectorType::BFloat16Vector) {
+        vec_field_schema->set_data_type(schema::DataType::BFloat16Vector);
     } else {
         vec_field_schema->set_data_type(schema::DataType::FloatVector);
     }
@@ -316,12 +423,12 @@ TEST(CApiTest, SegmentTest) {
     ASSERT_NE(status.error_code, Success);
     DeleteCollection(collection);
     DeleteSegment(segment);
-    free((char *)status.error_msg);
+    free((char*)status.error_msg);
 }
 
 TEST(CApiTest, CPlan) {
-    std::string schema_string =
-        generate_collection_schema(knowhere::metric::JACCARD, DIM, true);
+    std::string schema_string = generate_collection_schema(
+        knowhere::metric::JACCARD, DIM, VectorType::BinaryVector);
     auto collection = NewCollection(schema_string.c_str());
 
     //  const char* dsl_string = R"(
@@ -344,6 +451,86 @@ TEST(CApiTest, CPlan) {
     milvus::proto::plan::PlanNode plan_node;
     auto vector_anns = plan_node.mutable_vector_anns();
     vector_anns->set_vector_type(milvus::proto::plan::VectorType::BinaryVector);
+    vector_anns->set_placeholder_tag("$0");
+    vector_anns->set_field_id(100);
+    auto query_info = vector_anns->mutable_query_info();
+    query_info->set_topk(10);
+    query_info->set_round_decimal(3);
+    query_info->set_metric_type("L2");
+    query_info->set_search_params(R"({"nprobe": 10})");
+    auto plan_str = plan_node.SerializeAsString();
+
+    void* plan = nullptr;
+    auto status = CreateSearchPlanByExpr(
+        collection, plan_str.data(), plan_str.size(), &plan);
+    ASSERT_EQ(status.error_code, Success);
+
+    int64_t field_id = -1;
+    status = GetFieldID(plan, &field_id);
+    ASSERT_EQ(status.error_code, Success);
+
+    auto col = static_cast<Collection*>(collection);
+    for (auto& [target_field_id, field_meta] :
+         col->get_schema()->get_fields()) {
+        if (field_meta.is_vector()) {
+            ASSERT_EQ(field_id, target_field_id.get());
+        }
+    }
+    ASSERT_NE(field_id, -1);
+
+    DeleteSearchPlan(plan);
+    DeleteCollection(collection);
+}
+
+TEST(CApiTest, CApiCPlan_float16) {
+    std::string schema_string = generate_collection_schema(
+        knowhere::metric::L2, 16, VectorType::Float16Vector);
+    auto collection = NewCollection(schema_string.c_str());
+
+    milvus::proto::plan::PlanNode plan_node;
+    auto vector_anns = plan_node.mutable_vector_anns();
+    vector_anns->set_vector_type(
+        milvus::proto::plan::VectorType::Float16Vector);
+    vector_anns->set_placeholder_tag("$0");
+    vector_anns->set_field_id(100);
+    auto query_info = vector_anns->mutable_query_info();
+    query_info->set_topk(10);
+    query_info->set_round_decimal(3);
+    query_info->set_metric_type("L2");
+    query_info->set_search_params(R"({"nprobe": 10})");
+    auto plan_str = plan_node.SerializeAsString();
+
+    void* plan = nullptr;
+    auto status = CreateSearchPlanByExpr(
+        collection, plan_str.data(), plan_str.size(), &plan);
+    ASSERT_EQ(status.error_code, Success);
+
+    int64_t field_id = -1;
+    status = GetFieldID(plan, &field_id);
+    ASSERT_EQ(status.error_code, Success);
+
+    auto col = static_cast<Collection*>(collection);
+    for (auto& [target_field_id, field_meta] :
+         col->get_schema()->get_fields()) {
+        if (field_meta.is_vector()) {
+            ASSERT_EQ(field_id, target_field_id.get());
+        }
+    }
+    ASSERT_NE(field_id, -1);
+
+    DeleteSearchPlan(plan);
+    DeleteCollection(collection);
+}
+
+TEST(CApiTest, CApiCPlan_bfloat16) {
+    std::string schema_string = generate_collection_schema(
+        knowhere::metric::L2, 16, VectorType::BFloat16Vector);
+    auto collection = NewCollection(schema_string.c_str());
+
+    milvus::proto::plan::PlanNode plan_node;
+    auto vector_anns = plan_node.mutable_vector_anns();
+    vector_anns->set_vector_type(
+        milvus::proto::plan::VectorType::BFloat16Vector);
     vector_anns->set_placeholder_tag("$0");
     vector_anns->set_field_id(100);
     auto query_info = vector_anns->mutable_query_info();
@@ -1075,11 +1262,13 @@ TEST(CApiTest, SearchTest) {
     placeholderGroups.push_back(placeholderGroup);
 
     CSearchResult search_result;
-    auto res = Search(segment, plan, placeholderGroup, {}, &search_result);
+    auto res =
+        Search(segment, plan, placeholderGroup, {}, ts_offset, &search_result);
     ASSERT_EQ(res.error_code, Success);
 
     CSearchResult search_result2;
-    auto res2 = Search(segment, plan, placeholderGroup, {}, &search_result2);
+    auto res2 =
+        Search(segment, plan, placeholderGroup, {}, ts_offset, &search_result2);
     ASSERT_EQ(res2.error_code, Success);
 
     DeleteSearchPlan(plan);
@@ -1143,7 +1332,12 @@ TEST(CApiTest, SearchTestWithExpr) {
     dataset.timestamps_.push_back(1);
 
     CSearchResult search_result;
-    auto res = Search(segment, plan, placeholderGroup, {}, &search_result);
+    auto res = Search(segment,
+                      plan,
+                      placeholderGroup,
+                      {},
+                      dataset.timestamps_[0],
+                      &search_result);
     ASSERT_EQ(res.error_code, Success);
 
     DeleteSearchPlan(plan);
@@ -1427,7 +1621,7 @@ TEST(CApiTest, ReduceNullResult) {
         auto slice_topKs = std::vector<int64_t>{1};
         std::vector<CSearchResult> results;
         CSearchResult res;
-        status = Search(segment, plan, placeholderGroup, {}, &res);
+        status = Search(segment, plan, placeholderGroup, {}, 1L << 63, &res);
         ASSERT_EQ(status.error_code, Success);
         results.push_back(res);
         CSearchResultDataBlobs cSearchResultData;
@@ -1514,9 +1708,11 @@ TEST(CApiTest, ReduceRemoveDuplicates) {
         auto slice_topKs = std::vector<int64_t>{topK / 2, topK};
         std::vector<CSearchResult> results;
         CSearchResult res1, res2;
-        status = Search(segment, plan, placeholderGroup, {}, &res1);
+        status = Search(
+            segment, plan, placeholderGroup, {}, dataset.timestamps_[0], &res1);
         ASSERT_EQ(status.error_code, Success);
-        status = Search(segment, plan, placeholderGroup, {}, &res2);
+        status = Search(
+            segment, plan, placeholderGroup, {}, dataset.timestamps_[0], &res2);
         ASSERT_EQ(status.error_code, Success);
         results.push_back(res1);
         results.push_back(res2);
@@ -1545,11 +1741,14 @@ TEST(CApiTest, ReduceRemoveDuplicates) {
         auto slice_topKs = std::vector<int64_t>{topK / 2, topK, topK};
         std::vector<CSearchResult> results;
         CSearchResult res1, res2, res3;
-        status = Search(segment, plan, placeholderGroup, {}, &res1);
+        status = Search(
+            segment, plan, placeholderGroup, {}, dataset.timestamps_[0], &res1);
         ASSERT_EQ(status.error_code, Success);
-        status = Search(segment, plan, placeholderGroup, {}, &res2);
+        status = Search(
+            segment, plan, placeholderGroup, {}, dataset.timestamps_[0], &res2);
         ASSERT_EQ(status.error_code, Success);
-        status = Search(segment, plan, placeholderGroup, {}, &res3);
+        status = Search(
+            segment, plan, placeholderGroup, {}, dataset.timestamps_[0], &res3);
         ASSERT_EQ(status.error_code, Success);
         results.push_back(res1);
         results.push_back(res2);
@@ -1579,7 +1778,10 @@ TEST(CApiTest, ReduceRemoveDuplicates) {
 }
 
 void
-testReduceSearchWithExpr(int N, int topK, int num_queries, bool filter_all = false) {
+testReduceSearchWithExpr(int N,
+                         int topK,
+                         int num_queries,
+                         bool filter_all = false) {
     std::cerr << "testReduceSearchWithExpr(" << N << ", " << topK << ", "
               << num_queries << ")" << std::endl;
 
@@ -1637,7 +1839,8 @@ testReduceSearchWithExpr(int N, int topK, int num_queries, bool filter_all = fal
                                                 search_params: "{\"nprobe\": 10}"
                                             >
                                             placeholder_tag: "$0">
-                                            output_field_ids: 100)") %topK %N;
+                                            output_field_ids: 100)") %
+              topK % N;
     }
     auto serialized_expr_plan = fmt.str();
     auto blob = generate_query_data(num_queries);
@@ -1662,9 +1865,11 @@ testReduceSearchWithExpr(int N, int topK, int num_queries, bool filter_all = fal
     std::vector<CSearchResult> results;
     CSearchResult res1;
     CSearchResult res2;
-    auto res = Search(segment, plan, placeholderGroup, {}, &res1);
+    auto res = Search(
+        segment, plan, placeholderGroup, {}, dataset.timestamps_[N - 1], &res1);
     ASSERT_EQ(res.error_code, Success);
-    res = Search(segment, plan, placeholderGroup, {}, &res2);
+    res = Search(
+        segment, plan, placeholderGroup, {}, dataset.timestamps_[N - 1], &res2);
     ASSERT_EQ(res.error_code, Success);
     results.push_back(res1);
     results.push_back(res2);
@@ -1746,7 +1951,7 @@ TEST(CApiTest, LoadIndexInfo) {
 
     auto N = 1024 * 10;
     auto [raw_data, timestamps, uids] = generate_data(N);
-    auto indexing = knowhere::IndexFactory::Instance().Create(
+    auto indexing = knowhere::IndexFactory::Instance().Create<float>(
         knowhere::IndexEnum::INDEX_FAISS_IVFSQ8,
         knowhere::Version::GetCurrentVersion().VersionNumber());
     auto conf =
@@ -1796,7 +2001,7 @@ TEST(CApiTest, LoadIndexSearch) {
     auto N = 1024 * 10;
     auto num_query = 100;
     auto [raw_data, timestamps, uids] = generate_data(N);
-    auto indexing = knowhere::IndexFactory::Instance().Create(
+    auto indexing = knowhere::IndexFactory::Instance().Create<float>(
         knowhere::IndexEnum::INDEX_FAISS_IVFSQ8,
         knowhere::Version::GetCurrentVersion().VersionNumber());
     auto conf =
@@ -1838,8 +2043,8 @@ TEST(CApiTest, Indexing_Without_Predicate) {
     // insert data to segment
     constexpr auto TOPK = 5;
 
-    std::string schema_string =
-        generate_collection_schema(knowhere::metric::L2, DIM, false);
+    std::string schema_string = generate_collection_schema(
+        knowhere::metric::L2, DIM, VectorType::FloatVector);
     auto collection = NewCollection(schema_string.c_str());
     auto schema = ((segcore::Collection*)collection)->get_schema();
     CSegmentInterface segment;
@@ -1896,9 +2101,15 @@ TEST(CApiTest, Indexing_Without_Predicate) {
     std::vector<CPlaceholderGroup> placeholderGroups;
     placeholderGroups.push_back(placeholderGroup);
 
+    Timestamp timestmap = 10000000;
+
     CSearchResult c_search_result_on_smallIndex;
-    auto res_before_load_index = Search(
-        segment, plan, placeholderGroup, {}, &c_search_result_on_smallIndex);
+    auto res_before_load_index = Search(segment,
+                                        plan,
+                                        placeholderGroup,
+                                        {},
+                                        timestmap,
+                                        &c_search_result_on_smallIndex);
     ASSERT_EQ(res_before_load_index.error_code, Success);
 
     // load index to segment
@@ -1958,6 +2169,7 @@ TEST(CApiTest, Indexing_Without_Predicate) {
                                        plan,
                                        placeholderGroup,
                                        {},
+                                       timestmap,
                                        &c_search_result_on_bigIndex);
     ASSERT_EQ(res_after_load_index.error_code, Success);
 
@@ -1982,8 +2194,8 @@ TEST(CApiTest, Indexing_Expr_Without_Predicate) {
     // insert data to segment
     constexpr auto TOPK = 5;
 
-    std::string schema_string =
-        generate_collection_schema(knowhere::metric::L2, DIM, false);
+    std::string schema_string = generate_collection_schema(
+        knowhere::metric::L2, DIM, VectorType::FloatVector);
     auto collection = NewCollection(schema_string.c_str());
     auto schema = ((segcore::Collection*)collection)->get_schema();
     CSegmentInterface segment;
@@ -2040,9 +2252,15 @@ TEST(CApiTest, Indexing_Expr_Without_Predicate) {
     std::vector<CPlaceholderGroup> placeholderGroups;
     placeholderGroups.push_back(placeholderGroup);
 
+    Timestamp timestamp = 10000000;
+
     CSearchResult c_search_result_on_smallIndex;
-    auto res_before_load_index = Search(
-        segment, plan, placeholderGroup, {}, &c_search_result_on_smallIndex);
+    auto res_before_load_index = Search(segment,
+                                        plan,
+                                        placeholderGroup,
+                                        {},
+                                        timestamp,
+                                        &c_search_result_on_smallIndex);
     ASSERT_EQ(res_before_load_index.error_code, Success);
 
     // load index to segment
@@ -2103,6 +2321,7 @@ TEST(CApiTest, Indexing_Expr_Without_Predicate) {
                                        plan,
                                        placeholderGroup,
                                        {},
+                                       timestamp,
                                        &c_search_result_on_bigIndex);
     ASSERT_EQ(res_after_load_index.error_code, Success);
 
@@ -2127,8 +2346,8 @@ TEST(CApiTest, Indexing_With_float_Predicate_Range) {
     // insert data to segment
     constexpr auto TOPK = 5;
 
-    std::string schema_string =
-        generate_collection_schema(knowhere::metric::L2, DIM, false);
+    std::string schema_string = generate_collection_schema(
+        knowhere::metric::L2, DIM, VectorType::FloatVector);
     auto collection = NewCollection(schema_string.c_str());
     auto schema = ((segcore::Collection*)collection)->get_schema();
     CSegmentInterface segment;
@@ -2213,10 +2432,15 @@ TEST(CApiTest, Indexing_With_float_Predicate_Range) {
 
     std::vector<CPlaceholderGroup> placeholderGroups;
     placeholderGroups.push_back(placeholderGroup);
+    Timestamp timestamp = 10000000;
 
     CSearchResult c_search_result_on_smallIndex;
-    auto res_before_load_index = Search(
-        segment, plan, placeholderGroup, {}, &c_search_result_on_smallIndex);
+    auto res_before_load_index = Search(segment,
+                                        plan,
+                                        placeholderGroup,
+                                        {},
+                                        timestamp,
+                                        &c_search_result_on_smallIndex);
     ASSERT_EQ(res_before_load_index.error_code, Success);
 
     // load index to segment
@@ -2277,6 +2501,7 @@ TEST(CApiTest, Indexing_With_float_Predicate_Range) {
                                        plan,
                                        placeholderGroup,
                                        {},
+                                       timestamp,
                                        &c_search_result_on_bigIndex);
     ASSERT_EQ(res_after_load_index.error_code, Success);
 
@@ -2301,11 +2526,11 @@ TEST(CApiTest, Indexing_Expr_With_float_Predicate_Range) {
     // insert data to segment
     constexpr auto TOPK = 5;
 
-    std::string schema_string =
-        generate_collection_schema(knowhere::metric::L2, DIM, false);
+    std::string schema_string = generate_collection_schema(
+        knowhere::metric::L2, DIM, VectorType::FloatVector);
     auto collection = NewCollection(schema_string.c_str());
     auto schema = ((segcore::Collection*)collection)->get_schema();
-   CSegmentInterface segment;
+    CSegmentInterface segment;
     auto status = NewSegment(collection, Growing, -1, &segment);
     ASSERT_EQ(status.error_code, Success);
 
@@ -2389,10 +2614,15 @@ TEST(CApiTest, Indexing_Expr_With_float_Predicate_Range) {
 
     std::vector<CPlaceholderGroup> placeholderGroups;
     placeholderGroups.push_back(placeholderGroup);
+    Timestamp timestamp = 10000000;
 
     CSearchResult c_search_result_on_smallIndex;
-    auto res_before_load_index = Search(
-        segment, plan, placeholderGroup, {}, &c_search_result_on_smallIndex);
+    auto res_before_load_index = Search(segment,
+                                        plan,
+                                        placeholderGroup,
+                                        {},
+                                        timestamp,
+                                        &c_search_result_on_smallIndex);
     ASSERT_EQ(res_before_load_index.error_code, Success);
 
     // load index to segment
@@ -2453,6 +2683,7 @@ TEST(CApiTest, Indexing_Expr_With_float_Predicate_Range) {
                                        plan,
                                        placeholderGroup,
                                        {},
+                                       timestamp,
                                        &c_search_result_on_bigIndex);
     ASSERT_EQ(res_after_load_index.error_code, Success);
 
@@ -2477,8 +2708,8 @@ TEST(CApiTest, Indexing_With_float_Predicate_Term) {
     // insert data to segment
     constexpr auto TOPK = 5;
 
-    std::string schema_string =
-        generate_collection_schema(knowhere::metric::L2, DIM, false);
+    std::string schema_string = generate_collection_schema(
+        knowhere::metric::L2, DIM, VectorType::FloatVector);
     auto collection = NewCollection(schema_string.c_str());
     auto schema = ((segcore::Collection*)collection)->get_schema();
     CSegmentInterface segment;
@@ -2557,10 +2788,15 @@ TEST(CApiTest, Indexing_With_float_Predicate_Term) {
 
     std::vector<CPlaceholderGroup> placeholderGroups;
     placeholderGroups.push_back(placeholderGroup);
+    Timestamp timestamp = 10000000;
 
     CSearchResult c_search_result_on_smallIndex;
-    auto res_before_load_index = Search(
-        segment, plan, placeholderGroup, {}, &c_search_result_on_smallIndex);
+    auto res_before_load_index = Search(segment,
+                                        plan,
+                                        placeholderGroup,
+                                        {},
+                                        timestamp,
+                                        &c_search_result_on_smallIndex);
     ASSERT_EQ(res_before_load_index.error_code, Success);
 
     // load index to segment
@@ -2621,6 +2857,7 @@ TEST(CApiTest, Indexing_With_float_Predicate_Term) {
                                        plan,
                                        placeholderGroup,
                                        {},
+                                       timestamp,
                                        &c_search_result_on_bigIndex);
     ASSERT_EQ(res_after_load_index.error_code, Success);
 
@@ -2645,8 +2882,8 @@ TEST(CApiTest, Indexing_Expr_With_float_Predicate_Term) {
     // insert data to segment
     constexpr auto TOPK = 5;
 
-    std::string schema_string =
-        generate_collection_schema(knowhere::metric::L2, DIM, false);
+    std::string schema_string = generate_collection_schema(
+        knowhere::metric::L2, DIM, VectorType::FloatVector);
     auto collection = NewCollection(schema_string.c_str());
     auto schema = ((segcore::Collection*)collection)->get_schema();
     CSegmentInterface segment;
@@ -2726,10 +2963,15 @@ TEST(CApiTest, Indexing_Expr_With_float_Predicate_Term) {
 
     std::vector<CPlaceholderGroup> placeholderGroups;
     placeholderGroups.push_back(placeholderGroup);
+    Timestamp timestamp = 10000000;
 
     CSearchResult c_search_result_on_smallIndex;
-    auto res_before_load_index = Search(
-        segment, plan, placeholderGroup, {}, &c_search_result_on_smallIndex);
+    auto res_before_load_index = Search(segment,
+                                        plan,
+                                        placeholderGroup,
+                                        {},
+                                        timestamp,
+                                        &c_search_result_on_smallIndex);
     ASSERT_EQ(res_before_load_index.error_code, Success);
 
     // load index to segment
@@ -2790,6 +3032,7 @@ TEST(CApiTest, Indexing_Expr_With_float_Predicate_Term) {
                                        plan,
                                        placeholderGroup,
                                        {},
+                                       timestamp,
                                        &c_search_result_on_bigIndex);
     ASSERT_EQ(res_after_load_index.error_code, Success);
 
@@ -2814,9 +3057,10 @@ TEST(CApiTest, Indexing_With_binary_Predicate_Range) {
     // insert data to segment
     constexpr auto TOPK = 5;
 
-    std::string schema_string =
-        generate_collection_schema(knowhere::metric::JACCARD, DIM, true);
-    auto collection = NewCollection(schema_string.c_str());
+    std::string schema_string = generate_collection_schema(
+        knowhere::metric::JACCARD, DIM, VectorType::BinaryVector);
+    auto collection =
+        NewCollection(schema_string.c_str(), knowhere::metric::JACCARD);
     auto schema = ((segcore::Collection*)collection)->get_schema();
     CSegmentInterface segment;
     auto status = NewSegment(collection, Growing, -1, &segment);
@@ -2900,10 +3144,15 @@ TEST(CApiTest, Indexing_With_binary_Predicate_Range) {
 
     std::vector<CPlaceholderGroup> placeholderGroups;
     placeholderGroups.push_back(placeholderGroup);
+    Timestamp timestamp = 10000000;
 
     CSearchResult c_search_result_on_smallIndex;
-    auto res_before_load_index = Search(
-        segment, plan, placeholderGroup, {}, &c_search_result_on_smallIndex);
+    auto res_before_load_index = Search(segment,
+                                        plan,
+                                        placeholderGroup,
+                                        {},
+                                        timestamp,
+                                        &c_search_result_on_smallIndex);
     ASSERT_EQ(res_before_load_index.error_code, Success);
 
     // load index to segment
@@ -2965,6 +3214,7 @@ TEST(CApiTest, Indexing_With_binary_Predicate_Range) {
                                        plan,
                                        placeholderGroup,
                                        {},
+                                       timestamp,
                                        &c_search_result_on_bigIndex);
     ASSERT_EQ(res_after_load_index.error_code, Success);
 
@@ -2989,9 +3239,10 @@ TEST(CApiTest, Indexing_Expr_With_binary_Predicate_Range) {
     // insert data to segment
     constexpr auto TOPK = 5;
 
-    std::string schema_string =
-        generate_collection_schema(knowhere::metric::JACCARD, DIM, true);
-    auto collection = NewCollection(schema_string.c_str());
+    std::string schema_string = generate_collection_schema(
+        knowhere::metric::JACCARD, DIM, VectorType::BinaryVector);
+    auto collection =
+        NewCollection(schema_string.c_str(), knowhere::metric::JACCARD);
     auto schema = ((segcore::Collection*)collection)->get_schema();
     CSegmentInterface segment;
     auto status = NewSegment(collection, Growing, -1, &segment);
@@ -3075,10 +3326,15 @@ TEST(CApiTest, Indexing_Expr_With_binary_Predicate_Range) {
 
     std::vector<CPlaceholderGroup> placeholderGroups;
     placeholderGroups.push_back(placeholderGroup);
+    Timestamp timestamp = 10000000;
 
     CSearchResult c_search_result_on_smallIndex;
-    auto res_before_load_index = Search(
-        segment, plan, placeholderGroup, {}, &c_search_result_on_smallIndex);
+    auto res_before_load_index = Search(segment,
+                                        plan,
+                                        placeholderGroup,
+                                        {},
+                                        timestamp,
+                                        &c_search_result_on_smallIndex);
     ASSERT_TRUE(res_before_load_index.error_code == Success)
         << res_before_load_index.error_msg;
 
@@ -3140,6 +3396,7 @@ TEST(CApiTest, Indexing_Expr_With_binary_Predicate_Range) {
                                        plan,
                                        placeholderGroup,
                                        {},
+                                       timestamp,
                                        &c_search_result_on_bigIndex);
     ASSERT_EQ(res_after_load_index.error_code, Success);
 
@@ -3164,9 +3421,10 @@ TEST(CApiTest, Indexing_With_binary_Predicate_Term) {
     // insert data to segment
     constexpr auto TOPK = 5;
 
-    std::string schema_string =
-        generate_collection_schema(knowhere::metric::JACCARD, DIM, true);
-    auto collection = NewCollection(schema_string.c_str());
+    std::string schema_string = generate_collection_schema(
+        knowhere::metric::JACCARD, DIM, VectorType::BinaryVector);
+    auto collection =
+        NewCollection(schema_string.c_str(), knowhere::metric::JACCARD);
     auto schema = ((segcore::Collection*)collection)->get_schema();
     CSegmentInterface segment;
     auto status = NewSegment(collection, Growing, -1, &segment);
@@ -3245,10 +3503,15 @@ TEST(CApiTest, Indexing_With_binary_Predicate_Term) {
 
     std::vector<CPlaceholderGroup> placeholderGroups;
     placeholderGroups.push_back(placeholderGroup);
+    Timestamp timestamp = 10000000;
 
     CSearchResult c_search_result_on_smallIndex;
-    auto res_before_load_index = Search(
-        segment, plan, placeholderGroup, {}, &c_search_result_on_smallIndex);
+    auto res_before_load_index = Search(segment,
+                                        plan,
+                                        placeholderGroup,
+                                        {},
+                                        timestamp,
+                                        &c_search_result_on_smallIndex);
     ASSERT_EQ(res_before_load_index.error_code, Success);
 
     // load index to segment
@@ -3309,6 +3572,7 @@ TEST(CApiTest, Indexing_With_binary_Predicate_Term) {
                                        plan,
                                        placeholderGroup,
                                        {},
+                                       timestamp,
                                        &c_search_result_on_bigIndex);
     ASSERT_EQ(res_after_load_index.error_code, Success);
 
@@ -3355,9 +3619,10 @@ TEST(CApiTest, Indexing_Expr_With_binary_Predicate_Term) {
     // insert data to segment
     constexpr auto TOPK = 5;
 
-    std::string schema_string =
-        generate_collection_schema(knowhere::metric::JACCARD, DIM, true);
-    auto collection = NewCollection(schema_string.c_str());
+    std::string schema_string = generate_collection_schema(
+        knowhere::metric::JACCARD, DIM, VectorType::BinaryVector);
+    auto collection =
+        NewCollection(schema_string.c_str(), knowhere::metric::JACCARD);
     auto schema = ((segcore::Collection*)collection)->get_schema();
     CSegmentInterface segment;
     auto status = NewSegment(collection, Growing, -1, &segment);
@@ -3436,11 +3701,15 @@ TEST(CApiTest, Indexing_Expr_With_binary_Predicate_Term) {
 
     std::vector<CPlaceholderGroup> placeholderGroups;
     placeholderGroups.push_back(placeholderGroup);
-    Timestamp time = 10000000;
+    Timestamp timestamp = 10000000;
 
     CSearchResult c_search_result_on_smallIndex;
-    auto res_before_load_index = Search(
-        segment, plan, placeholderGroup, {}, &c_search_result_on_smallIndex);
+    auto res_before_load_index = Search(segment,
+                                        plan,
+                                        placeholderGroup,
+                                        {},
+                                        timestamp,
+                                        &c_search_result_on_smallIndex);
     ASSERT_EQ(res_before_load_index.error_code, Success);
 
     // load index to segment
@@ -3501,6 +3770,7 @@ TEST(CApiTest, Indexing_Expr_With_binary_Predicate_Term) {
                                        plan,
                                        placeholderGroup,
                                        {},
+                                       timestamp,
                                        &c_search_result_on_bigIndex);
     ASSERT_EQ(res_after_load_index.error_code, Success);
 
@@ -3564,8 +3834,8 @@ TEST(CApiTest, SealedSegmentTest) {
 TEST(CApiTest, SealedSegment_search_float_Predicate_Range) {
     constexpr auto TOPK = 5;
 
-    std::string schema_string =
-        generate_collection_schema(knowhere::metric::L2, DIM, false);
+    std::string schema_string = generate_collection_schema(
+        knowhere::metric::L2, DIM, VectorType::FloatVector);
     auto collection = NewCollection(schema_string.c_str());
     auto schema = ((segcore::Collection*)collection)->get_schema();
     CSegmentInterface segment;
@@ -3639,7 +3909,7 @@ TEST(CApiTest, SealedSegment_search_float_Predicate_Range) {
 
     std::vector<CPlaceholderGroup> placeholderGroups;
     placeholderGroups.push_back(placeholderGroup);
-    Timestamp time = 10000000;
+    Timestamp timestamp = 10000000;
 
     // load index to segment
     auto indexing = generate_index(vec_col.data(),
@@ -3698,6 +3968,7 @@ TEST(CApiTest, SealedSegment_search_float_Predicate_Range) {
                                        plan,
                                        placeholderGroup,
                                        {},
+                                       timestamp,
                                        &c_search_result_on_bigIndex);
     ASSERT_EQ(res_after_load_index.error_code, Success);
 
@@ -3717,8 +3988,8 @@ TEST(CApiTest, SealedSegment_search_float_Predicate_Range) {
 
 TEST(CApiTest, SealedSegment_search_without_predicates) {
     constexpr auto TOPK = 5;
-    std::string schema_string =
-        generate_collection_schema(knowhere::metric::L2, DIM, false);
+    std::string schema_string = generate_collection_schema(
+        knowhere::metric::L2, DIM, VectorType::FloatVector);
     auto collection = NewCollection(schema_string.c_str());
     auto schema = ((segcore::Collection*)collection)->get_schema();
     CSegmentInterface segment;
@@ -3776,12 +4047,14 @@ TEST(CApiTest, SealedSegment_search_without_predicates) {
     std::vector<CPlaceholderGroup> placeholderGroups;
     placeholderGroups.push_back(placeholderGroup);
     CSearchResult search_result;
-    auto res = Search(segment, plan, placeholderGroup, {}, &search_result);
+    auto res = Search(
+        segment, plan, placeholderGroup, {}, N + ts_offset, &search_result);
     std::cout << res.error_msg << std::endl;
     ASSERT_EQ(res.error_code, Success);
 
     CSearchResult search_result2;
-    auto res2 = Search(segment, plan, placeholderGroup, {}, &search_result2);
+    auto res2 = Search(
+        segment, plan, placeholderGroup, {}, N + ts_offset, &search_result2);
     ASSERT_EQ(res2.error_code, Success);
 
     DeleteSearchPlan(plan);
@@ -3795,8 +4068,8 @@ TEST(CApiTest, SealedSegment_search_without_predicates) {
 TEST(CApiTest, SealedSegment_search_float_With_Expr_Predicate_Range) {
     constexpr auto TOPK = 5;
 
-    std::string schema_string =
-        generate_collection_schema(knowhere::metric::L2, DIM, false);
+    std::string schema_string = generate_collection_schema(
+        knowhere::metric::L2, DIM, VectorType::FloatVector);
     auto collection = NewCollection(schema_string.c_str());
     auto schema = ((segcore::Collection*)collection)->get_schema();
     CSegmentInterface segment;
@@ -3870,6 +4143,7 @@ TEST(CApiTest, SealedSegment_search_float_With_Expr_Predicate_Range) {
 
     std::vector<CPlaceholderGroup> placeholderGroups;
     placeholderGroups.push_back(placeholderGroup);
+    Timestamp timestamp = 10000000;
 
     // load index to segment
     auto indexing = generate_index(vec_col.data(),
@@ -3929,8 +4203,12 @@ TEST(CApiTest, SealedSegment_search_float_With_Expr_Predicate_Range) {
     }
 
     CSearchResult c_search_result_on_bigIndex;
-    auto res_after_load_index = Search(
-        segment, plan, placeholderGroup, {}, &c_search_result_on_bigIndex);
+    auto res_after_load_index = Search(segment,
+                                       plan,
+                                       placeholderGroup,
+                                       {},
+                                       timestamp,
+                                       &c_search_result_on_bigIndex);
     ASSERT_EQ(res_after_load_index.error_code, Success);
 
     auto search_result_on_bigIndex = (SearchResult*)c_search_result_on_bigIndex;
@@ -4226,7 +4504,8 @@ TEST(CApiTest, RANGE_SEARCH_WITH_RADIUS_WHEN_IP) {
     placeholderGroups.push_back(placeholderGroup);
 
     CSearchResult search_result;
-    auto res = Search(segment, plan, placeholderGroup, {}, &search_result);
+    auto res =
+        Search(segment, plan, placeholderGroup, {}, ts_offset, &search_result);
     ASSERT_EQ(res.error_code, Success);
 
     DeleteSearchPlan(plan);
@@ -4237,7 +4516,8 @@ TEST(CApiTest, RANGE_SEARCH_WITH_RADIUS_WHEN_IP) {
 }
 
 TEST(CApiTest, RANGE_SEARCH_WITH_RADIUS_AND_RANGE_FILTER_WHEN_IP) {
-    auto c_collection = NewCollection(get_default_schema_config());
+    auto c_collection =
+        NewCollection(get_default_schema_config(), knowhere::metric::IP);
     CSegmentInterface segment;
     auto status = NewSegment(c_collection, Growing, -1, &segment);
     ASSERT_EQ(status.error_code, Success);
@@ -4289,7 +4569,8 @@ TEST(CApiTest, RANGE_SEARCH_WITH_RADIUS_AND_RANGE_FILTER_WHEN_IP) {
     placeholderGroups.push_back(placeholderGroup);
 
     CSearchResult search_result;
-    auto res = Search(segment, plan, placeholderGroup, {}, &search_result);
+    auto res =
+        Search(segment, plan, placeholderGroup, {}, ts_offset, &search_result);
     ASSERT_EQ(res.error_code, Success);
 
     DeleteSearchPlan(plan);
@@ -4352,7 +4633,8 @@ TEST(CApiTest, RANGE_SEARCH_WITH_RADIUS_WHEN_L2) {
     placeholderGroups.push_back(placeholderGroup);
 
     CSearchResult search_result;
-    auto res = Search(segment, plan, placeholderGroup, {}, &search_result);
+    auto res =
+        Search(segment, plan, placeholderGroup, {}, ts_offset, &search_result);
     ASSERT_EQ(res.error_code, Success);
 
     DeleteSearchPlan(plan);
@@ -4415,7 +4697,8 @@ TEST(CApiTest, RANGE_SEARCH_WITH_RADIUS_AND_RANGE_FILTER_WHEN_L2) {
     placeholderGroups.push_back(placeholderGroup);
 
     CSearchResult search_result;
-    auto res = Search(segment, plan, placeholderGroup, {}, &search_result);
+    auto res =
+        Search(segment, plan, placeholderGroup, {}, ts_offset, &search_result);
     ASSERT_EQ(res.error_code, Success);
 
     DeleteSearchPlan(plan);
@@ -4571,4 +4854,438 @@ TEST(CApiTest, AssembeChunkPerfTest) {
     // std::string s;
     // boost::to_string(result, s);
     // std::cout << s << std::endl;
+}
+
+TEST(CApiTest, Indexing_Without_Predicate_float16) {
+    // insert data to segment
+    constexpr auto TOPK = 5;
+
+    std::string schema_string = generate_collection_schema(
+        knowhere::metric::L2, DIM, VectorType::Float16Vector);
+    auto collection = NewCollection(schema_string.c_str());
+    auto schema = ((segcore::Collection*)collection)->get_schema();
+    CSegmentInterface segment;
+    auto status = NewSegment(collection, Growing, -1, &segment);
+    ASSERT_EQ(status.error_code, Success);
+
+    auto N = ROW_COUNT;
+    auto dataset = DataGen(schema, N);
+    auto vec_col = dataset.get_col<float16>(FieldId(100));
+    auto query_ptr = vec_col.data() + BIAS * DIM;
+
+    int64_t offset;
+    PreInsert(segment, N, &offset);
+
+    auto insert_data = serialize(dataset.raw_);
+    auto ins_res = Insert(segment,
+                          offset,
+                          N,
+                          dataset.row_ids_.data(),
+                          dataset.timestamps_.data(),
+                          insert_data.data(),
+                          insert_data.size());
+    ASSERT_EQ(ins_res.error_code, Success);
+
+    milvus::proto::plan::PlanNode plan_node;
+    auto vector_anns = plan_node.mutable_vector_anns();
+    vector_anns->set_vector_type(
+        milvus::proto::plan::VectorType::Float16Vector);
+    vector_anns->set_placeholder_tag("$0");
+    vector_anns->set_field_id(100);
+    auto query_info = vector_anns->mutable_query_info();
+    query_info->set_topk(5);
+    query_info->set_round_decimal(-1);
+    query_info->set_metric_type("L2");
+    query_info->set_search_params(R"({"nprobe": 10})");
+    auto plan_str = plan_node.SerializeAsString();
+
+    // create place_holder_group
+    int num_queries = 5;
+    auto raw_group =
+        CreateFloat16PlaceholderGroupFromBlob(num_queries, DIM, query_ptr);
+    auto blob = raw_group.SerializeAsString();
+
+    // search on segment's small index
+    void* plan = nullptr;
+    status = CreateSearchPlanByExpr(
+        collection, plan_str.data(), plan_str.size(), &plan);
+    ASSERT_EQ(status.error_code, Success);
+
+    void* placeholderGroup = nullptr;
+    status = ParsePlaceholderGroup(
+        plan, blob.data(), blob.length(), &placeholderGroup);
+    ASSERT_EQ(status.error_code, Success);
+
+    std::vector<CPlaceholderGroup> placeholderGroups;
+    placeholderGroups.push_back(placeholderGroup);
+
+    Timestamp timestmap = 10000000;
+
+    CSearchResult c_search_result_on_smallIndex;
+    auto res_before_load_index = Search(segment,
+                                        plan,
+                                        placeholderGroup,
+                                        {},
+                                        timestmap,
+                                        &c_search_result_on_smallIndex);
+    ASSERT_EQ(res_before_load_index.error_code, Success);
+
+    // load index to segment
+    auto indexing = generate_index(vec_col.data(),
+                                   DataType::VECTOR_FLOAT16,
+                                   knowhere::metric::L2,
+                                   IndexEnum::INDEX_FAISS_IDMAP,
+                                   DIM,
+                                   N);
+
+    // gen query dataset
+    auto query_dataset = knowhere::GenDataSet(num_queries, DIM, query_ptr);
+    auto vec_index = dynamic_cast<VectorIndex*>(indexing.get());
+    auto search_plan = reinterpret_cast<milvus::query::Plan*>(plan);
+    SearchInfo search_info = search_plan->plan_node_->search_info_;
+    auto result_on_index =
+        vec_index->Query(query_dataset, search_info, nullptr);
+    auto ids = result_on_index->seg_offsets_.data();
+    auto dis = result_on_index->distances_.data();
+    std::vector<int64_t> vec_ids(ids, ids + TOPK * num_queries);
+    std::vector<float> vec_dis;
+    for (int j = 0; j < TOPK * num_queries; ++j) {
+        vec_dis.push_back(dis[j] * -1);
+    }
+
+    auto search_result_on_raw_index =
+        (SearchResult*)c_search_result_on_smallIndex;
+    search_result_on_raw_index->seg_offsets_ = vec_ids;
+    search_result_on_raw_index->distances_ = vec_dis;
+
+    auto binary_set = indexing->Serialize(milvus::Config{});
+    void* c_load_index_info = nullptr;
+    status = NewLoadIndexInfo(&c_load_index_info);
+    ASSERT_EQ(status.error_code, Success);
+    std::string index_type_key = "index_type";
+    std::string index_type_value = IndexEnum::INDEX_FAISS_IDMAP;
+    std::string metric_type_key = "metric_type";
+    std::string metric_type_value = knowhere::metric::L2;
+
+    AppendIndexParam(
+        c_load_index_info, index_type_key.c_str(), index_type_value.c_str());
+    AppendIndexParam(
+        c_load_index_info, metric_type_key.c_str(), metric_type_value.c_str());
+    AppendFieldInfo(
+        c_load_index_info, 0, 0, 0, 100, CDataType::Float16Vector, false, "");
+    AppendIndexEngineVersionToLoadInfo(
+        c_load_index_info,
+        knowhere::Version::GetCurrentVersion().VersionNumber());
+    AppendIndex(c_load_index_info, (CBinarySet)&binary_set);
+
+    // load index for vec field, load raw data for scalar field
+    auto sealed_segment = SealedCreator(schema, dataset);
+    sealed_segment->DropFieldData(FieldId(100));
+    sealed_segment->LoadIndex(*(LoadIndexInfo*)c_load_index_info);
+    CSearchResult c_search_result_on_bigIndex;
+    auto res_after_load_index = Search(sealed_segment.get(),
+                                       plan,
+                                       placeholderGroup,
+                                       {},
+                                       timestmap,
+                                       &c_search_result_on_bigIndex);
+    ASSERT_EQ(res_after_load_index.error_code, Success);
+
+    auto search_result_on_raw_index_json =
+        SearchResultToJson(*search_result_on_raw_index);
+    auto search_result_on_bigIndex_json =
+        SearchResultToJson((*(SearchResult*)c_search_result_on_bigIndex));
+
+    ASSERT_EQ(search_result_on_raw_index_json.dump(1),
+              search_result_on_bigIndex_json.dump(1));
+
+    DeleteLoadIndexInfo(c_load_index_info);
+    DeleteSearchPlan(plan);
+    DeletePlaceholderGroup(placeholderGroup);
+    DeleteSearchResult(c_search_result_on_smallIndex);
+    DeleteSearchResult(c_search_result_on_bigIndex);
+    DeleteCollection(collection);
+    DeleteSegment(segment);
+}
+
+TEST(CApiTest, Indexing_Without_Predicate_bfloat16) {
+    // insert data to segment
+    constexpr auto TOPK = 5;
+
+    std::string schema_string = generate_collection_schema(
+        knowhere::metric::L2, DIM, VectorType::BFloat16Vector);
+    auto collection = NewCollection(schema_string.c_str());
+    auto schema = ((segcore::Collection*)collection)->get_schema();
+    CSegmentInterface segment;
+    auto status = NewSegment(collection, Growing, -1, &segment);
+    ASSERT_EQ(status.error_code, Success);
+
+    auto N = ROW_COUNT;
+    auto dataset = DataGen(schema, N);
+    auto vec_col = dataset.get_col<bfloat16>(FieldId(100));
+    auto query_ptr = vec_col.data() + BIAS * DIM;
+
+    int64_t offset;
+    PreInsert(segment, N, &offset);
+
+    auto insert_data = serialize(dataset.raw_);
+    auto ins_res = Insert(segment,
+                          offset,
+                          N,
+                          dataset.row_ids_.data(),
+                          dataset.timestamps_.data(),
+                          insert_data.data(),
+                          insert_data.size());
+    ASSERT_EQ(ins_res.error_code, Success);
+
+    milvus::proto::plan::PlanNode plan_node;
+    auto vector_anns = plan_node.mutable_vector_anns();
+    vector_anns->set_vector_type(
+        milvus::proto::plan::VectorType::BFloat16Vector);
+    vector_anns->set_placeholder_tag("$0");
+    vector_anns->set_field_id(100);
+    auto query_info = vector_anns->mutable_query_info();
+    query_info->set_topk(5);
+    query_info->set_round_decimal(-1);
+    query_info->set_metric_type("L2");
+    query_info->set_search_params(R"({"nprobe": 10})");
+    auto plan_str = plan_node.SerializeAsString();
+
+    // create place_holder_group
+    int num_queries = 5;
+    auto raw_group =
+        CreateBFloat16PlaceholderGroupFromBlob(num_queries, DIM, query_ptr);
+    auto blob = raw_group.SerializeAsString();
+
+    // search on segment's small index
+    void* plan = nullptr;
+    status = CreateSearchPlanByExpr(
+        collection, plan_str.data(), plan_str.size(), &plan);
+    ASSERT_EQ(status.error_code, Success);
+
+    void* placeholderGroup = nullptr;
+    status = ParsePlaceholderGroup(
+        plan, blob.data(), blob.length(), &placeholderGroup);
+    ASSERT_EQ(status.error_code, Success);
+
+    std::vector<CPlaceholderGroup> placeholderGroups;
+    placeholderGroups.push_back(placeholderGroup);
+
+    Timestamp timestmap = 10000000;
+
+    CSearchResult c_search_result_on_smallIndex;
+    auto res_before_load_index = Search(segment,
+                                        plan,
+                                        placeholderGroup,
+                                        {},
+                                        timestmap,
+                                        &c_search_result_on_smallIndex);
+    ASSERT_EQ(res_before_load_index.error_code, Success);
+
+    // load index to segment
+    auto indexing = generate_index(vec_col.data(),
+                                   DataType::VECTOR_BFLOAT16,
+                                   knowhere::metric::L2,
+                                   IndexEnum::INDEX_FAISS_IDMAP,
+                                   DIM,
+                                   N);
+
+    // gen query dataset
+    auto query_dataset = knowhere::GenDataSet(num_queries, DIM, query_ptr);
+    auto vec_index = dynamic_cast<VectorIndex*>(indexing.get());
+    auto search_plan = reinterpret_cast<milvus::query::Plan*>(plan);
+    SearchInfo search_info = search_plan->plan_node_->search_info_;
+    auto result_on_index =
+        vec_index->Query(query_dataset, search_info, nullptr);
+    auto ids = result_on_index->seg_offsets_.data();
+    auto dis = result_on_index->distances_.data();
+    std::vector<int64_t> vec_ids(ids, ids + TOPK * num_queries);
+    std::vector<float> vec_dis;
+    for (int j = 0; j < TOPK * num_queries; ++j) {
+        vec_dis.push_back(dis[j] * -1);
+    }
+
+    auto search_result_on_raw_index =
+        (SearchResult*)c_search_result_on_smallIndex;
+    search_result_on_raw_index->seg_offsets_ = vec_ids;
+    search_result_on_raw_index->distances_ = vec_dis;
+
+    auto binary_set = indexing->Serialize(milvus::Config{});
+    void* c_load_index_info = nullptr;
+    status = NewLoadIndexInfo(&c_load_index_info);
+    ASSERT_EQ(status.error_code, Success);
+    std::string index_type_key = "index_type";
+    std::string index_type_value = IndexEnum::INDEX_FAISS_IDMAP;
+    std::string metric_type_key = "metric_type";
+    std::string metric_type_value = knowhere::metric::L2;
+
+    AppendIndexParam(
+        c_load_index_info, index_type_key.c_str(), index_type_value.c_str());
+    AppendIndexParam(
+        c_load_index_info, metric_type_key.c_str(), metric_type_value.c_str());
+    AppendFieldInfo(
+        c_load_index_info, 0, 0, 0, 100, CDataType::BFloat16Vector, false, "");
+    AppendIndexEngineVersionToLoadInfo(
+        c_load_index_info,
+        knowhere::Version::GetCurrentVersion().VersionNumber());
+    AppendIndex(c_load_index_info, (CBinarySet)&binary_set);
+
+    // load index for vec field, load raw data for scalar field
+    auto sealed_segment = SealedCreator(schema, dataset);
+    sealed_segment->DropFieldData(FieldId(100));
+    sealed_segment->LoadIndex(*(LoadIndexInfo*)c_load_index_info);
+    CSearchResult c_search_result_on_bigIndex;
+    auto res_after_load_index = Search(sealed_segment.get(),
+                                       plan,
+                                       placeholderGroup,
+                                       {},
+                                       timestmap,
+                                       &c_search_result_on_bigIndex);
+    ASSERT_EQ(res_after_load_index.error_code, Success);
+
+    auto search_result_on_raw_index_json =
+        SearchResultToJson(*search_result_on_raw_index);
+    auto search_result_on_bigIndex_json =
+        SearchResultToJson((*(SearchResult*)c_search_result_on_bigIndex));
+
+    ASSERT_EQ(search_result_on_raw_index_json.dump(1),
+              search_result_on_bigIndex_json.dump(1));
+
+    DeleteLoadIndexInfo(c_load_index_info);
+    DeleteSearchPlan(plan);
+    DeletePlaceholderGroup(placeholderGroup);
+    DeleteSearchResult(c_search_result_on_smallIndex);
+    DeleteSearchResult(c_search_result_on_bigIndex);
+    DeleteCollection(collection);
+    DeleteSegment(segment);
+}
+
+TEST(CApiTest, RANGE_SEARCH_WITH_RADIUS_AND_RANGE_FILTER_WHEN_IP_FLOAT16) {
+    auto c_collection =
+        NewCollection(get_float16_schema_config(), knowhere::metric::IP);
+    CSegmentInterface segment;
+    auto status = NewSegment(c_collection, Growing, -1, &segment);
+    ASSERT_EQ(status.error_code, Success);
+    auto col = (milvus::segcore::Collection*)c_collection;
+
+    int N = 10000;
+    auto dataset = DataGen(col->get_schema(), N);
+    int64_t ts_offset = 1000;
+
+    int64_t offset;
+    PreInsert(segment, N, &offset);
+
+    auto insert_data = serialize(dataset.raw_);
+    auto ins_res = Insert(segment,
+                          offset,
+                          N,
+                          dataset.row_ids_.data(),
+                          dataset.timestamps_.data(),
+                          insert_data.data(),
+                          insert_data.size());
+    ASSERT_EQ(ins_res.error_code, Success);
+
+    const char* raw_plan = R"(vector_anns: <
+                                             field_id: 100
+                                             query_info: <
+                                               topk: 10
+                                               round_decimal: 3
+                                               metric_type: "IP"
+                                               search_params: "{\"nprobe\": 10,\"radius\": 10, \"range_filter\": 20}"
+                                             >
+                                             placeholder_tag: "$0"
+     >)";
+    auto plan_str = translate_text_plan_to_binary_plan(raw_plan);
+
+    int num_queries = 10;
+    auto blob = generate_query_data_float16(num_queries);
+
+    void* plan = nullptr;
+    status = CreateSearchPlanByExpr(
+        c_collection, plan_str.data(), plan_str.size(), &plan);
+    ASSERT_EQ(status.error_code, Success);
+
+    void* placeholderGroup = nullptr;
+    status = ParsePlaceholderGroup(
+        plan, blob.data(), blob.length(), &placeholderGroup);
+    ASSERT_EQ(status.error_code, Success);
+
+    std::vector<CPlaceholderGroup> placeholderGroups;
+    placeholderGroups.push_back(placeholderGroup);
+
+    CSearchResult search_result;
+    auto res =
+        Search(segment, plan, placeholderGroup, {}, ts_offset, &search_result);
+    ASSERT_EQ(res.error_code, Success);
+
+    DeleteSearchPlan(plan);
+    DeletePlaceholderGroup(placeholderGroup);
+    DeleteSearchResult(search_result);
+    DeleteCollection(c_collection);
+    DeleteSegment(segment);
+}
+
+TEST(CApiTest, RANGE_SEARCH_WITH_RADIUS_AND_RANGE_FILTER_WHEN_IP_BFLOAT16) {
+    auto c_collection =
+        NewCollection(get_bfloat16_schema_config(), knowhere::metric::IP);
+    CSegmentInterface segment;
+    auto status = NewSegment(c_collection, Growing, -1, &segment);
+    ASSERT_EQ(status.error_code, Success);
+    auto col = (milvus::segcore::Collection*)c_collection;
+
+    int N = 10000;
+    auto dataset = DataGen(col->get_schema(), N);
+    int64_t ts_offset = 1000;
+
+    int64_t offset;
+    PreInsert(segment, N, &offset);
+
+    auto insert_data = serialize(dataset.raw_);
+    auto ins_res = Insert(segment,
+                          offset,
+                          N,
+                          dataset.row_ids_.data(),
+                          dataset.timestamps_.data(),
+                          insert_data.data(),
+                          insert_data.size());
+    ASSERT_EQ(ins_res.error_code, Success);
+
+    const char* raw_plan = R"(vector_anns: <
+                                             field_id: 100
+                                             query_info: <
+                                               topk: 10
+                                               round_decimal: 3
+                                               metric_type: "IP"
+                                               search_params: "{\"nprobe\": 10,\"radius\": 10, \"range_filter\": 20}"
+                                             >
+                                             placeholder_tag: "$0"
+     >)";
+    auto plan_str = translate_text_plan_to_binary_plan(raw_plan);
+
+    int num_queries = 10;
+    auto blob = generate_query_data_bfloat16(num_queries);
+
+    void* plan = nullptr;
+    status = CreateSearchPlanByExpr(
+        c_collection, plan_str.data(), plan_str.size(), &plan);
+    ASSERT_EQ(status.error_code, Success);
+
+    void* placeholderGroup = nullptr;
+    status = ParsePlaceholderGroup(
+        plan, blob.data(), blob.length(), &placeholderGroup);
+    ASSERT_EQ(status.error_code, Success);
+
+    std::vector<CPlaceholderGroup> placeholderGroups;
+    placeholderGroups.push_back(placeholderGroup);
+
+    CSearchResult search_result;
+    auto res =
+        Search(segment, plan, placeholderGroup, {}, ts_offset, &search_result);
+    ASSERT_EQ(res.error_code, Success);
+
+    DeleteSearchPlan(plan);
+    DeletePlaceholderGroup(placeholderGroup);
+    DeleteSearchResult(search_result);
+    DeleteCollection(c_collection);
+    DeleteSegment(segment);
 }

@@ -42,7 +42,7 @@ type SearchPlan struct {
 	cSearchPlan C.CSearchPlan
 }
 
-func createSearchPlanByExpr(ctx context.Context, col *Collection, expr []byte, metricType string) (*SearchPlan, error) {
+func createSearchPlanByExpr(ctx context.Context, col *Collection, expr []byte) (*SearchPlan, error) {
 	if col.collectionPtr == nil {
 		return nil, errors.New("nil collection ptr, collectionID = " + fmt.Sprintln(col.id))
 	}
@@ -54,13 +54,7 @@ func createSearchPlanByExpr(ctx context.Context, col *Collection, expr []byte, m
 		return nil, err1
 	}
 
-	newPlan := &SearchPlan{cSearchPlan: cPlan}
-	if len(metricType) != 0 {
-		newPlan.setMetricType(metricType)
-	} else {
-		newPlan.setMetricType(col.GetMetricType())
-	}
-	return newPlan, nil
+	return &SearchPlan{cSearchPlan: cPlan}, nil
 }
 
 func (plan *SearchPlan) getTopK() int64 {
@@ -74,7 +68,7 @@ func (plan *SearchPlan) setMetricType(metricType string) {
 	C.SetMetricType(plan.cSearchPlan, cmt)
 }
 
-func (plan *SearchPlan) getMetricType() string {
+func (plan *SearchPlan) GetMetricType() string {
 	cMetricType := C.GetMetricType(plan.cSearchPlan)
 	defer C.free(unsafe.Pointer(cMetricType))
 	metricType := C.GoString(cMetricType)
@@ -90,14 +84,13 @@ type SearchRequest struct {
 	cPlaceholderGroup C.CPlaceholderGroup
 	msgID             UniqueID
 	searchFieldID     UniqueID
+	mvccTimestamp     Timestamp
 }
 
 func NewSearchRequest(ctx context.Context, collection *Collection, req *querypb.SearchRequest, placeholderGrp []byte) (*SearchRequest, error) {
-	var err error
-	var plan *SearchPlan
 	metricType := req.GetReq().GetMetricType()
 	expr := req.Req.SerializedExprPlan
-	plan, err = createSearchPlanByExpr(ctx, collection, expr, metricType)
+	plan, err := createSearchPlanByExpr(ctx, collection, expr)
 	if err != nil {
 		return nil, err
 	}
@@ -117,6 +110,12 @@ func NewSearchRequest(ctx context.Context, collection *Collection, req *querypb.
 		return nil, err
 	}
 
+	metricTypeInPlan := plan.GetMetricType()
+	if len(metricType) != 0 && metricType != metricTypeInPlan {
+		plan.delete()
+		return nil, merr.WrapErrParameterInvalid(metricTypeInPlan, metricType, "metric type not match")
+	}
+
 	var fieldID C.int64_t
 	status = C.GetFieldID(plan.cSearchPlan, &fieldID)
 	if err = HandleCStatus(ctx, &status, "get fieldID from plan failed"); err != nil {
@@ -129,6 +128,7 @@ func NewSearchRequest(ctx context.Context, collection *Collection, req *querypb.
 		cPlaceholderGroup: cPlaceholderGroup,
 		msgID:             req.GetReq().GetBase().GetMsgID(),
 		searchFieldID:     int64(fieldID),
+		mvccTimestamp:     req.GetReq().GetMvccTimestamp(),
 	}
 
 	return ret, nil

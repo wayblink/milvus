@@ -171,7 +171,7 @@ func (cit *createIndexTask) parseIndexParams() error {
 		} else {
 			return merr.WrapErrParameterInvalid("supported field",
 				fmt.Sprintf("create index on %s field", cit.fieldSchema.DataType.String()),
-				"create index on json field is not supported")
+				fmt.Sprintf("create index on %s field is not supported", cit.fieldSchema.DataType.String()))
 		}
 	}
 
@@ -312,6 +312,7 @@ func fillDimension(field *schemapb.FieldSchema, indexParams map[string]string) e
 		schemapb.DataType_FloatVector,
 		schemapb.DataType_BinaryVector,
 		schemapb.DataType_Float16Vector,
+		schemapb.DataType_BFloat16Vector,
 	}
 	if !funcutil.SliceContain(vecDataTypes, field.GetDataType()) {
 		return nil
@@ -341,6 +342,7 @@ func checkTrain(field *schemapb.FieldSchema, indexParams map[string]string) erro
 		schemapb.DataType_FloatVector,
 		schemapb.DataType_BinaryVector,
 		schemapb.DataType_Float16Vector,
+		schemapb.DataType_BFloat16Vector,
 	}
 	if !funcutil.SliceContain(vecDataTypes, field.GetDataType()) {
 		return indexparamcheck.CheckIndexValid(field.GetDataType(), indexType, indexParams)
@@ -501,6 +503,10 @@ func (t *alterIndexTask) PreExecute(ctx context.Context) error {
 		return err
 	}
 	t.collectionID = collection
+
+	if len(t.req.GetIndexName()) == 0 {
+		return merr.WrapErrParameterInvalidMsg("index name is empty")
+	}
 
 	if err = validateIndexName(t.req.GetIndexName()); err != nil {
 		return err

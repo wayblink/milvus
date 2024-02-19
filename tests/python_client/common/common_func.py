@@ -158,7 +158,8 @@ def gen_binary_vec_field(name=ct.default_binary_vec_field_name, is_primary=False
 
 
 def gen_default_collection_schema(description=ct.default_desc, primary_field=ct.default_int64_field_name,
-                                  auto_id=False, dim=ct.default_dim, enable_dynamic_field=False, with_json=True, **kwargs):
+                                  auto_id=False, dim=ct.default_dim, enable_dynamic_field=False, with_json=True,
+                                  multiple_dim_array=[], **kwargs):
     if enable_dynamic_field:
         if primary_field is ct.default_int64_field_name:
             fields = [gen_int64_field(), gen_float_vec_field(dim=dim)]
@@ -167,11 +168,17 @@ def gen_default_collection_schema(description=ct.default_desc, primary_field=ct.
         else:
             log.error("Primary key only support int or varchar")
             assert False
+        if len(multiple_dim_array) != 0:
+            for other_dim in multiple_dim_array:
+                fields.append(gen_float_vec_field(gen_unique_str("multiple_vector"), dim=other_dim))
     else:
         fields = [gen_int64_field(), gen_float_field(), gen_string_field(), gen_json_field(),
                   gen_float_vec_field(dim=dim)]
         if with_json is False:
             fields.remove(gen_json_field())
+        if len(multiple_dim_array) != 0:
+            for other_dim in multiple_dim_array:
+                fields.append(gen_float_vec_field(gen_unique_str("multiple_vector"), dim=other_dim))
 
     schema, _ = ApiCollectionSchemaWrapper().init_collection_schema(fields=fields, description=description,
                                                                     primary_field=primary_field, auto_id=auto_id,
@@ -474,7 +481,8 @@ def gen_dataframe_multi_string_fields(string_fields, nb=ct.default_nb):
     return df
 
 
-def gen_dataframe_all_data_type(nb=ct.default_nb, dim=ct.default_dim, start=0, with_json=True, random_primary_key=False):
+def gen_dataframe_all_data_type(nb=ct.default_nb, dim=ct.default_dim, start=0, with_json=True,
+                                auto_id=False, random_primary_key=False):
     if not random_primary_key:
         int64_values = pd.Series(data=[i for i in range(start, start + nb)])
     else:
@@ -504,6 +512,8 @@ def gen_dataframe_all_data_type(nb=ct.default_nb, dim=ct.default_dim, start=0, w
     })
     if with_json is False:
         df.drop(ct.default_json_field_name, axis=1, inplace=True)
+    if auto_id:
+        df.drop(ct.default_int64_field_name, axis=1, inplace=True)
 
     return df
 
@@ -530,7 +540,7 @@ def gen_default_rows_data_all_data_type(nb=ct.default_nb, dim=ct.default_dim, st
     return array
 
 
-def gen_default_binary_dataframe_data(nb=ct.default_nb, dim=ct.default_dim, start=0):
+def gen_default_binary_dataframe_data(nb=ct.default_nb, dim=ct.default_dim, start=0, auto_id=False):
     int_values = pd.Series(data=[i for i in range(start, start + nb)])
     float_values = pd.Series(data=[np.float32(i) for i in range(start, start + nb)], dtype="float32")
     string_values = pd.Series(data=[str(i) for i in range(start, start + nb)], dtype="string")
@@ -541,6 +551,12 @@ def gen_default_binary_dataframe_data(nb=ct.default_nb, dim=ct.default_dim, star
         ct.default_string_field_name: string_values,
         ct.default_binary_vec_field_name: binary_vec_values
     })
+    if auto_id is True:
+        df = pd.DataFrame({
+            ct.default_float_field_name: float_values,
+            ct.default_string_field_name: string_values,
+            ct.default_binary_vec_field_name: binary_vec_values
+        })
     return df, binary_raw_values
 
 

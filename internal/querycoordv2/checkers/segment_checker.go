@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/samber/lo"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus/internal/proto/datapb"
@@ -61,8 +62,8 @@ func NewSegmentChecker(
 	}
 }
 
-func (c *SegmentChecker) ID() CheckerType {
-	return segmentChecker
+func (c *SegmentChecker) ID() utils.CheckerType {
+	return utils.SegmentChecker
 }
 
 func (c *SegmentChecker) Description() string {
@@ -120,25 +121,26 @@ func (c *SegmentChecker) checkReplica(ctx context.Context, replica *meta.Replica
 
 	// compare with targets to find the lack and redundancy of segments
 	lacks, redundancies := c.getSealedSegmentDiff(replica.GetCollectionID(), replica.GetID())
-	tasks := c.createSegmentLoadTasks(ctx, lacks, replica)
+	// loadCtx := trace.ContextWithSpan(context.Background(), c.meta.GetCollection(replica.CollectionID).LoadSpan)
+	tasks := c.createSegmentLoadTasks(c.getTraceCtx(ctx, replica.CollectionID), lacks, replica)
 	task.SetReason("lacks of segment", tasks...)
 	ret = append(ret, tasks...)
 
 	redundancies = c.filterSegmentInUse(replica, redundancies)
-	tasks = c.createSegmentReduceTasks(ctx, redundancies, replica.GetID(), querypb.DataScope_Historical)
+	tasks = c.createSegmentReduceTasks(c.getTraceCtx(ctx, replica.CollectionID), redundancies, replica.GetID(), querypb.DataScope_Historical)
 	task.SetReason("segment not exists in target", tasks...)
 	ret = append(ret, tasks...)
 
 	// compare inner dists to find repeated loaded segments
 	redundancies = c.findRepeatedSealedSegments(replica.GetID())
 	redundancies = c.filterExistedOnLeader(replica, redundancies)
-	tasks = c.createSegmentReduceTasks(ctx, redundancies, replica.GetID(), querypb.DataScope_Historical)
+	tasks = c.createSegmentReduceTasks(c.getTraceCtx(ctx, replica.CollectionID), redundancies, replica.GetID(), querypb.DataScope_Historical)
 	task.SetReason("redundancies of segment", tasks...)
 	ret = append(ret, tasks...)
 
 	// compare with target to find the lack and redundancy of segments
 	_, redundancies = c.getGrowingSegmentDiff(replica.GetCollectionID(), replica.GetID())
-	tasks = c.createSegmentReduceTasks(ctx, redundancies, replica.GetID(), querypb.DataScope_Streaming)
+	tasks = c.createSegmentReduceTasks(c.getTraceCtx(ctx, replica.CollectionID), redundancies, replica.GetID(), querypb.DataScope_Streaming)
 	task.SetReason("streaming segment not exists in target", tasks...)
 	ret = append(ret, tasks...)
 
@@ -342,39 +344,44 @@ func (c *SegmentChecker) createSegmentLoadTasks(ctx context.Context, segments []
 		return nil
 	}
 
-	isLevel0 := segments[0].GetLevel() == datapb.SegmentLevel_L0
-
-	shardSegments := make(map[string][]*meta.Segment)
-	for _, s := range segments {
-		if isLevel0 &&
-			len(c.dist.LeaderViewManager.GetLeadersByShard(s.GetInsertChannel())) == 0 {
-			continue
+	// filter out stopping nodes and outbound nodes
+	outboundNodes := c.meta.ResourceManager.CheckOutboundNodes(replica)
+	availableNodes := lo.Filter(replica.Replica.GetNodes(), func(node int64, _ int) bool {
+		stop, err := c.nodeMgr.IsStoppingNode(node)
+		if err != nil {
+			return false
 		}
-		channel := s.GetInsertChannel()
-		packedSegments := shardSegments[channel]
-		packedSegments = append(packedSegments, &meta.Segment{
-			SegmentInfo: s,
-		})
-		shardSegments[channel] = packedSegments
+		return !outboundNodes.Contain(node) && !stop
+	})
+
+	if len(availableNodes) == 0 {
+		return nil
 	}
+
+	isLevel0 := segments[0].GetLevel() == datapb.SegmentLevel_L0
+	shardSegments := lo.GroupBy(segments, func(s *datapb.SegmentInfo) string {
+		return s.GetInsertChannel()
+	})
 
 	plans := make([]balance.SegmentAssignPlan, 0)
 	for shard, segments := range shardSegments {
-		outboundNodes := c.meta.ResourceManager.CheckOutboundNodes(replica)
-		availableNodes := lo.Filter(replica.Replica.GetNodes(), func(node int64, _ int) bool {
-			stop, err := c.nodeMgr.IsStoppingNode(node)
-			if err != nil {
-				return false
-			}
+		// if channel is not subscribed yet, skip load segments
+		if len(c.dist.LeaderViewManager.GetLeadersByShard(shard)) == 0 {
+			continue
+		}
 
-			if isLevel0 {
-				leader := c.dist.LeaderViewManager.GetLatestLeadersByReplicaShard(replica, shard)
-				return !outboundNodes.Contain(node) && !stop && node == leader.ID
+		// L0 segment can only be assign to shard leader's node
+		if isLevel0 {
+			leader := c.dist.LeaderViewManager.GetLatestLeadersByReplicaShard(replica, shard)
+			availableNodes = []int64{leader.ID}
+		}
+
+		segmentInfos := lo.Map(segments, func(s *datapb.SegmentInfo, _ int) *meta.Segment {
+			return &meta.Segment{
+				SegmentInfo: s,
 			}
-			return !outboundNodes.Contain(node) && !stop
 		})
-
-		shardPlans := c.balancer.AssignSegment(replica.CollectionID, segments, availableNodes)
+		shardPlans := c.balancer.AssignSegment(replica.CollectionID, segmentInfos, availableNodes)
 		for i := range shardPlans {
 			shardPlans[i].ReplicaID = replica.GetID()
 		}
@@ -410,4 +417,13 @@ func (c *SegmentChecker) createSegmentReduceTasks(ctx context.Context, segments 
 		ret = append(ret, task)
 	}
 	return ret
+}
+
+func (c *SegmentChecker) getTraceCtx(ctx context.Context, collectionID int64) context.Context {
+	coll := c.meta.GetCollection(collectionID)
+	if coll == nil || coll.LoadSpan == nil {
+		return ctx
+	}
+
+	return trace.ContextWithSpan(ctx, coll.LoadSpan)
 }

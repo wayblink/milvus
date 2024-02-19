@@ -177,9 +177,10 @@ rootCoord:
   port: 53100
   grpc:
     serverMaxSendSize: 536870912
-    serverMaxRecvSize: 536870912
+    serverMaxRecvSize: 268435456
     clientMaxSendSize: 268435456
-    clientMaxRecvSize: 268435456
+    clientMaxRecvSize: 536870912
+  maxGeneralCapacity: 65536
 
 # Related configuration of proxy, used to validate client requests and reduce the returned results.
 proxy:
@@ -237,10 +238,10 @@ proxy:
   port: 19530
   internalPort: 19529
   grpc:
-    serverMaxSendSize: 67108864
+    serverMaxSendSize: 268435456
     serverMaxRecvSize: 67108864
     clientMaxSendSize: 268435456
-    clientMaxRecvSize: 268435456
+    clientMaxRecvSize: 67108864
 
 # Related configuration of queryCoord, used to manage topology and load balancing for the query nodes, and handoff from growing segments to sealed segments.
 queryCoord:
@@ -260,15 +261,16 @@ queryCoord:
   heartbeatAvailableInterval: 10000 # 10s, Only QueryNodes which fetched heartbeats within the duration are available
   loadTimeoutSeconds: 600
   checkHandoffInterval: 5000
+  growingRowCountWeight: 4.0
   # can specify ip for example
   # ip: 127.0.0.1
   ip: # if not specify address, will use the first unicastable address as local ip
   port: 19531
   grpc:
     serverMaxSendSize: 536870912
-    serverMaxRecvSize: 536870912
+    serverMaxRecvSize: 268435456
     clientMaxSendSize: 268435456
-    clientMaxRecvSize: 268435456
+    clientMaxRecvSize: 536870912
   taskMergeCap: 1
   taskExecutionCap: 256
   enableActiveStandby: false # Enable active-standby
@@ -302,6 +304,16 @@ queryNode:
     enabled: true # deprecated, TODO: remove it
     memoryLimit: 2147483648 # 2 GB, 2 * 1024 *1024 *1024 # deprecated, TODO: remove it
     readAheadPolicy: willneed # The read ahead policy of chunk cache, options: `normal, random, sequential, willneed, dontneed`
+    # Specifies the necessity for warming up the chunk cache.
+    # 1. If set to "sync" or "async," the original vector data
+    # will be synchronously/asynchronously loaded into the
+    # chunk cache during the load process. This approach has
+    # the potential to substantially reduce query/search latency
+    # for a specific duration post-load, albeit accompanied
+    # by a concurrent increase in disk usage;
+    # 2. If set to "off," original vector data will only
+    # be loaded into the chunk cache during search/query.
+    warmup: async # options: `sync, async, off`
   grouping:
     enabled: true
     maxNQ: 1000
@@ -339,9 +351,9 @@ queryNode:
   port: 21123
   grpc:
     serverMaxSendSize: 536870912
-    serverMaxRecvSize: 536870912
+    serverMaxRecvSize: 268435456
     clientMaxSendSize: 268435456
-    clientMaxRecvSize: 268435456
+    clientMaxRecvSize: 536870912
 
 indexCoord:
   bindIndexNodeMode:
@@ -363,9 +375,9 @@ indexNode:
   port: 21121
   grpc:
     serverMaxSendSize: 536870912
-    serverMaxRecvSize: 536870912
+    serverMaxRecvSize: 268435456
     clientMaxSendSize: 268435456
-    clientMaxRecvSize: 268435456
+    clientMaxRecvSize: 536870912
 
 dataCoord:
   channel:
@@ -373,9 +385,9 @@ dataCoord:
     balanceSilentDuration: 300 # The duration before the channelBalancer on datacoord to run
     balanceInterval: 360 #The interval for the channelBalancer on datacoord to check balance status
   segment:
-    maxSize: 512 # Maximum size of a segment in MB
+    maxSize: 1024 # Maximum size of a segment in MB
     diskSegmentMaxSize: 2048 # Maximum size of a segment in MB for collection which has Disk index
-    sealProportion: 0.23
+    sealProportion: 0.12
     # The time of the assignment expiration in ms
     # Warning! this parameter is an expert variable and closely related to data integrity. Without specific
     # target and solid understanding of the scenarios, it should not be changed. If it's necessary to alter
@@ -410,8 +422,12 @@ dataCoord:
 
     levelzero:
       forceTrigger:
-        minSize: 8 # The minmum size in MB to force trigger a LevelZero Compaction
+        minSize: 8388608 # The minmum size in bytes to force trigger a LevelZero Compaction, default as 8MB
         deltalogMinNum: 10 # the minimum number of deltalog files to force trigger a LevelZero Compaction
+  import:
+    filesPerPreImportTask: 2 # The maximum number of files allowed per pre-import task.
+    taskRetention: 10800 # The retention period in seconds for tasks in the Completed or Failed state.
+    inactiveTimeout: 1800 # The timeout duration in seconds for a task in the "InProgress" state if it remains inactive (with no progress updates).
 
   enableGarbageCollection: true
   gc:
@@ -425,16 +441,16 @@ dataCoord:
   port: 13333
   grpc:
     serverMaxSendSize: 536870912
-    serverMaxRecvSize: 536870912
+    serverMaxRecvSize: 268435456
     clientMaxSendSize: 268435456
-    clientMaxRecvSize: 268435456
+    clientMaxRecvSize: 536870912
 
 dataNode:
   dataSync:
     flowGraph:
       maxQueueLength: 16 # Maximum length of task queue in flowgraph
       maxParallelism: 1024 # Maximum number of tasks executed in parallel in the flowgraph
-    maxParallelSyncTaskNum: 6 # Maximum number of sync tasks executed in parallel in each flush manager
+    maxParallelSyncMgrTasks: 256 #The max concurrent sync task number of datanode sync mgr globally 
     skipMode:
       # when there are only timetick msg in flowgraph for a while (longer than coldTime),
       # flowGraph will turn on skip mode to skip most timeticks to reduce cost, especially there are a lot of channels
@@ -451,9 +467,9 @@ dataNode:
   port: 21124
   grpc:
     serverMaxSendSize: 536870912
-    serverMaxRecvSize: 536870912
+    serverMaxRecvSize: 268435456
     clientMaxSendSize: 268435456
-    clientMaxRecvSize: 268435456
+    clientMaxRecvSize: 536870912
   memory:
     forceSyncEnable: true # `true` to force sync if memory usage is too high
     forceSyncSegmentNum: 1 # number of segments to sync, segments with top largest buffer will be synced.
@@ -470,6 +486,8 @@ dataNode:
     # if this parameter <= 0, will set it as 1000
     # suggest to set it bigger on large collection numbers to avoid blocking
     updateChannelCheckpointMaxParallel: 1000
+  import:
+    maxConcurrentTaskNum: 16 # The maximum number of import/pre-import tasks allowed to run concurrently on a datanode.
 
 # Configures the system log output.
 log:
@@ -485,8 +503,10 @@ log:
 grpc:
   log:
     level: WARNING
-  serverMaxSendSize: 536870912
-  serverMaxRecvSize: 536870912
+    serverMaxSendSize: 536870912
+    serverMaxRecvSize: 268435456
+    clientMaxSendSize: 268435456
+    clientMaxRecvSize: 536870912
   client:
     compressionEnabled: false
     dialTimeout: 200
@@ -496,8 +516,6 @@ grpc:
     initialBackOff: 0.2 # seconds
     maxBackoff: 10 # seconds
     backoffMultiplier: 2.0 # deprecated
-  clientMaxSendSize: 268435456
-  clientMaxRecvSize: 268435456
 
 # Configure the proxy tls enable.
 tls:
@@ -533,6 +551,7 @@ common:
     highPriority: 10 # This parameter specify how many times the number of threads is the number of cores in high priority thread pool
     middlePriority: 5 # This parameter specify how many times the number of threads is the number of cores in middle priority thread pool
     lowPriority: 1 # This parameter specify how many times the number of threads is the number of cores in low priority thread pool
+  buildIndexThreadPoolRatio: 0.75
   DiskIndex:
     MaxDegree: 56
     SearchListSize: 100

@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"path"
 	"sync"
 	"time"
 
@@ -48,6 +49,42 @@ import (
 	"github.com/milvus-io/milvus/pkg/util/etcd"
 	"github.com/milvus-io/milvus/pkg/util/paramtable"
 )
+
+var params *paramtable.ComponentParam = paramtable.Get()
+
+type ClusterConfig struct {
+	// ProxyNum int
+	// todo coord num can be more than 1 if enable Active-Standby
+	// RootCoordNum int
+	// DataCoordNum int
+	// IndexCoordNum int
+	// QueryCoordNum int
+	QueryNodeNum int
+	DataNodeNum  int
+	IndexNodeNum int
+}
+
+func DefaultParams() map[string]string {
+	testPath := fmt.Sprintf("integration-test-%d", time.Now().Unix())
+	return map[string]string{
+		params.EtcdCfg.RootPath.Key:  testPath,
+		params.MinioCfg.RootPath.Key: testPath,
+		//"runtime.role": typeutil.StandaloneRole,
+		//params.IntegrationTestCfg.IntegrationMode.Key: "true",
+		params.LocalStorageCfg.Path.Key:              path.Join("/tmp", testPath),
+		params.CommonCfg.StorageType.Key:             "local",
+		params.DataNodeCfg.MemoryForceSyncEnable.Key: "false", // local execution will print too many logs
+		params.CommonCfg.GracefulStopTimeout.Key:     "10",
+	}
+}
+
+func DefaultClusterConfig() ClusterConfig {
+	return ClusterConfig{
+		QueryNodeNum: 1,
+		DataNodeNum:  1,
+		IndexNodeNum: 1,
+	}
+}
 
 type MiniClusterV2 struct {
 	ctx context.Context
@@ -118,6 +155,19 @@ func StartMiniClusterV2(ctx context.Context, opts ...OptionV2) (*MiniClusterV2, 
 		etcdCli:  cluster.EtcdCli,
 	}
 
+	ports, err := GetAvailablePorts(7)
+	if err != nil {
+		return nil, err
+	}
+	log.Info("minicluster ports", zap.Ints("ports", ports))
+	params.Save(params.RootCoordGrpcServerCfg.Port.Key, fmt.Sprint(ports[0]))
+	params.Save(params.DataCoordGrpcServerCfg.Port.Key, fmt.Sprint(ports[1]))
+	params.Save(params.QueryCoordGrpcServerCfg.Port.Key, fmt.Sprint(ports[2]))
+	params.Save(params.DataNodeGrpcServerCfg.Port.Key, fmt.Sprint(ports[3]))
+	params.Save(params.QueryNodeGrpcServerCfg.Port.Key, fmt.Sprint(ports[4]))
+	params.Save(params.IndexNodeGrpcServerCfg.Port.Key, fmt.Sprint(ports[5]))
+	params.Save(params.ProxyGrpcServerCfg.Port.Key, fmt.Sprint(ports[6]))
+
 	// setup clients
 	cluster.RootCoordClient, err = grpcrootcoordclient.NewClient(ctx)
 	if err != nil {
@@ -150,7 +200,7 @@ func StartMiniClusterV2(ctx context.Context, opts ...OptionV2) (*MiniClusterV2, 
 	}
 
 	// setup servers
-	cluster.factory = dependency.NewDefaultFactory(true)
+	cluster.factory = dependency.MockDefaultFactory(true, params)
 	chunkManager, err := cluster.factory.NewPersistentStorageChunkManager(cluster.ctx)
 	if err != nil {
 		return nil, err
@@ -190,20 +240,7 @@ func StartMiniClusterV2(ctx context.Context, opts ...OptionV2) (*MiniClusterV2, 
 
 func (cluster *MiniClusterV2) Start() error {
 	log.Info("mini cluster start")
-	ports, err := GetAvailablePorts(7)
-	if err != nil {
-		return err
-	}
-	log.Info("minicluster ports", zap.Ints("ports", ports))
-	params.Save(params.RootCoordGrpcServerCfg.Port.Key, fmt.Sprint(ports[0]))
-	params.Save(params.DataCoordGrpcServerCfg.Port.Key, fmt.Sprint(ports[1]))
-	params.Save(params.QueryCoordGrpcServerCfg.Port.Key, fmt.Sprint(ports[2]))
-	params.Save(params.DataNodeGrpcServerCfg.Port.Key, fmt.Sprint(ports[3]))
-	params.Save(params.QueryNodeGrpcServerCfg.Port.Key, fmt.Sprint(ports[4]))
-	params.Save(params.IndexNodeGrpcServerCfg.Port.Key, fmt.Sprint(ports[5]))
-	params.Save(params.ProxyGrpcServerCfg.Port.Key, fmt.Sprint(ports[6]))
-
-	err = cluster.RootCoord.Run()
+	err := cluster.RootCoord.Run()
 	if err != nil {
 		return err
 	}
@@ -288,6 +325,10 @@ func (cluster *MiniClusterV2) Stop() error {
 
 func (cluster *MiniClusterV2) GetContext() context.Context {
 	return cluster.ctx
+}
+
+func (cluster *MiniClusterV2) GetFactory() dependency.Factory {
+	return cluster.factory
 }
 
 func GetAvailablePorts(n int) ([]int, error) {

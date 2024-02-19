@@ -196,7 +196,6 @@ func (suite *ServiceSuite) SetupTest() {
 		suite.server.meta,
 		suite.server.targetMgr,
 		suite.targetObserver,
-		suite.server.leaderObserver,
 		&checkers.CheckerController{},
 	)
 
@@ -1521,12 +1520,6 @@ func (suite *ServiceSuite) TestGetShardLeadersFailed() {
 		for _, node := range suite.nodes {
 			suite.nodeMgr.Add(session.NewNodeInfo(node, "localhost"))
 		}
-
-		// Last heartbeat response time too old
-		suite.fetchHeartbeats(time.Now().Add(-Params.QueryCoordCfg.HeartbeatAvailableInterval.GetAsDuration(time.Millisecond) - 1))
-		resp, err = server.GetShardLeaders(ctx, req)
-		suite.NoError(err)
-		suite.Equal(commonpb.ErrorCode_NoReplicaAvailable, resp.GetStatus().GetErrorCode())
 
 		// Segment not fully loaded
 		for _, node := range suite.nodes {

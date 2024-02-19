@@ -28,7 +28,7 @@ const (
 
 // Define leaf errors here,
 // WARN: take care to add new error,
-// check whehter you can use the erorrs below before adding a new one.
+// check whether you can use the errors below before adding a new one.
 // Name: Err + related prefix + error name
 var (
 	// Service related
@@ -50,11 +50,15 @@ var (
 	ErrCollectionNumLimitExceeded = newMilvusError("exceeded the limit number of collections", 102, false)
 	ErrCollectionNotFullyLoaded   = newMilvusError("collection not fully loaded", 103, true)
 	ErrCollectionLoaded           = newMilvusError("collection already loaded", 104, false)
+	ErrCollectionIllegalSchema    = newMilvusError("illegal collection schema", 105, false)
 
 	// Partition related
 	ErrPartitionNotFound       = newMilvusError("partition not found", 200, false)
 	ErrPartitionNotLoaded      = newMilvusError("partition not loaded", 201, false)
 	ErrPartitionNotFullyLoaded = newMilvusError("partition not fully loaded", 202, true)
+
+	// General capacity related
+	ErrGeneralCapacityExceeded = newMilvusError("general capacity exceeded", 250, false)
 
 	// ResourceGroup related
 	ErrResourceGroupNotFound = newMilvusError("resource group not found", 300, false)
@@ -98,6 +102,7 @@ var (
 
 	// Parameter related
 	ErrParameterInvalid = newMilvusError("invalid parameter", 1100, false)
+	ErrParameterMissing = newMilvusError("missing parameter", 1101, false)
 
 	// Metrics related
 	ErrMetricNotFound = newMilvusError("metric not found", 1200, false)
@@ -118,6 +123,7 @@ var (
 	ErrAliasNotFound               = newMilvusError("alias not found", 1600, false)
 	ErrAliasCollectionNameConfilct = newMilvusError("alias and collection name conflict", 1601, false)
 	ErrAliasAlreadyExist           = newMilvusError("alias already exist", 1602, false)
+	ErrCollectionIDOfAliasNotFound = newMilvusError("collection id of alias not found", 1603, false)
 
 	// field related
 	ErrFieldNotFound    = newMilvusError("field not found", 1700, false)

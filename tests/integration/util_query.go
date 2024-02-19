@@ -75,26 +75,6 @@ func (s *MiniClusterSuite) waitForLoadInternal(ctx context.Context, dbName, coll
 	}
 }
 
-func waitingForLoad(ctx context.Context, cluster *MiniCluster, collection string) {
-	getLoadingProgress := func() *milvuspb.GetLoadingProgressResponse {
-		loadProgress, err := cluster.Proxy.GetLoadingProgress(ctx, &milvuspb.GetLoadingProgressRequest{
-			CollectionName: collection,
-		})
-		if err != nil {
-			panic("GetLoadingProgress fail")
-		}
-		return loadProgress
-	}
-	for getLoadingProgress().GetProgress() != 100 {
-		select {
-		case <-ctx.Done():
-			panic("load timeout")
-		default:
-			time.Sleep(500 * time.Millisecond)
-		}
-	}
-}
-
 func ConstructSearchRequest(
 	dbName, collectionName string,
 	expr string,
@@ -192,6 +172,17 @@ func constructPlaceholderGroup(nq, dim int, vectorType schemapb.DataType) *commo
 			}
 			values = append(values, ret)
 		}
+	// case schemapb.DataType_BFloat16Vector:
+	// 	placeholderType = commonpb.PlaceholderType_BFloat16Vector
+	// 	for i := 0; i < nq; i++ {
+	// 		total := dim * 2
+	// 		ret := make([]byte, total)
+	// 		_, err := rand.Read(ret)
+	// 		if err != nil {
+	// 			panic(err)
+	// 		}
+	// 		values = append(values, ret)
+	// 	}
 	default:
 		panic("invalid vector data type")
 	}

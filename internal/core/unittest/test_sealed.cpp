@@ -80,10 +80,11 @@ TEST(Sealed, without_predicate) {
         CreatePlaceholderGroupFromBlob(num_queries, 16, query_ptr);
     auto ph_group =
         ParsePlaceholderGroup(plan.get(), ph_group_raw.SerializeAsString());
+    Timestamp timestamp = 1000000;
 
     std::vector<const PlaceholderGroup*> ph_group_arr = {ph_group.get()};
 
-    auto sr = segment->Search(plan.get(), ph_group.get());
+    auto sr = segment->Search(plan.get(), ph_group.get(), timestamp);
     auto pre_result = SearchResultToJson(*sr);
     milvus::index::CreateIndexInfo create_index_info;
     create_index_info.field_type = DataType::VECTOR_FLOAT;
@@ -127,7 +128,7 @@ TEST(Sealed, without_predicate) {
     sealed_segment->DropFieldData(fake_id);
     sealed_segment->LoadIndex(load_info);
 
-    sr = sealed_segment->Search(plan.get(), ph_group.get());
+    sr = sealed_segment->Search(plan.get(), ph_group.get(), timestamp);
 
     auto post_result = SearchResultToJson(*sr);
     std::cout << "ref_result" << std::endl;
@@ -135,6 +136,9 @@ TEST(Sealed, without_predicate) {
     std::cout << "post_result" << std::endl;
     std::cout << post_result.dump(1);
     // ASSERT_EQ(ref_result.dump(1), post_result.dump(1));
+
+    sr = sealed_segment->Search(plan.get(), ph_group.get(), 0);
+    EXPECT_EQ(sr->get_total_result_count(), 0);
 }
 
 TEST(Sealed, with_predicate) {
@@ -196,10 +200,11 @@ TEST(Sealed, with_predicate) {
         CreatePlaceholderGroupFromBlob(num_queries, 16, query_ptr);
     auto ph_group =
         ParsePlaceholderGroup(plan.get(), ph_group_raw.SerializeAsString());
+    Timestamp timestamp = 1000000;
 
     std::vector<const PlaceholderGroup*> ph_group_arr = {ph_group.get()};
 
-    auto sr = segment->Search(plan.get(), ph_group.get());
+    auto sr = segment->Search(plan.get(), ph_group.get(), timestamp);
     milvus::index::CreateIndexInfo create_index_info;
     create_index_info.field_type = DataType::VECTOR_FLOAT;
     create_index_info.metric_type = knowhere::metric::L2;
@@ -242,7 +247,7 @@ TEST(Sealed, with_predicate) {
     sealed_segment->DropFieldData(fake_id);
     sealed_segment->LoadIndex(load_info);
 
-    sr = sealed_segment->Search(plan.get(), ph_group.get());
+    sr = sealed_segment->Search(plan.get(), ph_group.get(), timestamp);
 
     for (int i = 0; i < num_queries; ++i) {
         auto offset = i * topK;
@@ -303,6 +308,7 @@ TEST(Sealed, with_predicate_filter_all) {
         CreatePlaceholderGroupFromBlob(num_queries, 16, query_ptr);
     auto ph_group =
         ParsePlaceholderGroup(plan.get(), ph_group_raw.SerializeAsString());
+    Timestamp timestamp = 1000000;
 
     std::vector<const PlaceholderGroup*> ph_group_arr = {ph_group.get()};
 
@@ -337,7 +343,7 @@ TEST(Sealed, with_predicate_filter_all) {
     ivf_sealed_segment->DropFieldData(fake_id);
     ivf_sealed_segment->LoadIndex(load_info);
 
-    auto sr = ivf_sealed_segment->Search(plan.get(), ph_group.get());
+    auto sr = ivf_sealed_segment->Search(plan.get(), ph_group.get(), timestamp);
     EXPECT_EQ(sr->unity_topK_, 0);
     EXPECT_EQ(sr->get_total_result_count(), 0);
 
@@ -372,7 +378,8 @@ TEST(Sealed, with_predicate_filter_all) {
     hnsw_sealed_segment->DropFieldData(fake_id);
     hnsw_sealed_segment->LoadIndex(hnsw_load_info);
 
-    auto sr2 = hnsw_sealed_segment->Search(plan.get(), ph_group.get());
+    auto sr2 =
+        hnsw_sealed_segment->Search(plan.get(), ph_group.get(), timestamp);
     EXPECT_EQ(sr2->unity_topK_, 0);
     EXPECT_EQ(sr2->get_total_result_count(), 0);
 }
@@ -400,7 +407,8 @@ TEST(Sealed, LoadFieldData) {
 
     auto fakevec = dataset.get_col<float>(fakevec_id);
 
-    auto indexing = GenVecIndexing(N, dim, fakevec.data());
+    auto indexing = GenVecIndexing(
+        N, dim, fakevec.data(), knowhere::IndexEnum::INDEX_FAISS_IVFFLAT);
 
     auto segment = CreateSealedSegment(schema);
     // std::string dsl = R"({
@@ -456,7 +464,7 @@ TEST(Sealed, LoadFieldData) {
                                     >
                                     placeholder_tag: "$0"
      >)";
-
+    Timestamp timestamp = 1000000;
     auto plan_str = translate_text_plan_to_binary_plan(raw_plan);
     auto plan =
         CreateSearchPlanByExpr(*schema, plan_str.data(), plan_str.size());
@@ -465,13 +473,13 @@ TEST(Sealed, LoadFieldData) {
     auto ph_group =
         ParsePlaceholderGroup(plan.get(), ph_group_raw.SerializeAsString());
 
-    ASSERT_ANY_THROW(segment->Search(plan.get(), ph_group.get()));
+    ASSERT_ANY_THROW(segment->Search(plan.get(), ph_group.get(), timestamp));
 
     SealedLoadFieldData(dataset, *segment);
-    segment->Search(plan.get(), ph_group.get());
+    segment->Search(plan.get(), ph_group.get(), timestamp);
 
     segment->DropFieldData(fakevec_id);
-    ASSERT_ANY_THROW(segment->Search(plan.get(), ph_group.get()));
+    ASSERT_ANY_THROW(segment->Search(plan.get(), ph_group.get(), timestamp));
 
     LoadIndexInfo vec_info;
     vec_info.field_id = fakevec_id.get();
@@ -494,12 +502,12 @@ TEST(Sealed, LoadFieldData) {
         ASSERT_EQ(chunk_span3[i], ref3[i]);
     }
 
-    auto sr = segment->Search(plan.get(), ph_group.get());
+    auto sr = segment->Search(plan.get(), ph_group.get(), timestamp);
     auto json = SearchResultToJson(*sr);
     std::cout << json.dump(1);
 
     segment->DropIndex(fakevec_id);
-    ASSERT_ANY_THROW(segment->Search(plan.get(), ph_group.get()));
+    ASSERT_ANY_THROW(segment->Search(plan.get(), ph_group.get(), timestamp));
 }
 
 TEST(Sealed, LoadFieldDataMmap) {
@@ -525,7 +533,8 @@ TEST(Sealed, LoadFieldDataMmap) {
 
     auto fakevec = dataset.get_col<float>(fakevec_id);
 
-    auto indexing = GenVecIndexing(N, dim, fakevec.data());
+    auto indexing = GenVecIndexing(
+        N, dim, fakevec.data(), knowhere::IndexEnum::INDEX_FAISS_IVFFLAT);
 
     auto segment = CreateSealedSegment(schema);
     const char* raw_plan = R"(vector_anns: <
@@ -554,7 +563,7 @@ TEST(Sealed, LoadFieldDataMmap) {
                                     >
                                     placeholder_tag: "$0"
      >)";
-
+    Timestamp timestamp = 1000000;
     auto plan_str = translate_text_plan_to_binary_plan(raw_plan);
     auto plan =
         CreateSearchPlanByExpr(*schema, plan_str.data(), plan_str.size());
@@ -563,13 +572,13 @@ TEST(Sealed, LoadFieldDataMmap) {
     auto ph_group =
         ParsePlaceholderGroup(plan.get(), ph_group_raw.SerializeAsString());
 
-    ASSERT_ANY_THROW(segment->Search(plan.get(), ph_group.get()));
+    ASSERT_ANY_THROW(segment->Search(plan.get(), ph_group.get(), timestamp));
 
     SealedLoadFieldData(dataset, *segment, {}, true);
-    segment->Search(plan.get(), ph_group.get());
+    segment->Search(plan.get(), ph_group.get(), timestamp);
 
     segment->DropFieldData(fakevec_id);
-    ASSERT_ANY_THROW(segment->Search(plan.get(), ph_group.get()));
+    ASSERT_ANY_THROW(segment->Search(plan.get(), ph_group.get(), timestamp));
 
     LoadIndexInfo vec_info;
     vec_info.field_id = fakevec_id.get();
@@ -592,12 +601,43 @@ TEST(Sealed, LoadFieldDataMmap) {
         ASSERT_EQ(chunk_span3[i], ref3[i]);
     }
 
-    auto sr = segment->Search(plan.get(), ph_group.get());
+    auto sr = segment->Search(plan.get(), ph_group.get(), timestamp);
     auto json = SearchResultToJson(*sr);
     std::cout << json.dump(1);
 
     segment->DropIndex(fakevec_id);
-    ASSERT_ANY_THROW(segment->Search(plan.get(), ph_group.get()));
+    ASSERT_ANY_THROW(segment->Search(plan.get(), ph_group.get(), timestamp));
+}
+
+TEST(Sealed, LoadPkScalarIndex) {
+    size_t N = ROW_COUNT;
+    auto schema = std::make_shared<Schema>();
+    auto pk_id = schema->AddDebugField("counter", DataType::INT64);
+    auto nothing_id = schema->AddDebugField("nothing", DataType::INT32);
+    schema->set_primary_field_id(pk_id);
+
+    auto dataset = DataGen(schema, N);
+    auto segment = CreateSealedSegment(schema);
+    auto fields = schema->get_fields();
+    for (auto field_data : dataset.raw_->fields_data()) {
+        int64_t field_id = field_data.field_id();
+
+        auto info = FieldDataInfo(field_data.field_id(), N);
+        auto field_meta = fields.at(FieldId(field_id));
+        info.channel->push(
+            CreateFieldDataFromDataArray(N, &field_data, field_meta));
+        info.channel->close();
+
+        segment->LoadFieldData(FieldId(field_id), info);
+    }
+
+    LoadIndexInfo pk_index;
+    pk_index.field_id = pk_id.get();
+    pk_index.field_type = DataType::INT64;
+    pk_index.index_params["index_type"] = "sort";
+    auto pk_data = dataset.get_col<int64_t>(pk_id);
+    pk_index.index = GenScalarIndexing<int64_t>(N, pk_data.data());
+    segment->LoadIndex(pk_index);
 }
 
 TEST(Sealed, LoadScalarIndex) {
@@ -616,7 +656,8 @@ TEST(Sealed, LoadScalarIndex) {
 
     auto fakevec = dataset.get_col<float>(fakevec_id);
 
-    auto indexing = GenVecIndexing(N, dim, fakevec.data());
+    auto indexing = GenVecIndexing(
+        N, dim, fakevec.data(), knowhere::IndexEnum::INDEX_FAISS_IVFFLAT);
 
     auto segment = CreateSealedSegment(schema);
     // std::string dsl = R"({
@@ -672,7 +713,7 @@ TEST(Sealed, LoadScalarIndex) {
                                     >
                                     placeholder_tag: "$0"
      >)";
-
+    Timestamp timestamp = 1000000;
     auto plan_str = translate_text_plan_to_binary_plan(raw_plan);
     auto plan =
         CreateSearchPlanByExpr(*schema, plan_str.data(), plan_str.size());
@@ -731,7 +772,7 @@ TEST(Sealed, LoadScalarIndex) {
     nothing_index.index = GenScalarIndexing<int32_t>(N, nothing_data.data());
     segment->LoadIndex(nothing_index);
 
-    auto sr = segment->Search(plan.get(), ph_group.get());
+    auto sr = segment->Search(plan.get(), ph_group.get(), timestamp);
     auto json = SearchResultToJson(*sr);
     std::cout << json.dump(1);
 }
@@ -780,7 +821,7 @@ TEST(Sealed, Delete) {
                                     >
                                     placeholder_tag: "$0"
      >)";
-
+    Timestamp timestamp = 1000000;
     auto plan_str = translate_text_plan_to_binary_plan(raw_plan);
     auto plan =
         CreateSearchPlanByExpr(*schema, plan_str.data(), plan_str.size());
@@ -789,7 +830,7 @@ TEST(Sealed, Delete) {
     auto ph_group =
         ParsePlaceholderGroup(plan.get(), ph_group_raw.SerializeAsString());
 
-    ASSERT_ANY_THROW(segment->Search(plan.get(), ph_group.get()));
+    ASSERT_ANY_THROW(segment->Search(plan.get(), ph_group.get(), timestamp));
 
     SealedLoadFieldData(dataset, *segment);
 
@@ -864,7 +905,7 @@ TEST(Sealed, OverlapDelete) {
                                     >
                                     placeholder_tag: "$0"
      >)";
-
+    Timestamp timestamp = 1000000;
     auto plan_str = translate_text_plan_to_binary_plan(raw_plan);
     auto plan =
         CreateSearchPlanByExpr(*schema, plan_str.data(), plan_str.size());
@@ -873,7 +914,7 @@ TEST(Sealed, OverlapDelete) {
     auto ph_group =
         ParsePlaceholderGroup(plan.get(), ph_group_raw.SerializeAsString());
 
-    ASSERT_ANY_THROW(segment->Search(plan.get(), ph_group.get()));
+    ASSERT_ANY_THROW(segment->Search(plan.get(), ph_group.get(), timestamp));
 
     SealedLoadFieldData(dataset, *segment);
 
@@ -991,7 +1032,7 @@ TEST(Sealed, BF) {
     auto ph_group =
         ParsePlaceholderGroup(plan.get(), ph_group_raw.SerializeAsString());
 
-    auto result = segment->Search(plan.get(), ph_group.get());
+    auto result = segment->Search(plan.get(), ph_group.get(), MAX_TIMESTAMP);
     auto ves = SearchResultToVector(*result);
     // first: offset, second: distance
     EXPECT_GE(ves[0].first, 0);
@@ -1045,7 +1086,7 @@ TEST(Sealed, BF_Overflow) {
     auto ph_group =
         ParsePlaceholderGroup(plan.get(), ph_group_raw.SerializeAsString());
 
-    auto result = segment->Search(plan.get(), ph_group.get());
+    auto result = segment->Search(plan.get(), ph_group.get(), MAX_TIMESTAMP);
     auto ves = SearchResultToVector(*result);
     for (int i = 0; i < num_queries; ++i) {
         EXPECT_EQ(ves[0].first, -1);
@@ -1135,7 +1176,8 @@ TEST(Sealed, GetVector) {
 
     auto fakevec = dataset.get_col<float>(fakevec_id);
 
-    auto indexing = GenVecIndexing(N, dim, fakevec.data());
+    auto indexing = GenVecIndexing(
+        N, dim, fakevec.data(), knowhere::IndexEnum::INDEX_FAISS_IVFFLAT);
 
     auto segment_sealed = CreateSealedSegment(schema);
 
@@ -1274,6 +1316,119 @@ TEST(Sealed, GetVectorFromChunkCache) {
     Assert(!exist);
 }
 
+TEST(Sealed, WarmupChunkCache) {
+    // skip test due to mem leak from AWS::InitSDK
+    return;
+
+    auto dim = 16;
+    auto topK = 5;
+    auto N = ROW_COUNT;
+    auto metric_type = knowhere::metric::L2;
+    auto index_type = knowhere::IndexEnum::INDEX_FAISS_IVFPQ;
+
+    auto mmap_dir = "/tmp/mmap";
+    auto file_name = std::string(
+        "sealed_test_get_vector_from_chunk_cache/insert_log/1/101/1000000");
+
+    auto sc = milvus::storage::StorageConfig{};
+    milvus::storage::RemoteChunkManagerSingleton::GetInstance().Init(sc);
+    auto mcm = std::make_unique<milvus::storage::MinioChunkManager>(sc);
+    // mcm->CreateBucket(sc.bucket_name);
+    milvus::storage::ChunkCacheSingleton::GetInstance().Init(mmap_dir,
+                                                             "willneed");
+
+    auto schema = std::make_shared<Schema>();
+    auto fakevec_id = schema->AddDebugField(
+        "fakevec", DataType::VECTOR_FLOAT, dim, metric_type);
+    auto counter_id = schema->AddDebugField("counter", DataType::INT64);
+    auto double_id = schema->AddDebugField("double", DataType::DOUBLE);
+    auto nothing_id = schema->AddDebugField("nothing", DataType::INT32);
+    auto str_id = schema->AddDebugField("str", DataType::VARCHAR);
+    schema->AddDebugField("int8", DataType::INT8);
+    schema->AddDebugField("int16", DataType::INT16);
+    schema->AddDebugField("float", DataType::FLOAT);
+    schema->set_primary_field_id(counter_id);
+
+    auto dataset = DataGen(schema, N);
+    auto field_data_meta =
+        milvus::storage::FieldDataMeta{1, 2, 3, fakevec_id.get()};
+    auto field_meta = milvus::FieldMeta(milvus::FieldName("facevec"),
+                                        fakevec_id,
+                                        milvus::DataType::VECTOR_FLOAT,
+                                        dim,
+                                        metric_type);
+
+    auto rcm = milvus::storage::RemoteChunkManagerSingleton::GetInstance()
+                   .GetRemoteChunkManager();
+    auto data = dataset.get_col<float>(fakevec_id);
+    auto data_slices = std::vector<const uint8_t*>{(uint8_t*)data.data()};
+    auto slice_sizes = std::vector<int64_t>{static_cast<int64_t>(N)};
+    auto slice_names = std::vector<std::string>{file_name};
+    PutFieldData(rcm.get(),
+                 data_slices,
+                 slice_sizes,
+                 slice_names,
+                 field_data_meta,
+                 field_meta);
+
+    auto fakevec = dataset.get_col<float>(fakevec_id);
+    auto conf = generate_build_conf(index_type, metric_type);
+    auto ds = knowhere::GenDataSet(N, dim, fakevec.data());
+    auto indexing = std::make_unique<index::VectorMemIndex<float>>(
+        index_type,
+        metric_type,
+        knowhere::Version::GetCurrentVersion().VersionNumber());
+    indexing->BuildWithDataset(ds, conf);
+    auto segment_sealed = CreateSealedSegment(schema);
+
+    LoadIndexInfo vec_info;
+    vec_info.field_id = fakevec_id.get();
+    vec_info.index = std::move(indexing);
+    vec_info.index_params["metric_type"] = knowhere::metric::L2;
+    segment_sealed->LoadIndex(vec_info);
+
+    auto field_binlog_info =
+        FieldBinlogInfo{fakevec_id.get(),
+                        N,
+                        std::vector<int64_t>{N},
+                        false,
+                        std::vector<std::string>{file_name}};
+    segment_sealed->AddFieldDataInfoForSealed(LoadFieldDataInfo{
+        std::map<int64_t, FieldBinlogInfo>{
+            {fakevec_id.get(), field_binlog_info}},
+        mmap_dir,
+    });
+
+    auto segment = dynamic_cast<SegmentSealedImpl*>(segment_sealed.get());
+    auto has = segment->HasRawData(vec_info.field_id);
+    EXPECT_FALSE(has);
+
+    segment_sealed->WarmupChunkCache(FieldId(vec_info.field_id));
+
+    auto ids_ds = GenRandomIds(N);
+    auto result =
+        segment->get_vector(fakevec_id, ids_ds->GetIds(), ids_ds->GetRows());
+
+    auto vector = result.get()->mutable_vectors()->float_vector().data();
+    EXPECT_TRUE(vector.size() == fakevec.size());
+    for (size_t i = 0; i < N; ++i) {
+        auto id = ids_ds->GetIds()[i];
+        for (size_t j = 0; j < dim; ++j) {
+            auto expect = fakevec[id * dim + j];
+            auto actual = vector[i * dim + j];
+            AssertInfo(expect == actual,
+                       fmt::format("expect {}, actual {}", expect, actual));
+        }
+    }
+
+    rcm->Remove(file_name);
+    std::filesystem::remove_all(mmap_dir);
+    auto exist = rcm->Exist(file_name);
+    Assert(!exist);
+    exist = std::filesystem::exists(mmap_dir);
+    Assert(!exist);
+}
+
 TEST(Sealed, LoadArrayFieldData) {
     auto dim = 16;
     auto topK = 5;
@@ -1322,7 +1477,7 @@ TEST(Sealed, LoadArrayFieldData) {
         ParsePlaceholderGroup(plan.get(), ph_group_raw.SerializeAsString());
 
     SealedLoadFieldData(dataset, *segment);
-    segment->Search(plan.get(), ph_group.get());
+    segment->Search(plan.get(), ph_group.get(), 1L << 63);
 
     auto ids_ds = GenRandomIds(N);
     auto s = dynamic_cast<SegmentSealedImpl*>(segment.get());
@@ -1379,7 +1534,7 @@ TEST(Sealed, LoadArrayFieldDataWithMMap) {
         ParsePlaceholderGroup(plan.get(), ph_group_raw.SerializeAsString());
 
     SealedLoadFieldData(dataset, *segment, {}, true);
-    segment->Search(plan.get(), ph_group.get());
+    segment->Search(plan.get(), ph_group.get(), 1L << 63);
 }
 
 TEST(Sealed, SkipIndexSkipUnaryRange) {
@@ -1609,6 +1764,10 @@ TEST(Sealed, QueryAllFields) {
         schema->AddDebugField("float_array", DataType::ARRAY, DataType::FLOAT);
     auto vec = schema->AddDebugField(
         "embeddings", DataType::VECTOR_FLOAT, 128, metric_type);
+    auto float16_vec = schema->AddDebugField(
+        "float16_vec", DataType::VECTOR_FLOAT16, 128, metric_type);
+    auto bfloat16_vec = schema->AddDebugField(
+        "bfloat16_vec", DataType::VECTOR_BFLOAT16, 128, metric_type);
     schema->set_primary_field_id(int64_field);
 
     std::map<std::string, std::string> index_params = {
@@ -1645,6 +1804,8 @@ TEST(Sealed, QueryAllFields) {
     auto double_array_values = dataset.get_col<ScalarArray>(double_array_field);
     auto float_array_values = dataset.get_col<ScalarArray>(float_array_field);
     auto vector_values = dataset.get_col<float>(vec);
+    auto float16_vector_values = dataset.get_col<uint8_t>(float16_vec);
+    auto bfloat16_vector_values = dataset.get_col<uint8_t>(bfloat16_vec);
 
     auto ids_ds = GenRandomIds(dataset_size);
     auto bool_result =
@@ -1679,6 +1840,10 @@ TEST(Sealed, QueryAllFields) {
         float_array_field, ids_ds->GetIds(), dataset_size);
     auto vec_result =
         segment->bulk_subscript(vec, ids_ds->GetIds(), dataset_size);
+    auto float16_vec_result =
+        segment->bulk_subscript(float16_vec, ids_ds->GetIds(), dataset_size);
+    auto bfloat16_vec_result =
+        segment->bulk_subscript(bfloat16_vec, ids_ds->GetIds(), dataset_size);
 
     EXPECT_EQ(bool_result->scalars().bool_data().data_size(), dataset_size);
     EXPECT_EQ(int8_result->scalars().int_data().data_size(), dataset_size);
@@ -1692,6 +1857,10 @@ TEST(Sealed, QueryAllFields) {
     EXPECT_EQ(json_result->scalars().json_data().data_size(), dataset_size);
     EXPECT_EQ(vec_result->vectors().float_vector().data_size(),
               dataset_size * dim);
+    EXPECT_EQ(float16_vec_result->vectors().float16_vector().size(),
+              dataset_size * dim * 2);
+    EXPECT_EQ(bfloat16_vec_result->vectors().bfloat16_vector().size(),
+              dataset_size * dim * 2);
     EXPECT_EQ(int_array_result->scalars().array_data().data_size(),
               dataset_size);
     EXPECT_EQ(long_array_result->scalars().array_data().data_size(),

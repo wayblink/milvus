@@ -38,6 +38,11 @@ BuildFloatVecIndex(CIndex index, int64_t float_value_num, const float* vectors);
 CStatus
 BuildBinaryVecIndex(CIndex index, int64_t data_size, const uint8_t* vectors);
 
+CStatus
+BuildFloat16VecIndex(CIndex index, int64_t data_size, const uint8_t* vectors);
+
+CStatus
+BuildBFloat16VecIndex(CIndex index, int64_t data_size, const uint8_t* vectors);
 // field_data:
 //  1, serialized proto::schema::BoolArray, if type is bool;
 //  2, serialized proto::schema::StringArray, if type is string;
@@ -102,6 +107,13 @@ AppendInsertFilePath(CBuildIndexInfo c_build_index_info, const char* file_path);
 CStatus
 AppendIndexEngineVersionToBuildInfo(CBuildIndexInfo c_load_index_info,
                                     int32_t c_index_engine_version);
+
+CStatus
+AppendOptionalFieldDataPath(CBuildIndexInfo c_build_index_info,
+                            const int64_t field_id,
+                            const char* field_name,
+                            const int32_t field_type,
+                            const char* c_file_path);
 
 CStatus
 SerializeIndexAndUpLoad(CIndex index, CBinarySet* c_binary_set);

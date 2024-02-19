@@ -4,7 +4,6 @@ use tantivy::schema::{Field, IndexRecordOption, Schema, TextFieldIndexing, TextO
 use tantivy::{doc, tokenizer, Index, IndexWriter};
 
 use crate::data_type::TantivyDataType;
-use crate::index_reader::IndexReaderWrapper;
 
 pub struct IndexWriterWrapper {
     pub field_name: String,
@@ -16,10 +15,6 @@ pub struct IndexWriterWrapper {
 }
 
 impl IndexWriterWrapper {
-    pub fn create_reader(&self) -> IndexReaderWrapper {
-        IndexReaderWrapper::new(&self.index, &self.field_name, self.field)
-    }
-
     pub fn new(field_name: String, data_type: TantivyDataType, path: String) -> IndexWriterWrapper {
         let field: Field;
         let mut schema_builder = Schema::builder();
@@ -101,8 +96,9 @@ impl IndexWriterWrapper {
             .unwrap();
     }
 
-    pub fn finish(&mut self) {
+    pub fn finish(mut self) {
         self.index_writer.commit().unwrap();
         block_on(self.index_writer.garbage_collect_files()).unwrap();
+        self.index_writer.wait_merging_threads().unwrap();
     }
 }

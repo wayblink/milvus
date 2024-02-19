@@ -53,6 +53,7 @@ import (
 	grpcquerynode "github.com/milvus-io/milvus/internal/distributed/querynode"
 	grpcrootcoord "github.com/milvus-io/milvus/internal/distributed/rootcoord"
 	rcc "github.com/milvus-io/milvus/internal/distributed/rootcoord/client"
+	"github.com/milvus-io/milvus/internal/mocks"
 	"github.com/milvus-io/milvus/internal/proto/internalpb"
 	"github.com/milvus-io/milvus/internal/proto/proxypb"
 	"github.com/milvus-io/milvus/internal/proto/querypb"
@@ -744,7 +745,7 @@ func TestProxy(t *testing.T) {
 
 		_, _ = proxy.InvalidateCollectionMetaCache(ctx, &proxypb.InvalidateCollMetaCacheRequest{
 			Base: &commonpb.MsgBase{
-				MsgType:   0,
+				MsgType:   commonpb.MsgType_CreateAlias,
 				MsgID:     0,
 				Timestamp: 0,
 				SourceID:  0,
@@ -752,6 +753,30 @@ func TestProxy(t *testing.T) {
 			DbName:         dbName,
 			CollectionName: collectionName,
 		})
+	})
+
+	wg.Add(1)
+	t.Run("describe alias", func(t *testing.T) {
+		defer wg.Done()
+		describeAliasReq := &milvuspb.DescribeAliasRequest{
+			Base:   nil,
+			DbName: dbName,
+			Alias:  "alias",
+		}
+		resp, err := proxy.DescribeAlias(ctx, describeAliasReq)
+		assert.NoError(t, err)
+		assert.Equal(t, commonpb.ErrorCode_Success, resp.GetStatus().GetErrorCode())
+	})
+
+	wg.Add(1)
+	t.Run("list alias", func(t *testing.T) {
+		defer wg.Done()
+		listAliasReq := &milvuspb.ListAliasesRequest{
+			Base: nil,
+		}
+		resp, err := proxy.ListAliases(ctx, listAliasReq)
+		assert.NoError(t, err)
+		assert.Equal(t, commonpb.ErrorCode_Success, resp.GetStatus().GetErrorCode())
 	})
 
 	wg.Add(1)
@@ -770,13 +795,13 @@ func TestProxy(t *testing.T) {
 
 		_, _ = proxy.InvalidateCollectionMetaCache(ctx, &proxypb.InvalidateCollMetaCacheRequest{
 			Base: &commonpb.MsgBase{
-				MsgType:   0,
+				MsgType:   commonpb.MsgType_AlterAlias,
 				MsgID:     0,
 				Timestamp: 0,
 				SourceID:  0,
 			},
 			DbName:         dbName,
-			CollectionName: collectionName,
+			CollectionName: "alias",
 		})
 
 		nonExistingCollName := "coll_name_random_zarathustra"
@@ -804,14 +829,17 @@ func TestProxy(t *testing.T) {
 
 		_, _ = proxy.InvalidateCollectionMetaCache(ctx, &proxypb.InvalidateCollMetaCacheRequest{
 			Base: &commonpb.MsgBase{
-				MsgType:   0,
+				MsgType:   commonpb.MsgType_DropAlias,
 				MsgID:     0,
 				Timestamp: 0,
 				SourceID:  0,
 			},
 			DbName:         dbName,
-			CollectionName: collectionName,
+			CollectionName: "alias",
 		})
+
+		_, err = globalMetaCache.GetCollectionID(ctx, dbName, "alias")
+		assert.Error(t, err)
 	})
 
 	wg.Add(1)
@@ -1477,7 +1505,7 @@ func TestProxy(t *testing.T) {
 	topk := 10
 	roundDecimal := 6
 	expr := fmt.Sprintf("%s > 0", int64Field)
-	constructVectorsPlaceholderGroup := func() *commonpb.PlaceholderGroup {
+	constructVectorsPlaceholderGroup := func(nq int) *commonpb.PlaceholderGroup {
 		values := make([][]byte, 0, nq)
 		for i := 0; i < nq; i++ {
 			bs := make([]byte, 0, dim*4)
@@ -1502,8 +1530,8 @@ func TestProxy(t *testing.T) {
 		}
 	}
 
-	constructSearchRequest := func() *milvuspb.SearchRequest {
-		plg := constructVectorsPlaceholderGroup()
+	constructSearchRequest := func(nq int) *milvuspb.SearchRequest {
+		plg := constructVectorsPlaceholderGroup(nq)
 		plgBs, err := proto.Marshal(plg)
 		assert.NoError(t, err)
 
@@ -1538,12 +1566,50 @@ func TestProxy(t *testing.T) {
 	wg.Add(1)
 	t.Run("search", func(t *testing.T) {
 		defer wg.Done()
-		req := constructSearchRequest()
+		req := constructSearchRequest(nq)
 
 		resp, err := proxy.Search(ctx, req)
 		assert.NoError(t, err)
 		assert.Equal(t, commonpb.ErrorCode_Success, resp.Status.ErrorCode)
 	})
+
+	constructHybridSearchRequest := func(reqs []*milvuspb.SearchRequest) *milvuspb.HybridSearchRequest {
+		params := make(map[string]float64)
+		params[RRFParamsKey] = 60
+		b, err := json.Marshal(params)
+		assert.NoError(t, err)
+		rankParams := []*commonpb.KeyValuePair{
+			{Key: RankTypeKey, Value: "rrf"},
+			{Key: RankParamsKey, Value: string(b)},
+			{Key: LimitKey, Value: strconv.Itoa(topk)},
+			{Key: RoundDecimalKey, Value: strconv.Itoa(roundDecimal)},
+		}
+
+		return &milvuspb.HybridSearchRequest{
+			Base:               nil,
+			DbName:             dbName,
+			CollectionName:     collectionName,
+			Requests:           reqs,
+			PartitionNames:     nil,
+			OutputFields:       nil,
+			RankParams:         rankParams,
+			TravelTimestamp:    0,
+			GuaranteeTimestamp: 0,
+		}
+	}
+
+	wg.Add(1)
+	nq = 1
+	t.Run("hybrid search", func(t *testing.T) {
+		defer wg.Done()
+		req1 := constructSearchRequest(nq)
+		req2 := constructSearchRequest(nq)
+
+		resp, err := proxy.HybridSearch(ctx, constructHybridSearchRequest([]*milvuspb.SearchRequest{req1, req2}))
+		assert.NoError(t, err)
+		assert.Equal(t, commonpb.ErrorCode_Success, resp.Status.ErrorCode)
+	})
+	nq = 10
 
 	constructPrimaryKeysPlaceholderGroup := func() *commonpb.PlaceholderGroup {
 		expr := fmt.Sprintf("%v in [%v]", int64Field, insertedIds[0])
@@ -1930,15 +1996,6 @@ func TestProxy(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, commonpb.ErrorCode_Success, resp.ErrorCode)
 		assert.Equal(t, "", resp.Reason)
-
-		// release collection cache
-		resp, err = proxy.InvalidateCollectionMetaCache(ctx, &proxypb.InvalidateCollMetaCacheRequest{
-			Base:           nil,
-			CollectionName: collectionName,
-		})
-		assert.NoError(t, err)
-		assert.Equal(t, commonpb.ErrorCode_Success, resp.ErrorCode)
-		assert.Equal(t, "", resp.Reason)
 	})
 
 	wg.Add(1)
@@ -2234,12 +2291,18 @@ func TestProxy(t *testing.T) {
 
 		// invalidate meta cache
 		resp, err = proxy.InvalidateCollectionMetaCache(ctx, &proxypb.InvalidateCollMetaCacheRequest{
-			Base:           nil,
+			Base: &commonpb.MsgBase{
+				MsgType: commonpb.MsgType_DropPartition,
+			},
 			DbName:         dbName,
 			CollectionName: collectionName,
+			PartitionName:  partitionName,
 		})
 		assert.NoError(t, err)
 		assert.Equal(t, commonpb.ErrorCode_Success, resp.ErrorCode)
+
+		_, err = globalMetaCache.GetPartitionID(ctx, dbName, collectionName, partitionName)
+		assert.Error(t, err)
 
 		// drop non-exist partition -> fail
 
@@ -2248,6 +2311,17 @@ func TestProxy(t *testing.T) {
 			DbName:         dbName,
 			CollectionName: otherCollectionName,
 			PartitionName:  partitionName,
+		})
+		assert.NoError(t, err)
+		assert.NotEqual(t, commonpb.ErrorCode_Success, resp.ErrorCode)
+
+		// not specify partition name
+		resp, err = proxy.InvalidateCollectionMetaCache(ctx, &proxypb.InvalidateCollMetaCacheRequest{
+			Base: &commonpb.MsgBase{
+				MsgType: commonpb.MsgType_DropPartition,
+			},
+			DbName:         dbName,
+			CollectionName: collectionName,
 		})
 		assert.NoError(t, err)
 		assert.NotEqual(t, commonpb.ErrorCode_Success, resp.ErrorCode)
@@ -2343,20 +2417,17 @@ func TestProxy(t *testing.T) {
 
 		// invalidate meta cache
 		resp, err = proxy.InvalidateCollectionMetaCache(ctx, &proxypb.InvalidateCollMetaCacheRequest{
-			Base:           nil,
+			Base: &commonpb.MsgBase{
+				MsgType: commonpb.MsgType_DropCollection,
+			},
 			DbName:         dbName,
 			CollectionName: collectionName,
 		})
 		assert.NoError(t, err)
 		assert.Equal(t, commonpb.ErrorCode_Success, resp.ErrorCode)
 
-		// release collection load cache
-		resp, err = proxy.InvalidateCollectionMetaCache(ctx, &proxypb.InvalidateCollMetaCacheRequest{
-			Base:           nil,
-			CollectionName: collectionName,
-		})
-		assert.NoError(t, err)
-		assert.Equal(t, commonpb.ErrorCode_Success, resp.ErrorCode)
+		_, err = globalMetaCache.GetCollectionID(ctx, dbName, collectionName)
+		assert.Error(t, err)
 	})
 
 	wg.Add(1)
@@ -2847,6 +2918,22 @@ func TestProxy(t *testing.T) {
 	})
 
 	wg.Add(1)
+	t.Run("ListAliases fail, unhealthy", func(t *testing.T) {
+		defer wg.Done()
+		resp, err := proxy.ListAliases(ctx, &milvuspb.ListAliasesRequest{})
+		assert.NoError(t, err)
+		assert.NotEqual(t, commonpb.ErrorCode_Success, resp.GetStatus().GetErrorCode())
+	})
+
+	wg.Add(1)
+	t.Run("DescribeAlias fail, unhealthy", func(t *testing.T) {
+		defer wg.Done()
+		resp, err := proxy.DescribeAlias(ctx, &milvuspb.DescribeAliasRequest{})
+		assert.NoError(t, err)
+		assert.NotEqual(t, commonpb.ErrorCode_Success, resp.GetStatus().GetErrorCode())
+	})
+
+	wg.Add(1)
 	t.Run("GetPersistentSegmentInfo fail, unhealthy", func(t *testing.T) {
 		defer wg.Done()
 		resp, err := proxy.GetPersistentSegmentInfo(ctx, &milvuspb.GetPersistentSegmentInfoRequest{})
@@ -3162,6 +3249,22 @@ func TestProxy(t *testing.T) {
 		resp, err := proxy.AlterAlias(ctx, &milvuspb.AlterAliasRequest{})
 		assert.NoError(t, err)
 		assert.NotEqual(t, commonpb.ErrorCode_Success, resp.ErrorCode)
+	})
+
+	wg.Add(1)
+	t.Run("DescribeAlias fail, dd queue full", func(t *testing.T) {
+		defer wg.Done()
+		resp, err := proxy.DescribeAlias(ctx, &milvuspb.DescribeAliasRequest{})
+		assert.NoError(t, err)
+		assert.NotEqual(t, commonpb.ErrorCode_Success, resp.GetStatus().GetErrorCode())
+	})
+
+	wg.Add(1)
+	t.Run("ListAliases fail, dd queue full", func(t *testing.T) {
+		defer wg.Done()
+		resp, err := proxy.ListAliases(ctx, &milvuspb.ListAliasesRequest{})
+		assert.NoError(t, err)
+		assert.NotEqual(t, commonpb.ErrorCode_Success, resp.GetStatus().GetErrorCode())
 	})
 
 	proxy.sched.ddQueue.setMaxTaskNum(ddParallel)
@@ -3482,6 +3585,22 @@ func TestProxy(t *testing.T) {
 		resp, err := proxy.AlterAlias(shortCtx, &milvuspb.AlterAliasRequest{})
 		assert.NoError(t, err)
 		assert.NotEqual(t, commonpb.ErrorCode_Success, resp.ErrorCode)
+	})
+
+	wg.Add(1)
+	t.Run("DescribeAlias fail, timeout", func(t *testing.T) {
+		defer wg.Done()
+		resp, err := proxy.DescribeAlias(shortCtx, &milvuspb.DescribeAliasRequest{})
+		assert.NoError(t, err)
+		assert.NotEqual(t, commonpb.ErrorCode_Success, resp.GetStatus().GetErrorCode())
+	})
+
+	wg.Add(1)
+	t.Run("ListAliases fail, timeout", func(t *testing.T) {
+		defer wg.Done()
+		resp, err := proxy.ListAliases(shortCtx, &milvuspb.ListAliasesRequest{})
+		assert.NoError(t, err)
+		assert.NotEqual(t, commonpb.ErrorCode_Success, resp.GetStatus().GetErrorCode())
 	})
 
 	wg.Add(1)
@@ -4503,6 +4622,55 @@ func TestProxy_ListImportTasks(t *testing.T) {
 		resp, err := proxy.ListImportTasks(context.TODO(), req)
 		assert.ErrorIs(t, merr.Error(resp.GetStatus()), merr.ErrServiceNotReady)
 		assert.NoError(t, err)
+	})
+}
+
+func TestProxy_RelatedPrivilege(t *testing.T) {
+	req := &milvuspb.OperatePrivilegeRequest{
+		Entity: &milvuspb.GrantEntity{
+			Role:       &milvuspb.RoleEntity{Name: "public"},
+			ObjectName: "col1",
+			Object:     &milvuspb.ObjectEntity{Name: commonpb.ObjectType_Collection.String()},
+			Grantor:    &milvuspb.GrantorEntity{Privilege: &milvuspb.PrivilegeEntity{Name: util.MetaStore2API(commonpb.ObjectPrivilege_PrivilegeLoad.String())}},
+		},
+	}
+	ctx := GetContext(context.Background(), "root:123456")
+
+	t.Run("related privilege grpc error", func(t *testing.T) {
+		rootCoord := mocks.NewMockRootCoordClient(t)
+		proxy := &Proxy{rootCoord: rootCoord}
+		proxy.UpdateStateCode(commonpb.StateCode_Healthy)
+
+		rootCoord.EXPECT().OperatePrivilege(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, request *milvuspb.OperatePrivilegeRequest, option ...grpc.CallOption) (*commonpb.Status, error) {
+			privilegeName := request.Entity.Grantor.Privilege.Name
+			if privilegeName == util.MetaStore2API(commonpb.ObjectPrivilege_PrivilegeLoad.String()) {
+				return merr.Success(), nil
+			}
+			return nil, errors.New("mock grpc error")
+		})
+
+		resp, err := proxy.OperatePrivilege(ctx, req)
+		assert.NoError(t, err)
+		assert.False(t, merr.Ok(resp))
+	})
+
+	t.Run("related privilege status error", func(t *testing.T) {
+		rootCoord := mocks.NewMockRootCoordClient(t)
+		proxy := &Proxy{rootCoord: rootCoord}
+		proxy.UpdateStateCode(commonpb.StateCode_Healthy)
+
+		rootCoord.EXPECT().OperatePrivilege(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, request *milvuspb.OperatePrivilegeRequest, option ...grpc.CallOption) (*commonpb.Status, error) {
+			privilegeName := request.Entity.Grantor.Privilege.Name
+			if privilegeName == util.MetaStore2API(commonpb.ObjectPrivilege_PrivilegeLoad.String()) ||
+				privilegeName == util.MetaStore2API(commonpb.ObjectPrivilege_PrivilegeGetLoadState.String()) {
+				return merr.Success(), nil
+			}
+			return merr.Status(errors.New("mock status error")), nil
+		})
+
+		resp, err := proxy.OperatePrivilege(ctx, req)
+		assert.NoError(t, err)
+		assert.False(t, merr.Ok(resp))
 	})
 }
 

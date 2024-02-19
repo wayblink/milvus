@@ -164,12 +164,15 @@ func (s *Server) init() error {
 	// wait for grpc server loop start
 	err = <-s.grpcErrChan
 	if err != nil {
-		log.Error("IndexNode", zap.Any("grpc error", err))
+		log.Error("IndexNode", zap.Error(err))
 		return err
 	}
 
-	etcdCli, err := etcd.GetEtcdClient(
+	etcdCli, err := etcd.CreateEtcdClient(
 		etcdConfig.UseEmbedEtcd.GetAsBool(),
+		etcdConfig.EtcdEnableAuth.GetAsBool(),
+		etcdConfig.EtcdAuthUserName.GetValue(),
+		etcdConfig.EtcdAuthPassword.GetValue(),
 		etcdConfig.EtcdUseSSL.GetAsBool(),
 		etcdConfig.Endpoints.GetAsStrings(),
 		etcdConfig.EtcdTLSCert.GetValue(),

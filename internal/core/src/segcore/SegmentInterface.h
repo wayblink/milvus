@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <deque>
 #include <memory>
 #include <string>
@@ -38,6 +39,12 @@
 
 namespace milvus::segcore {
 
+struct SegmentStats {
+    // we stat the memory size used by the segment,
+    // including the insert data and delete data.
+    std::atomic<size_t> mem_size{};
+};
+
 // common interface of SegmentSealed and SegmentGrowing used by C API
 class SegmentInterface {
  public:
@@ -54,16 +61,18 @@ class SegmentInterface {
 
     virtual std::unique_ptr<SearchResult>
     Search(const query::Plan* Plan,
-           const query::PlaceholderGroup* placeholder_group) const = 0;
+           const query::PlaceholderGroup* placeholder_group,
+           Timestamp timestamp) const = 0;
 
     virtual std::unique_ptr<proto::segcore::RetrieveResults>
     Retrieve(const query::RetrievePlan* Plan,
              Timestamp timestamp,
              int64_t limit_size) const = 0;
 
-    // TODO: memory use is not correct when load string or load string index
-    virtual int64_t
-    GetMemoryUsageInBytes() const = 0;
+    size_t
+    GetMemoryUsageInBytes() const {
+        return stats_.mem_size;
+    };
 
     virtual int64_t
     get_row_count() const = 0;
@@ -111,6 +120,9 @@ class SegmentInterface {
 
     virtual bool
     HasRawData(int64_t field_id) const = 0;
+
+ protected:
+    SegmentStats stats_{};
 };
 
 // internal API for DSL calculation
@@ -136,7 +148,8 @@ class SegmentInternalInterface : public SegmentInterface {
 
     std::unique_ptr<SearchResult>
     Search(const query::Plan* Plan,
-           const query::PlaceholderGroup* placeholder_group) const override;
+           const query::PlaceholderGroup* placeholder_group,
+           Timestamp timestamp) const override;
 
     void
     FillPrimaryKeys(const query::Plan* plan,
@@ -185,6 +198,9 @@ class SegmentInternalInterface : public SegmentInterface {
     LoadStringSkipIndex(FieldId field_id,
                         int64_t chunk_id,
                         const milvus::VariableColumn<std::string>& var_column);
+
+    virtual DataType
+    GetFieldDataType(FieldId fieldId) const = 0;
 
  public:
     virtual void
@@ -301,7 +317,7 @@ class SegmentInternalInterface : public SegmentInterface {
     // fieldID -> std::pair<num_rows, avg_size>
     std::unordered_map<FieldId, std::pair<int64_t, int64_t>>
         variable_fields_avg_size_;  // bytes;
-    SkipIndex skipIndex_;
+    SkipIndex skip_index_;
 };
 
 }  // namespace milvus::segcore

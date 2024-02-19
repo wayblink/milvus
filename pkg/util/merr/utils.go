@@ -241,6 +241,11 @@ func Error(status *commonpb.Status) error {
 	return newMilvusErrorWithDetail(status.GetReason(), status.GetDetail(), code, status.GetRetriable())
 }
 
+// SegcoreError returns a merr according to the given segcore error code and message
+func SegcoreError(code int32, msg string) error {
+	return newMilvusError(msg, code, false)
+}
+
 // CheckHealthy checks whether the state is healthy,
 // returns nil if healthy,
 // otherwise returns ErrServiceNotReady wrapped with current state
@@ -448,6 +453,14 @@ func WrapErrCollectionNumLimitExceeded(limit int, msg ...string) error {
 	return err
 }
 
+func WrapErrCollectionIDOfAliasNotFound(collectionID int64, msg ...string) error {
+	err := wrapFields(ErrCollectionIDOfAliasNotFound, value("collectionID", collectionID))
+	if len(msg) > 0 {
+		err = errors.Wrap(err, strings.Join(msg, "; "))
+	}
+	return err
+}
+
 func WrapErrCollectionNotFullyLoaded(collection any, msg ...string) error {
 	err := wrapFields(ErrCollectionNotFullyLoaded, value("collection", collection))
 	if len(msg) > 0 {
@@ -458,6 +471,15 @@ func WrapErrCollectionNotFullyLoaded(collection any, msg ...string) error {
 
 func WrapErrCollectionLoaded(collection string, msgAndArgs ...any) error {
 	err := wrapFields(ErrCollectionLoaded, value("collection", collection))
+	if len(msgAndArgs) > 0 {
+		msg := msgAndArgs[0].(string)
+		err = errors.Wrapf(err, msg, msgAndArgs[1:]...)
+	}
+	return err
+}
+
+func WrapErrCollectionIllegalSchema(collection string, msgAndArgs ...any) error {
+	err := wrapFields(ErrCollectionIllegalSchema, value("collection", collection))
 	if len(msgAndArgs) > 0 {
 		msg := msgAndArgs[0].(string)
 		err = errors.Wrapf(err, msg, msgAndArgs[1:]...)
@@ -517,6 +539,15 @@ func WrapErrPartitionNotLoaded(partition any, msg ...string) error {
 
 func WrapErrPartitionNotFullyLoaded(partition any, msg ...string) error {
 	err := wrapFields(ErrPartitionNotFullyLoaded, value("partition", partition))
+	if len(msg) > 0 {
+		err = errors.Wrap(err, strings.Join(msg, "->"))
+	}
+	return err
+}
+
+func WrapGeneralCapacityExceed(newGeneralSize any, generalCapacity any, msg ...string) error {
+	err := wrapFields(ErrGeneralCapacityExceeded, value("newGeneralSize", newGeneralSize),
+		value("generalCapacity", generalCapacity))
 	if len(msg) > 0 {
 		err = errors.Wrap(err, strings.Join(msg, "->"))
 	}
@@ -767,6 +798,16 @@ func WrapErrParameterInvalidRange[T any](lower, upper, actual T, msg ...string) 
 
 func WrapErrParameterInvalidMsg(fmt string, args ...any) error {
 	return errors.Wrapf(ErrParameterInvalid, fmt, args...)
+}
+
+func WrapErrParameterMissing[T any](param T, msg ...string) error {
+	err := wrapFields(ErrParameterMissing,
+		value("missing_param", param),
+	)
+	if len(msg) > 0 {
+		err = errors.Wrap(err, strings.Join(msg, "->"))
+	}
+	return err
 }
 
 // Metrics related

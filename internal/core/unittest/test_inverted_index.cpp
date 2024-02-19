@@ -14,6 +14,7 @@
 #include <boost/filesystem.hpp>
 #include <unordered_set>
 
+#include "common/Tracer.h"
 #include "index/InvertedIndexTantivy.h"
 #include "storage/Util.h"
 #include "storage/InsertData.h"
@@ -168,7 +169,7 @@ test_run() {
 
         auto index =
             index::IndexFactory::GetInstance().CreateIndex(index_info, ctx);
-        index->Load(config);
+        index->Load(milvus::tracer::TraceContext{}, config);
 
         auto cnt = index->Count();
         ASSERT_EQ(cnt, nb);
@@ -369,7 +370,7 @@ test_string() {
 
         auto index =
             index::IndexFactory::GetInstance().CreateIndex(index_info, ctx);
-        index->Load(config);
+        index->Load(milvus::tracer::TraceContext{}, config);
 
         auto cnt = index->Count();
         ASSERT_EQ(cnt, nb);
@@ -488,6 +489,16 @@ test_string() {
             dataset->Set(index::OPERATOR_TYPE, OpType::PrefixMatch);
             dataset->Set(index::PREFIX_VALUE, prefix);
             auto bitset = real_index->Query(dataset);
+            ASSERT_EQ(cnt, bitset.size());
+            for (size_t i = 0; i < bitset.size(); i++) {
+                ASSERT_EQ(bitset[i], boost::starts_with(data[i], prefix));
+            }
+        }
+
+        {
+            ASSERT_TRUE(real_index->SupportRegexQuery());
+            auto prefix = data[0];
+            auto bitset = real_index->RegexQuery(prefix + "(.|\n)*");
             ASSERT_EQ(cnt, bitset.size());
             for (size_t i = 0; i < bitset.size(); i++) {
                 ASSERT_EQ(bitset[i], boost::starts_with(data[i], prefix));

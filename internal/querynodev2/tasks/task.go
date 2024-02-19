@@ -9,6 +9,8 @@ import (
 	"strconv"
 
 	"github.com/golang/protobuf/proto"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
@@ -23,6 +25,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/util/metricsinfo"
 	"github.com/milvus-io/milvus/pkg/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/util/timerecord"
+	"github.com/milvus-io/milvus/pkg/util/typeutil"
 )
 
 var (
@@ -46,7 +49,8 @@ type SearchTask struct {
 	others           []*SearchTask
 	notifier         chan error
 
-	tr *timerecord.TimeRecorder
+	tr           *timerecord.TimeRecorder
+	scheduleSpan trace.Span
 }
 
 func NewSearchTask(ctx context.Context,
@@ -54,6 +58,7 @@ func NewSearchTask(ctx context.Context,
 	manager *segments.Manager,
 	req *querypb.SearchRequest,
 ) *SearchTask {
+	ctx, span := otel.Tracer(typeutil.QueryNodeRole).Start(ctx, "schedule")
 	return &SearchTask{
 		ctx:              ctx,
 		collection:       collection,
@@ -68,6 +73,7 @@ func NewSearchTask(ctx context.Context,
 		originNqs:        []int64{req.GetReq().GetNq()},
 		notifier:         make(chan error, 1),
 		tr:               timerecord.NewTimeRecorderWithTrace(ctx, "searchTask"),
+		scheduleSpan:     span,
 	}
 }
 
@@ -118,6 +124,9 @@ func (t *SearchTask) Execute() error {
 		zap.String("shard", t.req.GetDmlChannels()[0]),
 	)
 
+	if t.scheduleSpan != nil {
+		t.scheduleSpan.End()
+	}
 	tr := timerecord.NewTimeRecorderWithTrace(t.ctx, "SearchTask")
 
 	req := t.req
@@ -157,6 +166,9 @@ func (t *SearchTask) Execute() error {
 	}
 	defer segments.DeleteSearchResults(results)
 
+	// plan.MetricType is accurate, though req.MetricType may be empty
+	metricType := searchReq.Plan().GetMetricType()
+
 	if len(results) == 0 {
 		for i := range t.originNqs {
 			var task *SearchTask
@@ -171,7 +183,7 @@ func (t *SearchTask) Execute() error {
 					SourceID: paramtable.GetNodeID(),
 				},
 				Status:         merr.Success(),
-				MetricType:     req.GetReq().GetMetricType(),
+				MetricType:     metricType,
 				NumQueries:     t.originNqs[i],
 				TopK:           t.originTopks[i],
 				SlicedOffset:   1,
@@ -225,7 +237,7 @@ func (t *SearchTask) Execute() error {
 				SourceID: paramtable.GetNodeID(),
 			},
 			Status:         merr.Success(),
-			MetricType:     req.GetReq().GetMetricType(),
+			MetricType:     metricType,
 			NumQueries:     t.originNqs[i],
 			TopK:           t.originTopks[i],
 			SlicedBlob:     bs,
@@ -257,6 +269,7 @@ func (t *SearchTask) Merge(other *SearchTask) bool {
 	// Check mergeable
 	if t.req.GetReq().GetDbID() != other.req.GetReq().GetDbID() ||
 		t.req.GetReq().GetCollectionID() != other.req.GetReq().GetCollectionID() ||
+		t.req.GetReq().GetMvccTimestamp() != other.req.GetReq().GetMvccTimestamp() ||
 		t.req.GetReq().GetDslType() != other.req.GetReq().GetDslType() ||
 		t.req.GetDmlChannels()[0] != other.req.GetDmlChannels()[0] ||
 		nq+otherNq > paramtable.Get().QueryNodeCfg.MaxGroupNQ.GetAsInt64() ||
@@ -300,6 +313,13 @@ func (t *SearchTask) Wait() error {
 }
 
 func (t *SearchTask) Result() *internalpb.SearchResults {
+	if t.result != nil {
+		channelsMvcc := make(map[string]uint64)
+		for _, ch := range t.req.GetDmlChannels() {
+			channelsMvcc[ch] = t.req.GetReq().GetMvccTimestamp()
+		}
+		t.result.ChannelsMvcc = channelsMvcc
+	}
 	return t.result
 }
 

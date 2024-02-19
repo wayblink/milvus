@@ -77,27 +77,30 @@ func (b *ScoreBasedBalancer) AssignSegment(collectionID int64, segments []*meta.
 
 	plans := make([]SegmentAssignPlan, 0, len(segments))
 	for _, s := range segments {
-		// for each segment, pick the node with the least score
-		targetNode := queue.pop().(*nodeItem)
-		priorityChange := b.calculateSegmentScore(s)
+		func(s *meta.Segment) {
+			// for each segment, pick the node with the least score
+			targetNode := queue.pop().(*nodeItem)
+			// make sure candidate is always push back
+			defer queue.push(targetNode)
+			priorityChange := b.calculateSegmentScore(s)
 
-		sourceNode := nodeItemsMap[s.Node]
-		// if segment's node exist, which means this segment comes from balancer. we should consider the benefit
-		// if the segment reassignment doesn't got enough benefit, we should skip this reassignment
-		if sourceNode != nil && !b.hasEnoughBenefit(sourceNode, targetNode, priorityChange) {
-			continue
-		}
+			sourceNode := nodeItemsMap[s.Node]
+			// if segment's node exist, which means this segment comes from balancer. we should consider the benefit
+			// if the segment reassignment doesn't got enough benefit, we should skip this reassignment
+			if sourceNode != nil && !b.hasEnoughBenefit(sourceNode, targetNode, priorityChange) {
+				return
+			}
 
-		plan := SegmentAssignPlan{
-			From:    -1,
-			To:      targetNode.nodeID,
-			Segment: s,
-		}
-		plans = append(plans, plan)
+			plan := SegmentAssignPlan{
+				From:    -1,
+				To:      targetNode.nodeID,
+				Segment: s,
+			}
+			plans = append(plans, plan)
 
-		// update the targetNode's score
-		targetNode.setPriority(targetNode.getPriority() + priorityChange)
-		queue.push(targetNode)
+			// update the targetNode's score
+			targetNode.setPriority(targetNode.getPriority() + priorityChange)
+		}(s)
 	}
 	return plans
 }
@@ -146,7 +149,7 @@ func (b *ScoreBasedBalancer) calculateScore(collectionID, nodeID int64) int {
 	// calculate global growing segment row count
 	views := b.dist.GetLeaderView(nodeID)
 	for _, view := range views {
-		rowCount += int(view.NumOfGrowingRows)
+		rowCount += int(float64(view.NumOfGrowingRows) * params.Params.QueryCoordCfg.GrowingRowCountWeight.GetAsFloat())
 	}
 
 	collectionRowCount := 0
@@ -159,7 +162,7 @@ func (b *ScoreBasedBalancer) calculateScore(collectionID, nodeID int64) int {
 	// calculate collection growing segment row count
 	collectionViews := b.dist.LeaderViewManager.GetByCollectionAndNode(collectionID, nodeID)
 	for _, view := range collectionViews {
-		collectionRowCount += int(view.NumOfGrowingRows)
+		collectionRowCount += int(float64(view.NumOfGrowingRows) * params.Params.QueryCoordCfg.GrowingRowCountWeight.GetAsFloat())
 	}
 	return collectionRowCount + int(float64(rowCount)*
 		params.Params.QueryCoordCfg.GlobalRowCountFactor.GetAsFloat())

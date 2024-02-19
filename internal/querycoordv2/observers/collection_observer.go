@@ -41,7 +41,6 @@ type CollectionObserver struct {
 	meta                 *meta.Meta
 	targetMgr            *meta.TargetManager
 	targetObserver       *TargetObserver
-	leaderObserver       *LeaderObserver
 	checkerController    *checkers.CheckerController
 	partitionLoadedCount map[int64]int
 
@@ -53,7 +52,6 @@ func NewCollectionObserver(
 	meta *meta.Meta,
 	targetMgr *meta.TargetManager,
 	targetObserver *TargetObserver,
-	leaderObserver *LeaderObserver,
 	checherController *checkers.CheckerController,
 ) *CollectionObserver {
 	return &CollectionObserver{
@@ -61,7 +59,6 @@ func NewCollectionObserver(
 		meta:                 meta,
 		targetMgr:            targetMgr,
 		targetObserver:       targetObserver,
-		leaderObserver:       leaderObserver,
 		checkerController:    checherController,
 		partitionLoadedCount: make(map[int64]int),
 	}
@@ -174,7 +171,7 @@ func (ob *CollectionObserver) observeLoadStatus(ctx context.Context) {
 }
 
 func (ob *CollectionObserver) observePartitionLoadStatus(ctx context.Context, partition *meta.Partition, replicaNum int32) {
-	log := log.With(
+	log := log.Ctx(ctx).WithRateGroup("qcv2.observePartitionLoadStatus", 1, 60).With(
 		zap.Int64("collectionID", partition.GetCollectionID()),
 		zap.Int64("partitionID", partition.GetPartitionID()),
 	)
@@ -188,7 +185,7 @@ func (ob *CollectionObserver) observePartitionLoadStatus(ctx context.Context, pa
 		return
 	}
 
-	log.Info("partition targets",
+	log.RatedInfo(10, "partition targets",
 		zap.Int("segmentTargetNum", len(segmentTargets)),
 		zap.Int("channelTargetNum", len(channelTargets)),
 		zap.Int("totalTargetNum", targetNum),

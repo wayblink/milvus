@@ -94,6 +94,7 @@ message SearchRequest {
   common.DslType dsl_type = 8;
   bytes serialized_expr_plan = 9;
   repeated int64 output_fields_id = 10;
+  uint64 mvcc_timestamp = 11;
   uint64 guarantee_timestamp = 12;
   uint64 timeout_timestamp = 13;
   int64  nq = 14;
@@ -101,6 +102,18 @@ message SearchRequest {
   string metricType = 16;
   bool ignoreGrowing = 17; // Optional
   string username = 18;
+}
+
+message HybridSearchRequest {
+  common.MsgBase base = 1;
+  int64 reqID = 2;
+  int64 dbID = 3;
+  int64 collectionID = 4;
+  repeated int64 partitionIDs = 5;
+  repeated SearchRequest reqs = 6;
+  uint64 mvcc_timestamp = 11;
+  uint64 guarantee_timestamp = 12;
+  uint64 timeout_timestamp = 13;
 }
 
 message SearchResults {
@@ -120,6 +133,7 @@ message SearchResults {
 
   // search request cost
   CostAggregation costAggregation = 13;
+  map<string, uint64> channels_mvcc = 14;
 }
 
 message CostAggregation {
@@ -160,7 +174,7 @@ message RetrieveResults {
   repeated int64 global_sealed_segmentIDs = 8;
 
    // query request cost
-   CostAggregation costAggregation = 13;
+  CostAggregation costAggregation = 13;
 }
 
 message LoadIndex {
@@ -246,4 +260,64 @@ enum RateType {
 message Rate {
   RateType rt = 1;
   double r = 2;
+}
+
+enum ImportState {
+  None = 0;
+  Pending = 1;
+  InProgress = 2;
+  Failed = 3;
+  Completed = 4;
+}
+
+message ImportFile {
+  // A singular row-based file or multiple column-based files.
+  repeated string paths = 1;
+}
+
+message ImportRequestInternal {
+  int64 collectionID = 1;
+  repeated int64 partitionIDs = 2;
+  repeated string channel_names = 3;
+  schema.CollectionSchema schema = 4;
+  repeated internal.ImportFile files = 5;
+  repeated common.KeyValuePair options = 6;
+}
+
+message ImportRequest {
+  string db_name = 1;
+  string collection_name = 2;
+  string partition_name = 3;
+  repeated ImportFile files = 4;
+  repeated common.KeyValuePair options = 5;
+}
+
+message ImportResponse {
+  common.Status status = 1;
+  string jobID = 2;
+}
+
+message GetImportProgressRequest {
+  string db_name = 1;
+  string jobID = 2;
+}
+
+message GetImportProgressResponse {
+  common.Status status = 1;
+  ImportState state = 2;
+  string reason = 3;
+  int64 progress = 4;
+}
+
+message ListImportsRequest {
+  string db_name = 1;
+  string collection_name = 2;
+}
+
+message ListImportsResponse {
+  common.Status status = 1;
+  repeated string jobIDs = 2;
+  repeated ImportState states = 3;
+  repeated string reasons = 4;
+  repeated int64 progresses = 5;
 }

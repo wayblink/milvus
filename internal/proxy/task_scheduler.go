@@ -263,10 +263,10 @@ func (queue *dmTaskQueue) PopActiveTask(taskID UniqueID) task {
 		defer queue.statsLock.Unlock()
 
 		delete(queue.activeTasks, taskID)
-		log.Debug("Proxy dmTaskQueue popPChanStats", zap.Any("taskID", t.ID()))
+		log.Debug("Proxy dmTaskQueue popPChanStats", zap.Int64("taskID", t.ID()))
 		queue.popPChanStats(t)
 	} else {
-		log.Warn("Proxy task not in active task list!", zap.Any("taskID", taskID))
+		log.Warn("Proxy task not in active task list!", zap.Int64("taskID", taskID))
 	}
 	return t
 }
@@ -503,7 +503,7 @@ func (sched *taskScheduler) controlLoop() {
 
 func (sched *taskScheduler) manipulationLoop() {
 	defer sched.wg.Done()
-
+	pool := conc.NewPool[struct{}](paramtable.Get().ProxyCfg.MaxTaskNum.GetAsInt())
 	for {
 		select {
 		case <-sched.ctx.Done():
@@ -511,7 +511,10 @@ func (sched *taskScheduler) manipulationLoop() {
 		case <-sched.dmQueue.utChan():
 			if !sched.dmQueue.utEmpty() {
 				t := sched.scheduleDmTask()
-				go sched.processTask(t, sched.dmQueue)
+				pool.Submit(func() (struct{}, error) {
+					sched.processTask(t, sched.dmQueue)
+					return struct{}{}, nil
+				})
 			}
 		}
 	}

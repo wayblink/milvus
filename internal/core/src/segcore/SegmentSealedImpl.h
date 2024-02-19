@@ -86,10 +86,10 @@ class SegmentSealedImpl : public SegmentSealed {
     bool
     HasRawData(int64_t field_id) const override;
 
- public:
-    int64_t
-    GetMemoryUsageInBytes() const override;
+    DataType
+    GetFieldDataType(FieldId fieldId) const override;
 
+ public:
     int64_t
     get_row_count() const override;
 
@@ -260,6 +260,9 @@ class SegmentSealedImpl : public SegmentSealed {
 
     void
     LoadScalarIndex(const LoadIndexInfo& info);
+
+    void
+    WarmupChunkCache(const FieldId field_id) override;
 
     bool
     generate_binlog_index(const FieldId field_id);

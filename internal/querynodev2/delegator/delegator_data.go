@@ -98,7 +98,7 @@ func (sd *shardDelegator) ProcessInsert(insertRecords map[int64]*InsertData) {
 				0,
 				insertData.StartPosition,
 				insertData.StartPosition,
-				datapb.SegmentLevel_Legacy,
+				datapb.SegmentLevel_L1,
 			)
 			if err != nil {
 				log.Error("failed to create new segment",
@@ -121,6 +121,13 @@ func (sd *shardDelegator) ProcessInsert(insertRecords map[int64]*InsertData) {
 			// panic here, insert failure
 			panic(err)
 		}
+		metrics.QueryNodeNumEntities.WithLabelValues(
+			fmt.Sprint(paramtable.GetNodeID()),
+			fmt.Sprint(growing.Collection()),
+			fmt.Sprint(growing.Partition()),
+			growing.Type().String(),
+			"0",
+		).Add(float64(len(insertData.RowIDs)))
 		growing.UpdateBloomFilter(insertData.PrimaryKeys)
 
 		if !sd.pkOracle.Exists(growing, paramtable.GetNodeID()) {
@@ -610,6 +617,7 @@ func (sd *shardDelegator) loadStreamDelete(ctx context.Context,
 				SegmentId:    info.GetSegmentID(),
 				PrimaryKeys:  storage.ParsePrimaryKeys2IDs(deleteData.Pks),
 				Timestamps:   deleteData.Tss,
+				Scope:        querypb.DataScope_Historical, // only sealed segment need to loadStreamDelete
 			})
 			if err != nil {
 				log.Warn("failed to apply delete when LoadSegment", zap.Error(err))

@@ -38,6 +38,11 @@ import (
 
 const retryWatchInterval = 20 * time.Second
 
+func (node *DataNode) startWatchChannelsAtBackground(ctx context.Context) {
+	node.stopWaiter.Add(1)
+	go node.StartWatchChannels(ctx)
+}
+
 // StartWatchChannels start loop to watch channel allocation status via kv(etcd for now)
 func (node *DataNode) StartWatchChannels(ctx context.Context) {
 	defer node.stopWaiter.Done()
@@ -61,7 +66,7 @@ func (node *DataNode) StartWatchChannels(ctx context.Context) {
 		case event, ok := <-evtChan:
 			if !ok {
 				log.Warn("datanode failed to watch channel, return")
-				go node.StartWatchChannels(ctx)
+				node.startWatchChannelsAtBackground(ctx)
 				return
 			}
 
@@ -69,7 +74,7 @@ func (node *DataNode) StartWatchChannels(ctx context.Context) {
 				log.Warn("datanode watch channel canceled", zap.Error(event.Err()))
 				// https://github.com/etcd-io/etcd/issues/8980
 				if event.Err() == v3rpc.ErrCompacted {
-					go node.StartWatchChannels(ctx)
+					node.startWatchChannelsAtBackground(ctx)
 					return
 				}
 				// if watch loop return due to event canceled, the datanode is not functional anymore
@@ -120,7 +125,7 @@ func (node *DataNode) handleWatchInfo(e *event, key string, data []byte) {
 
 		e.info = watchInfo
 		e.vChanName = watchInfo.GetVchan().GetChannelName()
-		log.Info("DataNode is handling watchInfo PUT event", zap.String("key", key), zap.Any("watch state", watchInfo.GetState().String()))
+		log.Info("DataNode is handling watchInfo PUT event", zap.String("key", key), zap.String("watch state", watchInfo.GetState().String()))
 	case deleteEventType:
 		e.vChanName = parseDeleteEventKey(key)
 		log.Info("DataNode is handling watchInfo DELETE event", zap.String("key", key))
@@ -184,9 +189,10 @@ func (node *DataNode) handlePutEvent(watchInfo *datapb.ChannelWatchInfo, version
 		watchInfo.State = datapb.ChannelWatchState_ReleaseSuccess
 	}
 
-	v, err := proto.Marshal(watchInfo)
+	liteInfo := GetLiteChannelWatchInfo(watchInfo)
+	v, err := proto.Marshal(liteInfo)
 	if err != nil {
-		return fmt.Errorf("fail to marshal watchInfo with state, vChanName: %s, state: %s ,err: %w", vChanName, watchInfo.State.String(), err)
+		return fmt.Errorf("fail to marshal watchInfo with state, vChanName: %s, state: %s ,err: %w", vChanName, liteInfo.State.String(), err)
 	}
 
 	success, err := node.watchKv.CompareVersionAndSwap(key, tickler.version, string(v))
@@ -369,14 +375,31 @@ func (t *etcdTickler) stop() {
 }
 
 func newEtcdTickler(version int64, path string, watchInfo *datapb.ChannelWatchInfo, kv kv.WatchKV, interval time.Duration) *etcdTickler {
+	liteWatchInfo := GetLiteChannelWatchInfo(watchInfo)
 	return &etcdTickler{
 		progress:      atomic.NewInt32(0),
 		path:          path,
 		kv:            kv,
-		watchInfo:     watchInfo,
+		watchInfo:     liteWatchInfo,
 		version:       version,
 		interval:      interval,
 		closeCh:       make(chan struct{}),
 		isWatchFailed: atomic.NewBool(false),
+	}
+}
+
+// GetLiteChannelWatchInfo clones watchInfo without segmentIDs to reduce the size of the message
+func GetLiteChannelWatchInfo(watchInfo *datapb.ChannelWatchInfo) *datapb.ChannelWatchInfo {
+	return &datapb.ChannelWatchInfo{
+		Vchan: &datapb.VchannelInfo{
+			CollectionID: watchInfo.GetVchan().GetCollectionID(),
+			ChannelName:  watchInfo.GetVchan().GetChannelName(),
+			SeekPosition: watchInfo.GetVchan().GetSeekPosition(),
+		},
+		StartTs:   watchInfo.GetStartTs(),
+		State:     watchInfo.GetState(),
+		TimeoutTs: watchInfo.GetTimeoutTs(),
+		Schema:    watchInfo.GetSchema(),
+		Progress:  watchInfo.GetProgress(),
 	}
 }

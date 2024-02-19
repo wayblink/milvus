@@ -36,6 +36,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
 	etcdkv "github.com/milvus-io/milvus/internal/kv/etcd"
 	"github.com/milvus-io/milvus/internal/kv/mocks"
+	"github.com/milvus-io/milvus/internal/kv/predicates"
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/metastore/model"
 	"github.com/milvus-io/milvus/internal/proto/datapb"
@@ -54,23 +55,14 @@ var (
 	fieldID      = int64(1)
 	rootPath     = "a"
 
-	binlogPath   = metautil.BuildInsertLogPath(rootPath, collectionID, partitionID, segmentID, fieldID, logID)
-	deltalogPath = metautil.BuildDeltaLogPath(rootPath, collectionID, partitionID, segmentID, logID)
-	statslogPath = metautil.BuildStatsLogPath(rootPath, collectionID, partitionID, segmentID, fieldID, logID)
-
-	binlogPath2   = metautil.BuildInsertLogPath(rootPath, collectionID, partitionID, segmentID2, fieldID, logID)
-	deltalogPath2 = metautil.BuildDeltaLogPath(rootPath, collectionID, partitionID, segmentID2, logID)
-	statslogPath2 = metautil.BuildStatsLogPath(rootPath, collectionID, partitionID, segmentID2, fieldID, logID)
-
 	k1 = buildFieldBinlogPath(collectionID, partitionID, segmentID, fieldID)
 	k2 = buildFieldDeltalogPath(collectionID, partitionID, segmentID, fieldID)
 	k3 = buildFieldStatslogPath(collectionID, partitionID, segmentID, fieldID)
 	k4 = buildSegmentPath(collectionID, partitionID, segmentID2)
 	k5 = buildSegmentPath(collectionID, partitionID, segmentID)
-	k6 = buildFlushedSegmentPath(collectionID, partitionID, segmentID)
-	k7 = buildFieldBinlogPath(collectionID, partitionID, segmentID2, fieldID)
-	k8 = buildFieldDeltalogPath(collectionID, partitionID, segmentID2, fieldID)
-	k9 = buildFieldStatslogPath(collectionID, partitionID, segmentID2, fieldID)
+	k6 = buildFieldBinlogPath(collectionID, partitionID, segmentID2, fieldID)
+	k7 = buildFieldDeltalogPath(collectionID, partitionID, segmentID2, fieldID)
+	k8 = buildFieldStatslogPath(collectionID, partitionID, segmentID2, fieldID)
 
 	keys = map[string]struct{}{
 		k1: {},
@@ -81,7 +73,6 @@ var (
 		k6: {},
 		k7: {},
 		k8: {},
-		k9: {},
 	}
 
 	invalidSegment = &datapb.SegmentInfo{
@@ -109,7 +100,7 @@ var (
 			Binlogs: []*datapb.Binlog{
 				{
 					EntriesNum: 5,
-					LogPath:    binlogPath,
+					LogID:      logID,
 				},
 			},
 		},
@@ -121,7 +112,7 @@ var (
 			Binlogs: []*datapb.Binlog{
 				{
 					EntriesNum: 5,
-					LogPath:    deltalogPath,
+					LogID:      logID,
 				},
 			},
 		},
@@ -132,20 +123,20 @@ var (
 			Binlogs: []*datapb.Binlog{
 				{
 					EntriesNum: 5,
-					LogPath:    statslogPath,
+					LogID:      logID,
 				},
 			},
 		},
 	}
 
-	getlogs = func(logpath string) []*datapb.FieldBinlog {
+	getlogs = func(id int64) []*datapb.FieldBinlog {
 		return []*datapb.FieldBinlog{
 			{
 				FieldID: 1,
 				Binlogs: []*datapb.Binlog{
 					{
 						EntriesNum: 5,
-						LogPath:    logpath,
+						LogID:      id,
 					},
 				},
 			},
@@ -169,9 +160,9 @@ var (
 		PartitionID:  partitionID,
 		NumOfRows:    100,
 		State:        commonpb.SegmentState_Dropped,
-		Binlogs:      getlogs(binlogPath2),
-		Deltalogs:    getlogs(deltalogPath2),
-		Statslogs:    getlogs(statslogPath2),
+		Binlogs:      getlogs(logID),
+		Deltalogs:    getlogs(logID),
+		Statslogs:    getlogs(logID),
 	}
 )
 
@@ -197,19 +188,22 @@ func Test_ListSegments(t *testing.T) {
 		assert.Equal(t, fieldID, segment.Binlogs[0].FieldID)
 		assert.Equal(t, 1, len(segment.Binlogs[0].Binlogs))
 		assert.Equal(t, logID, segment.Binlogs[0].Binlogs[0].LogID)
-		assert.Equal(t, binlogPath, segment.Binlogs[0].Binlogs[0].LogPath)
+		// set log path to empty and only store log id
+		assert.Equal(t, "", segment.Binlogs[0].Binlogs[0].LogPath)
 
 		assert.Equal(t, 1, len(segment.Deltalogs))
 		assert.Equal(t, fieldID, segment.Deltalogs[0].FieldID)
 		assert.Equal(t, 1, len(segment.Deltalogs[0].Binlogs))
 		assert.Equal(t, logID, segment.Deltalogs[0].Binlogs[0].LogID)
-		assert.Equal(t, deltalogPath, segment.Deltalogs[0].Binlogs[0].LogPath)
+		// set log path to empty and only store log id
+		assert.Equal(t, "", segment.Deltalogs[0].Binlogs[0].LogPath)
 
 		assert.Equal(t, 1, len(segment.Statslogs))
 		assert.Equal(t, fieldID, segment.Statslogs[0].FieldID)
 		assert.Equal(t, 1, len(segment.Statslogs[0].Binlogs))
 		assert.Equal(t, logID, segment.Statslogs[0].Binlogs[0].LogID)
-		assert.Equal(t, statslogPath, segment.Statslogs[0].Binlogs[0].LogPath)
+		// set log path to empty and only store log id
+		assert.Equal(t, "", segment.Statslogs[0].Binlogs[0].LogPath)
 	}
 
 	t.Run("test compatibility", func(t *testing.T) {
@@ -229,7 +223,7 @@ func Test_ListSegments(t *testing.T) {
 		assert.NotNil(t, ret)
 		assert.NoError(t, err)
 
-		verifySegments(t, int64(0), ret)
+		verifySegments(t, logID, ret)
 	})
 
 	t.Run("list successfully", func(t *testing.T) {
@@ -393,7 +387,7 @@ func Test_AlterSegments(t *testing.T) {
 				Binlogs: []*datapb.Binlog{
 					{
 						EntriesNum: 5,
-						LogPath:    binlogPath,
+						LogID:      logID,
 					},
 				},
 			})
@@ -429,7 +423,7 @@ func Test_AlterSegments(t *testing.T) {
 func Test_DropSegment(t *testing.T) {
 	t.Run("remove failed", func(t *testing.T) {
 		metakv := mocks.NewMetaKv(t)
-		metakv.EXPECT().MultiRemove(mock.Anything).Return(errors.New("error"))
+		metakv.EXPECT().MultiSaveAndRemoveWithPrefix(mock.Anything, mock.Anything).Return(errors.New("error"))
 
 		catalog := NewCatalog(metakv, rootPath, "")
 		err := catalog.DropSegment(context.TODO(), segment1)
@@ -439,7 +433,7 @@ func Test_DropSegment(t *testing.T) {
 	t.Run("remove successfully", func(t *testing.T) {
 		removedKvs := make(map[string]struct{}, 0)
 		metakv := mocks.NewMetaKv(t)
-		metakv.EXPECT().MultiRemove(mock.Anything).RunAndReturn(func(s []string) error {
+		metakv.EXPECT().MultiSaveAndRemoveWithPrefix(mock.Anything, mock.Anything).RunAndReturn(func(m map[string]string, s []string, p ...predicates.Predicate) error {
 			for _, key := range s {
 				removedKvs[key] = struct{}{}
 			}
@@ -450,8 +444,13 @@ func Test_DropSegment(t *testing.T) {
 		err := catalog.DropSegment(context.TODO(), segment1)
 		assert.NoError(t, err)
 
+		segKey := buildSegmentPath(segment1.GetCollectionID(), segment1.GetPartitionID(), segment1.GetID())
+		binlogPreix := fmt.Sprintf("%s/%d/%d/%d", SegmentBinlogPathPrefix, segment1.GetCollectionID(), segment1.GetPartitionID(), segment1.GetID())
+		deltalogPreix := fmt.Sprintf("%s/%d/%d/%d", SegmentDeltalogPathPrefix, segment1.GetCollectionID(), segment1.GetPartitionID(), segment1.GetID())
+		statelogPreix := fmt.Sprintf("%s/%d/%d/%d", SegmentStatslogPathPrefix, segment1.GetCollectionID(), segment1.GetPartitionID(), segment1.GetID())
+
 		assert.Equal(t, 4, len(removedKvs))
-		for _, k := range []string{k1, k2, k3, k5} {
+		for _, k := range []string{segKey, binlogPreix, deltalogPreix, statelogPreix} {
 			_, ok := removedKvs[k]
 			assert.True(t, ok)
 		}
@@ -739,7 +738,7 @@ func verifySavedKvsForDroppedSegment(t *testing.T, savedKvs map[string]string) {
 		assert.True(t, ok)
 	}
 
-	for _, k := range []string{k7, k8, k9} {
+	for _, k := range []string{k6, k7, k8} {
 		ret, ok := savedKvs[k]
 		assert.True(t, ok)
 		verifyBinlogs(t, []byte(ret))
@@ -1056,54 +1055,6 @@ func TestCatalog_DropSegmentIndex(t *testing.T) {
 		err := catalog.DropSegmentIndex(context.Background(), 0, 0, 0, 0)
 		assert.Error(t, err)
 	})
-}
-
-func TestCatalog_Compress(t *testing.T) {
-	segmentInfo := getSegment(rootPath, 0, 1, 2, 3, 10000)
-	val, err := proto.Marshal(segmentInfo)
-	assert.NoError(t, err)
-
-	compressedSegmentInfo := proto.Clone(segmentInfo).(*datapb.SegmentInfo)
-	compressedSegmentInfo.Binlogs, err = CompressBinLog(compressedSegmentInfo.Binlogs)
-	assert.NoError(t, err)
-	compressedSegmentInfo.Deltalogs, err = CompressBinLog(compressedSegmentInfo.Deltalogs)
-	assert.NoError(t, err)
-	compressedSegmentInfo.Statslogs, err = CompressBinLog(compressedSegmentInfo.Statslogs)
-	assert.NoError(t, err)
-
-	valCompressed, err := proto.Marshal(compressedSegmentInfo)
-	assert.NoError(t, err)
-
-	assert.True(t, len(valCompressed) < len(val))
-
-	// make sure the compact
-	unmarshaledSegmentInfo := &datapb.SegmentInfo{}
-	proto.Unmarshal(val, unmarshaledSegmentInfo)
-
-	unmarshaledSegmentInfoCompressed := &datapb.SegmentInfo{}
-	proto.Unmarshal(valCompressed, unmarshaledSegmentInfoCompressed)
-	DecompressBinLog(rootPath, unmarshaledSegmentInfoCompressed)
-
-	assert.Equal(t, len(unmarshaledSegmentInfo.GetBinlogs()), len(unmarshaledSegmentInfoCompressed.GetBinlogs()))
-	for i := 0; i < 1000; i++ {
-		assert.Equal(t, unmarshaledSegmentInfo.GetBinlogs()[0].Binlogs[i].LogPath, unmarshaledSegmentInfoCompressed.GetBinlogs()[0].Binlogs[i].LogPath)
-	}
-
-	// test compress erorr path
-	fakeBinlogs := make([]*datapb.Binlog, 1)
-	fakeBinlogs[0] = &datapb.Binlog{
-		EntriesNum: 10000,
-		LogPath:    "test",
-	}
-	fieldBinLogs := make([]*datapb.FieldBinlog, 1)
-	fieldBinLogs[0] = &datapb.FieldBinlog{
-		FieldID: 106,
-		Binlogs: fakeBinlogs,
-	}
-	compressedSegmentInfo.Binlogs, err = CompressBinLog(fieldBinLogs)
-	assert.Error(t, err)
-
-	// test decompress error path
 }
 
 func BenchmarkCatalog_List1000Segments(b *testing.B) {

@@ -131,10 +131,25 @@ var (
 			MetaStore2API(commonpb.ObjectPrivilege_PrivilegeCreateDatabase.String()),
 			MetaStore2API(commonpb.ObjectPrivilege_PrivilegeDropDatabase.String()),
 			MetaStore2API(commonpb.ObjectPrivilege_PrivilegeListDatabases.String()),
+
+			MetaStore2API(commonpb.ObjectPrivilege_PrivilegeCreateAlias.String()),
+			MetaStore2API(commonpb.ObjectPrivilege_PrivilegeDropAlias.String()),
+			MetaStore2API(commonpb.ObjectPrivilege_PrivilegeDescribeAlias.String()),
+			MetaStore2API(commonpb.ObjectPrivilege_PrivilegeListAliases.String()),
 		},
 		commonpb.ObjectType_User.String(): {
 			MetaStore2API(commonpb.ObjectPrivilege_PrivilegeUpdateUser.String()),
 			MetaStore2API(commonpb.ObjectPrivilege_PrivilegeSelectUser.String()),
+		},
+	}
+
+	RelatedPrivileges = map[string][]string{
+		commonpb.ObjectPrivilege_PrivilegeLoad.String(): {
+			commonpb.ObjectPrivilege_PrivilegeGetLoadState.String(),
+			commonpb.ObjectPrivilege_PrivilegeGetLoadingProgress.String(),
+		},
+		commonpb.ObjectPrivilege_PrivilegeFlush.String(): {
+			commonpb.ObjectPrivilege_PrivilegeGetFlushState.String(),
 		},
 	}
 )

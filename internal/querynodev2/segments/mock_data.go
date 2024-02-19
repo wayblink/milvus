@@ -122,6 +122,14 @@ var simpleFloat16VecField = vecFieldParam{
 	fieldName:  "float16VectorField",
 }
 
+var simpleBFloat16VecField = vecFieldParam{
+	id:         113,
+	dim:        defaultDim,
+	metricType: defaultMetricType,
+	vecType:    schemapb.DataType_BFloat16Vector,
+	fieldName:  "bfloat16VectorField",
+}
+
 var simpleBoolField = constFieldParam{
 	id:        102,
 	dataType:  schemapb.DataType_Bool,
@@ -291,7 +299,56 @@ func GenTestCollectionSchema(collectionName string, pkType schemapb.DataType) *s
 	return &schema
 }
 
+func GenTestIndexInfoList(collectionID int64, schema *schemapb.CollectionSchema) []*indexpb.IndexInfo {
+	res := make([]*indexpb.IndexInfo, 0)
+	vectorFieldSchemas := typeutil.GetVectorFieldSchemas(schema)
+	for _, field := range vectorFieldSchemas {
+		index := &indexpb.IndexInfo{
+			CollectionID: collectionID,
+			FieldID:      field.GetFieldID(),
+			// For now, a field can only have one index
+			// using fieldID and fieldName as indexID and indexName, just make sure not repeated.
+			IndexID:    field.GetFieldID(),
+			IndexName:  field.GetName(),
+			TypeParams: field.GetTypeParams(),
+		}
+		switch field.GetDataType() {
+		case schemapb.DataType_FloatVector, schemapb.DataType_Float16Vector:
+			{
+				index.IndexParams = []*commonpb.KeyValuePair{
+					{Key: common.MetricTypeKey, Value: metric.L2},
+					{Key: common.IndexTypeKey, Value: IndexFaissIVFFlat},
+					{Key: "nlist", Value: "128"},
+				}
+			}
+		case schemapb.DataType_BinaryVector:
+			{
+				index.IndexParams = []*commonpb.KeyValuePair{
+					{Key: common.MetricTypeKey, Value: metric.JACCARD},
+					{Key: common.IndexTypeKey, Value: IndexFaissBinIVFFlat},
+					{Key: "nlist", Value: "128"},
+				}
+			}
+		}
+		res = append(res, index)
+	}
+	return res
+}
+
 func GenTestIndexMeta(collectionID int64, schema *schemapb.CollectionSchema) *segcorepb.CollectionIndexMeta {
+	indexInfos := GenTestIndexInfoList(collectionID, schema)
+	fieldIndexMetas := make([]*segcorepb.FieldIndexMeta, 0)
+	for _, info := range indexInfos {
+		fieldIndexMetas = append(fieldIndexMetas, &segcorepb.FieldIndexMeta{
+			CollectionID:    info.GetCollectionID(),
+			FieldID:         info.GetFieldID(),
+			IndexName:       info.GetIndexName(),
+			TypeParams:      info.GetTypeParams(),
+			IndexParams:     info.GetIndexParams(),
+			IsAutoIndex:     info.GetIsAutoIndex(),
+			UserIndexParams: info.GetUserIndexParams(),
+		})
+	}
 	sizePerRecord, err := typeutil.EstimateSizePerRecord(schema)
 	maxIndexRecordPerSegment := int64(0)
 	if err != nil || sizePerRecord == 0 {
@@ -301,37 +358,6 @@ func GenTestIndexMeta(collectionID int64, schema *schemapb.CollectionSchema) *se
 		proportion := paramtable.Get().DataCoordCfg.SegmentSealProportion.GetAsFloat()
 		maxIndexRecordPerSegment = int64(threshold * proportion / float64(sizePerRecord))
 	}
-
-	fieldIndexMetas := make([]*segcorepb.FieldIndexMeta, 0)
-	fieldIndexMetas = append(fieldIndexMetas, &segcorepb.FieldIndexMeta{
-		CollectionID: collectionID,
-		FieldID:      simpleFloatVecField.id,
-		IndexName:    "querynode-test",
-		TypeParams: []*commonpb.KeyValuePair{
-			{
-				Key:   dimKey,
-				Value: strconv.Itoa(simpleFloatVecField.dim),
-			},
-		},
-		IndexParams: []*commonpb.KeyValuePair{
-			{
-				Key:   metricTypeKey,
-				Value: simpleFloatVecField.metricType,
-			},
-			{
-				Key:   common.IndexTypeKey,
-				Value: IndexFaissIVFFlat,
-			},
-			{
-				Key:   "nlist",
-				Value: "128",
-			},
-		},
-		IsAutoIndex: false,
-		UserIndexParams: []*commonpb.KeyValuePair{
-			{},
-		},
-	})
 
 	indexMeta := segcorepb.CollectionIndexMeta{
 		MaxIndexRowCount: maxIndexRecordPerSegment,
@@ -449,6 +475,16 @@ func generateBinaryVectors(numRows, dim int) []byte {
 }
 
 func generateFloat16Vectors(numRows, dim int) []byte {
+	total := numRows * dim * 2
+	ret := make([]byte, total)
+	_, err := rand.Read(ret)
+	if err != nil {
+		panic(err)
+	}
+	return ret
+}
+
+func generateBFloat16Vectors(numRows, dim int) []byte {
 	total := numRows * dim * 2
 	ret := make([]byte, total)
 	_, err := rand.Read(ret)
@@ -625,6 +661,16 @@ func GenTestVectorFiledData(dType schemapb.DataType, fieldName string, fieldID i
 				},
 			},
 		}
+	case schemapb.DataType_BFloat16Vector:
+		ret.FieldId = fieldID
+		ret.Field = &schemapb.FieldData_Vectors{
+			Vectors: &schemapb.VectorField{
+				Dim: int64(dim),
+				Data: &schemapb.VectorField_Bfloat16Vector{
+					Bfloat16Vector: generateBFloat16Vectors(numRows, dim),
+				},
+			},
+		}
 	default:
 		panic("data type not supported")
 	}
@@ -787,7 +833,8 @@ func genInsertData(msgLength int, schema *schemapb.CollectionSchema) (*storage.I
 			}
 		case schemapb.DataType_Array:
 			insertData.Data[f.FieldID] = &storage.ArrayFieldData{
-				Data: generateArrayArray(msgLength),
+				ElementType: schemapb.DataType_Int32,
+				Data:        generateArrayArray(msgLength),
 			}
 		case schemapb.DataType_JSON:
 			insertData.Data[f.FieldID] = &storage.JSONFieldData{
@@ -803,6 +850,12 @@ func genInsertData(msgLength int, schema *schemapb.CollectionSchema) (*storage.I
 			dim := simpleFloat16VecField.dim
 			insertData.Data[f.FieldID] = &storage.Float16VectorFieldData{
 				Data: generateFloat16Vectors(msgLength, dim),
+				Dim:  dim,
+			}
+		case schemapb.DataType_BFloat16Vector:
+			dim := simpleFloat16VecField.dim
+			insertData.Data[f.FieldID] = &storage.BFloat16VectorFieldData{
+				Data: generateBFloat16Vectors(msgLength, dim),
 				Dim:  dim,
 			}
 		case schemapb.DataType_BinaryVector:
@@ -887,6 +940,80 @@ func SaveDeltaLog(collectionID int64,
 	log.Debug("[query node unittest] save delta log file to MinIO/S3")
 
 	return fieldBinlog, cm.MultiWrite(context.Background(), kvs)
+}
+
+func GenAndSaveIndexV2(collectionID, partitionID, segmentID, buildID int64,
+	fieldSchema *schemapb.FieldSchema,
+	indexInfo *indexpb.IndexInfo,
+	cm storage.ChunkManager,
+	msgLength int,
+) (*querypb.FieldIndexInfo, error) {
+	typeParams := funcutil.KeyValuePair2Map(indexInfo.GetTypeParams())
+	indexParams := funcutil.KeyValuePair2Map(indexInfo.GetIndexParams())
+
+	index, err := indexcgowrapper.NewCgoIndex(fieldSchema.GetDataType(), typeParams, indexParams)
+	if err != nil {
+		return nil, err
+	}
+	defer index.Delete()
+
+	var dataset *indexcgowrapper.Dataset
+	switch fieldSchema.DataType {
+	case schemapb.DataType_BinaryVector:
+		dataset = indexcgowrapper.GenBinaryVecDataset(generateBinaryVectors(msgLength, defaultDim))
+	case schemapb.DataType_FloatVector:
+		dataset = indexcgowrapper.GenFloatVecDataset(generateFloatVectors(msgLength, defaultDim))
+	}
+
+	err = index.Build(dataset)
+	if err != nil {
+		return nil, err
+	}
+
+	// save index to minio
+	binarySet, err := index.Serialize()
+	if err != nil {
+		return nil, err
+	}
+
+	// serialize index params
+	indexCodec := storage.NewIndexFileBinlogCodec()
+	serializedIndexBlobs, err := indexCodec.Serialize(
+		buildID,
+		0,
+		collectionID,
+		partitionID,
+		segmentID,
+		fieldSchema.GetFieldID(),
+		indexParams,
+		indexInfo.GetIndexName(),
+		indexInfo.GetIndexID(),
+		binarySet,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	indexPaths := make([]string, 0)
+	for _, index := range serializedIndexBlobs {
+		indexPath := filepath.Join(cm.RootPath(), "index_files",
+			strconv.Itoa(int(segmentID)), index.Key)
+		indexPaths = append(indexPaths, indexPath)
+		err := cm.Write(context.Background(), indexPath, index.Value)
+		if err != nil {
+			return nil, err
+		}
+	}
+	_, cCurrentIndexVersion := getIndexEngineVersion()
+
+	return &querypb.FieldIndexInfo{
+		FieldID:             fieldSchema.GetFieldID(),
+		EnableIndex:         true,
+		IndexName:           indexInfo.GetIndexName(),
+		IndexParams:         indexInfo.GetIndexParams(),
+		IndexFilePaths:      indexPaths,
+		CurrentIndexVersion: cCurrentIndexVersion,
+	}, nil
 }
 
 func GenAndSaveIndex(collectionID, partitionID, segmentID, fieldID int64, msgLength int, indexType, metricType string, cm storage.ChunkManager) (*querypb.FieldIndexInfo, error) {
@@ -1081,7 +1208,7 @@ func genBruteForceDSL(schema *schemapb.CollectionSchema, topK int64, roundDecima
 	roundDecimalStr := strconv.FormatInt(roundDecimal, 10)
 	var fieldID int64
 	for _, f := range schema.Fields {
-		if f.DataType == schemapb.DataType_FloatVector || f.DataType == schemapb.DataType_Float16Vector {
+		if f.DataType == schemapb.DataType_FloatVector || f.DataType == schemapb.DataType_Float16Vector || f.DataType == schemapb.DataType_BFloat16Vector {
 			vecFieldName = f.Name
 			fieldID = f.FieldID
 			for _, p := range f.IndexParams {
@@ -1235,6 +1362,9 @@ func genInsertMsg(collection *Collection, partitionID, segment int64, numRows in
 			fieldsData = append(fieldsData, GenTestVectorFiledData(f.DataType, f.Name, f.FieldID, numRows, dim))
 		case schemapb.DataType_Float16Vector:
 			dim := simpleFloat16VecField.dim // if no dim specified, use simpleFloatVecField's dim
+			fieldsData = append(fieldsData, GenTestVectorFiledData(f.DataType, f.Name, f.FieldID, numRows, dim))
+		case schemapb.DataType_BFloat16Vector:
+			dim := simpleBFloat16VecField.dim // if no dim specified, use simpleFloatVecField's dim
 			fieldsData = append(fieldsData, GenTestVectorFiledData(f.DataType, f.Name, f.FieldID, numRows, dim))
 		default:
 			err := errors.New("data type not supported")
@@ -1479,6 +1609,20 @@ func genFieldData(fieldName string, fieldID int64, fieldType schemapb.DataType, 
 					Dim: dim,
 					Data: &schemapb.VectorField_Float16Vector{
 						Float16Vector: fieldValue.([]byte),
+					},
+				},
+			},
+			FieldId: fieldID,
+		}
+	case schemapb.DataType_BFloat16Vector:
+		fieldData = &schemapb.FieldData{
+			Type:      schemapb.DataType_BFloat16Vector,
+			FieldName: fieldName,
+			Field: &schemapb.FieldData_Vectors{
+				Vectors: &schemapb.VectorField{
+					Dim: dim,
+					Data: &schemapb.VectorField_Bfloat16Vector{
+						Bfloat16Vector: fieldValue.([]byte),
 					},
 				},
 			},

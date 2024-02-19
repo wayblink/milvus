@@ -485,15 +485,16 @@ func (s *Session) registerService() (<-chan *clientv3.LeaseKeepAliveResponse, er
 // If we find previous session have same address as current , simply purge the old one so the recovery can be much faster
 func (s *Session) handleRestart(key string) {
 	resp, err := s.etcdCli.Get(s.ctx, key)
+	log := log.With(zap.String("key", key))
 	if err != nil {
-		log.Warn("failed to read old session from etcd, ignore", zap.Any("key", key), zap.Error(err))
+		log.Warn("failed to read old session from etcd, ignore", zap.Error(err))
 		return
 	}
 	for _, kv := range resp.Kvs {
 		session := &Session{}
 		err = json.Unmarshal(kv.Value, session)
 		if err != nil {
-			log.Warn("failed to unmarshal old session from etcd, ignore", zap.Any("key", key), zap.Error(err))
+			log.Warn("failed to unmarshal old session from etcd, ignore", zap.Error(err))
 			return
 		}
 
@@ -502,7 +503,7 @@ func (s *Session) handleRestart(key string) {
 				zap.String("address", session.Address))
 			_, err := s.etcdCli.Delete(s.ctx, key)
 			if err != nil {
-				log.Warn("failed to unmarshal old session from etcd, ignore", zap.Any("key", key), zap.Error(err))
+				log.Warn("failed to unmarshal old session from etcd, ignore", zap.Error(err))
 				return
 			}
 		}
@@ -925,9 +926,23 @@ func (s *Session) cancelKeepAlive() {
 	}
 }
 
+func (s *Session) deleteSession() bool {
+	if s.etcdCli == nil {
+		log.Error("failed to delete session due to nil etcdCli!")
+		return false
+	}
+	_, err := s.etcdCli.Delete(context.Background(), s.getCompleteKey())
+	if err != nil {
+		log.Warn("failed to delete session", zap.Error(err))
+		return false
+	}
+	return true
+}
+
 func (s *Session) Stop() {
 	s.Revoke(time.Second)
 	s.cancelKeepAlive()
+	s.deleteSession()
 	s.wg.Wait()
 }
 

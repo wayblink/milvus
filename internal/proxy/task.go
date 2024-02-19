@@ -44,6 +44,7 @@ import (
 const (
 	IgnoreGrowingKey     = "ignore_growing"
 	ReduceStopForBestKey = "reduce_stop_for_best"
+	GroupByFieldKey      = "group_by_field"
 	AnnsFieldKey         = "anns_field"
 	TopKKey              = "topk"
 	NQKey                = "nq"
@@ -72,6 +73,8 @@ const (
 	CreateAliasTaskName           = "CreateAliasTask"
 	DropAliasTaskName             = "DropAliasTask"
 	AlterAliasTaskName            = "AlterAliasTask"
+	DescribeAliasTaskName         = "DescribeAliasTask"
+	ListAliasesTaskName           = "ListAliasesTask"
 	AlterCollectionTaskName       = "AlterCollectionTask"
 	UpsertTaskName                = "UpsertTask"
 	CreateResourceGroupTaskName   = "CreateResourceGroupTask"
@@ -87,6 +90,11 @@ const (
 
 	// minFloat32 minimum float.
 	minFloat32 = -1 * float32(math.MaxFloat32)
+
+	RankTypeKey      = "strategy"
+	RankParamsKey    = "params"
+	RRFParamsKey     = "k"
+	WeightsParamsKey = "weights"
 )
 
 type task interface {
@@ -207,6 +215,36 @@ func (t *createCollectionTask) validatePartitionKey() error {
 	return nil
 }
 
+func (t *createCollectionTask) validateClusteringKey() error {
+	idx := -1
+	for i, field := range t.schema.Fields {
+		if field.GetIsClusteringKey() {
+			if idx != -1 {
+				return merr.WrapErrCollectionIllegalSchema(t.CollectionName,
+					fmt.Sprintf("there are more than one clustering key, field name = %s, %s", t.schema.Fields[idx].Name, field.Name))
+			}
+
+			if field.GetIsPrimaryKey() {
+				return merr.WrapErrCollectionIllegalSchema(t.CollectionName,
+					fmt.Sprintf("the clustering key field must not be primary key field, field name = %s", field.Name))
+			}
+
+			if field.GetIsPartitionKey() {
+				return merr.WrapErrCollectionIllegalSchema(t.CollectionName,
+					fmt.Sprintf("the clustering key field must not be partition key field, field name = %s", field.Name))
+			}
+			idx = i
+		}
+	}
+
+	if idx != -1 {
+		log.Info("create collection with clustering key",
+			zap.String("collectionName", t.CollectionName),
+			zap.String("clusteringKeyField", t.schema.Fields[idx].Name))
+	}
+	return nil
+}
+
 func (t *createCollectionTask) PreExecute(ctx context.Context) error {
 	t.Base.MsgType = commonpb.MsgType_CreateCollection
 	t.Base.SourceID = paramtable.GetNodeID()
@@ -262,6 +300,11 @@ func (t *createCollectionTask) PreExecute(ctx context.Context) error {
 
 	// validate partition key mode
 	if err := t.validatePartitionKey(); err != nil {
+		return err
+	}
+
+	// validate clustering key
+	if err := t.validateClusteringKey(); err != nil {
 		return err
 	}
 
@@ -571,18 +614,19 @@ func (t *describeCollectionTask) Execute(ctx context.Context) error {
 			}
 			if field.FieldID >= common.StartOfUserFieldID {
 				t.result.Schema.Fields = append(t.result.Schema.Fields, &schemapb.FieldSchema{
-					FieldID:        field.FieldID,
-					Name:           field.Name,
-					IsPrimaryKey:   field.IsPrimaryKey,
-					AutoID:         field.AutoID,
-					Description:    field.Description,
-					DataType:       field.DataType,
-					TypeParams:     field.TypeParams,
-					IndexParams:    field.IndexParams,
-					IsDynamic:      field.IsDynamic,
-					IsPartitionKey: field.IsPartitionKey,
-					DefaultValue:   field.DefaultValue,
-					ElementType:    field.ElementType,
+					FieldID:         field.FieldID,
+					Name:            field.Name,
+					IsPrimaryKey:    field.IsPrimaryKey,
+					AutoID:          field.AutoID,
+					Description:     field.Description,
+					DataType:        field.DataType,
+					TypeParams:      field.TypeParams,
+					IndexParams:     field.IndexParams,
+					IsDynamic:       field.IsDynamic,
+					IsPartitionKey:  field.IsPartitionKey,
+					IsClusteringKey: field.IsClusteringKey,
+					DefaultValue:    field.DefaultValue,
+					ElementType:     field.ElementType,
 				})
 			}
 		}
@@ -678,8 +722,8 @@ func (t *showCollectionsTask) Execute(ctx context.Context) error {
 		for _, collectionName := range t.CollectionNames {
 			collectionID, err := globalMetaCache.GetCollectionID(ctx, t.GetDbName(), collectionName)
 			if err != nil {
-				log.Debug("Failed to get collection id.", zap.Any("collectionName", collectionName),
-					zap.Any("requestID", t.Base.MsgID), zap.Any("requestType", "showCollections"))
+				log.Debug("Failed to get collection id.", zap.String("collectionName", collectionName),
+					zap.Int64("requestID", t.Base.MsgID), zap.String("requestType", "showCollections"))
 				return err
 			}
 			collectionIDs = append(collectionIDs, collectionID)
@@ -725,14 +769,14 @@ func (t *showCollectionsTask) Execute(ctx context.Context) error {
 			collectionName, ok := IDs2Names[id]
 			if !ok {
 				log.Debug("Failed to get collection info. This collection may be not released",
-					zap.Any("collectionID", id),
-					zap.Any("requestID", t.Base.MsgID), zap.Any("requestType", "showCollections"))
+					zap.Int64("collectionID", id),
+					zap.Int64("requestID", t.Base.MsgID), zap.String("requestType", "showCollections"))
 				continue
 			}
 			collectionInfo, err := globalMetaCache.GetCollectionInfo(ctx, t.GetDbName(), collectionName, id)
 			if err != nil {
-				log.Debug("Failed to get collection info.", zap.Any("collectionName", collectionName),
-					zap.Any("requestID", t.Base.MsgID), zap.Any("requestType", "showCollections"))
+				log.Debug("Failed to get collection info.", zap.String("collectionName", collectionName),
+					zap.Int64("requestID", t.Base.MsgID), zap.String("requestType", "showCollections"))
 				return err
 			}
 			t.result.CollectionIds = append(t.result.CollectionIds, id)
@@ -756,9 +800,10 @@ func (t *showCollectionsTask) PostExecute(ctx context.Context) error {
 type alterCollectionTask struct {
 	Condition
 	*milvuspb.AlterCollectionRequest
-	ctx       context.Context
-	rootCoord types.RootCoordClient
-	result    *commonpb.Status
+	ctx        context.Context
+	rootCoord  types.RootCoordClient
+	result     *commonpb.Status
+	queryCoord types.QueryCoordClient
 }
 
 func (t *alterCollectionTask) TraceCtx() context.Context {
@@ -800,9 +845,28 @@ func (t *alterCollectionTask) OnEnqueue() error {
 	return nil
 }
 
+func hasMmapProp(props ...*commonpb.KeyValuePair) bool {
+	for _, p := range props {
+		if p.GetKey() == common.MmapEnabledKey {
+			return true
+		}
+	}
+	return false
+}
+
 func (t *alterCollectionTask) PreExecute(ctx context.Context) error {
 	t.Base.MsgType = commonpb.MsgType_AlterCollection
 	t.Base.SourceID = paramtable.GetNodeID()
+
+	if hasMmapProp(t.Properties...) {
+		loaded, err := isCollectionLoaded(ctx, t.queryCoord, t.CollectionID)
+		if err != nil {
+			return err
+		}
+		if loaded {
+			return merr.WrapErrCollectionLoaded(t.CollectionName, "can not alter mmap properties if collection loaded")
+		}
+	}
 
 	return nil
 }
@@ -1177,8 +1241,8 @@ func (t *showPartitionsTask) Execute(ctx context.Context) error {
 		collectionName := t.CollectionName
 		collectionID, err := globalMetaCache.GetCollectionID(ctx, t.GetDbName(), collectionName)
 		if err != nil {
-			log.Debug("Failed to get collection id.", zap.Any("collectionName", collectionName),
-				zap.Any("requestID", t.Base.MsgID), zap.Any("requestType", "showPartitions"))
+			log.Debug("Failed to get collection id.", zap.String("collectionName", collectionName),
+				zap.Int64("requestID", t.Base.MsgID), zap.String("requestType", "showPartitions"))
 			return err
 		}
 		IDs2Names := make(map[UniqueID]string)
@@ -1190,8 +1254,8 @@ func (t *showPartitionsTask) Execute(ctx context.Context) error {
 		for _, partitionName := range t.PartitionNames {
 			partitionID, err := globalMetaCache.GetPartitionID(ctx, t.GetDbName(), collectionName, partitionName)
 			if err != nil {
-				log.Debug("Failed to get partition id.", zap.Any("partitionName", partitionName),
-					zap.Any("requestID", t.Base.MsgID), zap.Any("requestType", "showPartitions"))
+				log.Debug("Failed to get partition id.", zap.String("partitionName", partitionName),
+					zap.Int64("requestID", t.Base.MsgID), zap.String("requestType", "showPartitions"))
 				return err
 			}
 			partitionIDs = append(partitionIDs, partitionID)
@@ -1229,14 +1293,14 @@ func (t *showPartitionsTask) Execute(ctx context.Context) error {
 		for offset, id := range resp.PartitionIDs {
 			partitionName, ok := IDs2Names[id]
 			if !ok {
-				log.Debug("Failed to get partition id.", zap.Any("partitionName", partitionName),
-					zap.Any("requestID", t.Base.MsgID), zap.Any("requestType", "showPartitions"))
+				log.Debug("Failed to get partition id.", zap.String("partitionName", partitionName),
+					zap.Int64("requestID", t.Base.MsgID), zap.String("requestType", "showPartitions"))
 				return errors.New("failed to show partitions")
 			}
 			partitionInfo, err := globalMetaCache.GetPartitionInfo(ctx, t.GetDbName(), collectionName, partitionName)
 			if err != nil {
-				log.Debug("Failed to get partition id.", zap.Any("partitionName", partitionName),
-					zap.Any("requestID", t.Base.MsgID), zap.Any("requestType", "showPartitions"))
+				log.Debug("Failed to get partition id.", zap.String("partitionName", partitionName),
+					zap.Int64("requestID", t.Base.MsgID), zap.String("requestType", "showPartitions"))
 				return err
 			}
 			t.result.PartitionIDs = append(t.result.PartitionIDs, id)
@@ -1593,11 +1657,10 @@ func (t *releaseCollectionTask) Execute(ctx context.Context) (err error) {
 	}
 
 	t.result, err = t.queryCoord.ReleaseCollection(ctx, request)
-
-	globalMetaCache.RemoveCollection(ctx, t.GetDbName(), t.CollectionName)
 	if err != nil {
 		return err
 	}
+
 	SendReplicateMessagePack(ctx, t.replicateMsgStream, t.ReleaseCollectionRequest)
 	return nil
 }
@@ -1710,7 +1773,7 @@ func (t *loadPartitionsTask) Execute(ctx context.Context) error {
 	for _, index := range indexResponse.IndexInfos {
 		fieldIndexIDs[index.FieldID] = index.IndexID
 		for _, field := range collSchema.Fields {
-			if index.FieldID == field.FieldID && (field.DataType == schemapb.DataType_FloatVector || field.DataType == schemapb.DataType_BinaryVector || field.DataType == schemapb.DataType_Float16Vector) {
+			if index.FieldID == field.FieldID && isVectorType(field.DataType) {
 				hasVecIndex = true
 			}
 		}
@@ -1861,241 +1924,6 @@ func (t *releasePartitionsTask) Execute(ctx context.Context) (err error) {
 
 func (t *releasePartitionsTask) PostExecute(ctx context.Context) error {
 	globalMetaCache.DeprecateShardCache(t.GetDbName(), t.CollectionName)
-	return nil
-}
-
-// CreateAliasTask contains task information of CreateAlias
-type CreateAliasTask struct {
-	Condition
-	*milvuspb.CreateAliasRequest
-	ctx       context.Context
-	rootCoord types.RootCoordClient
-	result    *commonpb.Status
-}
-
-// TraceCtx returns the trace context of the task.
-func (t *CreateAliasTask) TraceCtx() context.Context {
-	return t.ctx
-}
-
-// ID return the id of the task
-func (t *CreateAliasTask) ID() UniqueID {
-	return t.Base.MsgID
-}
-
-// SetID sets the id of the task
-func (t *CreateAliasTask) SetID(uid UniqueID) {
-	t.Base.MsgID = uid
-}
-
-// Name returns the name of the task
-func (t *CreateAliasTask) Name() string {
-	return CreateAliasTaskName
-}
-
-// Type returns the type of the task
-func (t *CreateAliasTask) Type() commonpb.MsgType {
-	return t.Base.MsgType
-}
-
-// BeginTs returns the ts
-func (t *CreateAliasTask) BeginTs() Timestamp {
-	return t.Base.Timestamp
-}
-
-// EndTs returns the ts
-func (t *CreateAliasTask) EndTs() Timestamp {
-	return t.Base.Timestamp
-}
-
-// SetTs sets the ts
-func (t *CreateAliasTask) SetTs(ts Timestamp) {
-	t.Base.Timestamp = ts
-}
-
-// OnEnqueue defines the behavior task enqueued
-func (t *CreateAliasTask) OnEnqueue() error {
-	if t.Base == nil {
-		t.Base = commonpbutil.NewMsgBase()
-	}
-	return nil
-}
-
-// PreExecute defines the tion before task execution
-func (t *CreateAliasTask) PreExecute(ctx context.Context) error {
-	t.Base.MsgType = commonpb.MsgType_CreateAlias
-	t.Base.SourceID = paramtable.GetNodeID()
-
-	collAlias := t.Alias
-	// collection alias uses the same format as collection name
-	if err := ValidateCollectionAlias(collAlias); err != nil {
-		return err
-	}
-
-	collName := t.CollectionName
-	if err := validateCollectionName(collName); err != nil {
-		return err
-	}
-	return nil
-}
-
-// Execute defines the tual execution of create alias
-func (t *CreateAliasTask) Execute(ctx context.Context) error {
-	var err error
-	t.result, err = t.rootCoord.CreateAlias(ctx, t.CreateAliasRequest)
-	return err
-}
-
-// PostExecute defines the post execution, do nothing for create alias
-func (t *CreateAliasTask) PostExecute(ctx context.Context) error {
-	return nil
-}
-
-// DropAliasTask is the task to drop alias
-type DropAliasTask struct {
-	Condition
-	*milvuspb.DropAliasRequest
-	ctx       context.Context
-	rootCoord types.RootCoordClient
-	result    *commonpb.Status
-}
-
-// TraceCtx returns the context for trace
-func (t *DropAliasTask) TraceCtx() context.Context {
-	return t.ctx
-}
-
-// ID returns the MsgID
-func (t *DropAliasTask) ID() UniqueID {
-	return t.Base.MsgID
-}
-
-// SetID sets the MsgID
-func (t *DropAliasTask) SetID(uid UniqueID) {
-	t.Base.MsgID = uid
-}
-
-// Name returns the name of the task
-func (t *DropAliasTask) Name() string {
-	return DropAliasTaskName
-}
-
-func (t *DropAliasTask) Type() commonpb.MsgType {
-	return t.Base.MsgType
-}
-
-func (t *DropAliasTask) BeginTs() Timestamp {
-	return t.Base.Timestamp
-}
-
-func (t *DropAliasTask) EndTs() Timestamp {
-	return t.Base.Timestamp
-}
-
-func (t *DropAliasTask) SetTs(ts Timestamp) {
-	t.Base.Timestamp = ts
-}
-
-func (t *DropAliasTask) OnEnqueue() error {
-	if t.Base == nil {
-		t.Base = commonpbutil.NewMsgBase()
-	}
-	return nil
-}
-
-func (t *DropAliasTask) PreExecute(ctx context.Context) error {
-	t.Base.MsgType = commonpb.MsgType_DropAlias
-	t.Base.SourceID = paramtable.GetNodeID()
-	collAlias := t.Alias
-	if err := ValidateCollectionAlias(collAlias); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (t *DropAliasTask) Execute(ctx context.Context) error {
-	var err error
-	t.result, err = t.rootCoord.DropAlias(ctx, t.DropAliasRequest)
-	return err
-}
-
-func (t *DropAliasTask) PostExecute(ctx context.Context) error {
-	return nil
-}
-
-// AlterAliasTask is the task to alter alias
-type AlterAliasTask struct {
-	Condition
-	*milvuspb.AlterAliasRequest
-	ctx       context.Context
-	rootCoord types.RootCoordClient
-	result    *commonpb.Status
-}
-
-func (t *AlterAliasTask) TraceCtx() context.Context {
-	return t.ctx
-}
-
-func (t *AlterAliasTask) ID() UniqueID {
-	return t.Base.MsgID
-}
-
-func (t *AlterAliasTask) SetID(uid UniqueID) {
-	t.Base.MsgID = uid
-}
-
-func (t *AlterAliasTask) Name() string {
-	return AlterAliasTaskName
-}
-
-func (t *AlterAliasTask) Type() commonpb.MsgType {
-	return t.Base.MsgType
-}
-
-func (t *AlterAliasTask) BeginTs() Timestamp {
-	return t.Base.Timestamp
-}
-
-func (t *AlterAliasTask) EndTs() Timestamp {
-	return t.Base.Timestamp
-}
-
-func (t *AlterAliasTask) SetTs(ts Timestamp) {
-	t.Base.Timestamp = ts
-}
-
-func (t *AlterAliasTask) OnEnqueue() error {
-	if t.Base == nil {
-		t.Base = commonpbutil.NewMsgBase()
-	}
-	return nil
-}
-
-func (t *AlterAliasTask) PreExecute(ctx context.Context) error {
-	t.Base.MsgType = commonpb.MsgType_AlterAlias
-	t.Base.SourceID = paramtable.GetNodeID()
-
-	collAlias := t.Alias
-	// collection alias uses the same format as collection name
-	if err := ValidateCollectionAlias(collAlias); err != nil {
-		return err
-	}
-
-	collName := t.CollectionName
-	if err := validateCollectionName(collName); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (t *AlterAliasTask) Execute(ctx context.Context) error {
-	var err error
-	t.result, err = t.rootCoord.AlterAlias(ctx, t.AlterAliasRequest)
-	return err
-}
-
-func (t *AlterAliasTask) PostExecute(ctx context.Context) error {
 	return nil
 }
 

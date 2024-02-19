@@ -63,6 +63,8 @@ class IndexFactory {
                 return CreateScalarIndex(type, config, context);
 
             case DataType::VECTOR_FLOAT:
+            case DataType::VECTOR_FLOAT16:
+            case DataType::VECTOR_BFLOAT16:
             case DataType::VECTOR_BINARY:
                 return std::make_unique<VecIndexCreator>(type, config, context);
             default:
@@ -75,6 +77,7 @@ class IndexFactory {
     IndexCreatorBasePtr
     CreateIndex(DataType type,
                 const std::string& field_name,
+                const int64_t dim,
                 Config& config,
                 const storage::FileManagerContext& file_manager_context,
                 std::shared_ptr<milvus_storage::Space> space) {
@@ -96,8 +99,10 @@ class IndexFactory {
 
             case DataType::VECTOR_FLOAT:
             case DataType::VECTOR_BINARY:
+            case DataType::VECTOR_FLOAT16:
+            case DataType::VECTOR_BFLOAT16:
                 return std::make_unique<VecIndexCreator>(
-                    type, field_name, config, file_manager_context, space);
+                    type, field_name, dim, config, file_manager_context, space);
             default:
                 throw std::invalid_argument(invalid_dtype_msg);
         }

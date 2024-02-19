@@ -49,8 +49,14 @@ ParsePlaceholderGroup(const Plan* plan,
         AssertInfo(element.num_of_queries_, "must have queries");
         Assert(element.num_of_queries_ > 0);
         element.line_sizeof_ = info.values().Get(0).size();
-        AssertInfo(field_meta.get_sizeof() == element.line_sizeof_,
-                   "vector dimension mismatch");
+        if (field_meta.get_sizeof() != element.line_sizeof_) {
+            throw SegcoreError(
+                DimNotMatch,
+                fmt::format("vector dimension mismatch, expected vector "
+                            "size(byte) {}, actual {}.",
+                            field_meta.get_sizeof(),
+                            element.line_sizeof_));
+        }
         auto& target = element.blob_;
         target.reserve(element.line_sizeof_ * element.num_of_queries_);
         for (auto& line : info.values()) {
@@ -77,7 +83,15 @@ CreateRetrievePlanByExpr(const Schema& schema,
                          const void* serialized_expr_plan,
                          const int64_t size) {
     proto::plan::PlanNode plan_node;
-    plan_node.ParseFromArray(serialized_expr_plan, size);
+    google::protobuf::io::ArrayInputStream array_stream(serialized_expr_plan,
+                                                        size);
+    google::protobuf::io::CodedInputStream input_stream(&array_stream);
+    input_stream.SetRecursionLimit(std::numeric_limits<int32_t>::max());
+
+    auto res = plan_node.ParsePartialFromCodedStream(&input_stream);
+    if (!res) {
+        throw SegcoreError(UnexpectedError, "parse plan node proto failed");
+    }
     return ProtoParser(schema).CreateRetrievePlan(plan_node);
 }
 

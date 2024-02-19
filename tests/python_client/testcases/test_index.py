@@ -1168,7 +1168,7 @@ class TestNewIndexBinary(TestcaseBase):
         collection_w.create_index(default_binary_vec_field_name, binary_index_params,
                                   index_name=binary_field_name, check_task=CheckTasks.err_res,
                                   check_items={ct.err_code: 65535,
-                                               ct.err_msg: "metric type not found or not supported, supported: "
+                                               ct.err_msg: "metric type L2 not found or not supported, supported: "
                                                            "[HAMMING JACCARD SUBSTRUCTURE SUPERSTRUCTURE]"})
 
     @pytest.mark.tags(CaseLabel.L2)
@@ -1343,8 +1343,8 @@ class TestIndexInvalid(TestcaseBase):
                                                                       dim=ct.default_dim, is_index=False)[0:4]
         collection_w.create_index(ct.default_json_field_name, index_params=ct.default_flat_index,
                                   check_task=CheckTasks.err_res,
-                                  check_items={ct.err_code: 1,
-                                               ct.err_msg: "create index on json field is not supported"})
+                                  check_items={ct.err_code: 1100,
+                                               ct.err_msg: "create index on JSON field is not supported"})
 
 
 @pytest.mark.tags(CaseLabel.GPU)
@@ -1788,7 +1788,7 @@ class TestIndexDiskann(TestcaseBase):
         assert len(collection_w.indexes) == 1
         collection_w.release()
         collection_w.drop_index(index_name=index_name1)
-        assert collection_w.has_index(index_name=index_name1)[0] == False
+        assert collection_w.has_index(index_name=index_name1)[0] is False
     
     @pytest.mark.tags(CaseLabel.L2)
     def test_drop_diskann_index_and_create_again(self):

@@ -626,7 +626,7 @@ func (c *Core) initBuiltinRoles() error {
 	for role, privilegesJSON := range rolePrivilegesMap {
 		err := c.meta.CreateRole(util.DefaultTenant, &milvuspb.RoleEntity{Name: role})
 		if err != nil && !common.IsIgnorableError(err) {
-			log.Error("create a builtin role fail", zap.Any("error", err), zap.String("roleName", role))
+			log.Error("create a builtin role fail", zap.String("roleName", role), zap.Error(err))
 			return errors.Wrapf(err, "failed to create a builtin role: %s", role)
 		}
 		for _, privilege := range privilegesJSON[util.RoleConfigPrivileges] {
@@ -645,7 +645,7 @@ func (c *Core) initBuiltinRoles() error {
 				},
 			}, milvuspb.OperatePrivilegeType_Grant)
 			if err != nil && !common.IsIgnorableError(err) {
-				log.Error("grant privilege to builtin role fail", zap.Any("error", err), zap.String("roleName", role), zap.Any("privilege", privilege))
+				log.Error("grant privilege to builtin role fail", zap.String("roleName", role), zap.Any("privilege", privilege), zap.Error(err))
 				return errors.Wrapf(err, "failed to grant privilege: <%s, %s, %s> of db: %s to role: %s", privilege[util.RoleConfigObjectType], privilege[util.RoleConfigObjectName], privilege[util.RoleConfigPrivilege], privilege[util.RoleConfigDBName], role)
 			}
 		}
@@ -1853,6 +1853,87 @@ func (c *Core) AlterAlias(ctx context.Context, in *milvuspb.AlterAliasRequest) (
 	return merr.Success(), nil
 }
 
+// DescribeAlias describe collection alias
+func (c *Core) DescribeAlias(ctx context.Context, in *milvuspb.DescribeAliasRequest) (*milvuspb.DescribeAliasResponse, error) {
+	if err := merr.CheckHealthy(c.GetStateCode()); err != nil {
+		return &milvuspb.DescribeAliasResponse{
+			Status: merr.Status(err),
+		}, nil
+	}
+
+	log := log.Ctx(ctx).With(
+		zap.String("role", typeutil.RootCoordRole),
+		zap.String("db", in.GetDbName()),
+		zap.String("alias", in.GetAlias()))
+	method := "DescribeAlias"
+	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.TotalLabel).Inc()
+	tr := timerecord.NewTimeRecorder("DescribeAlias")
+
+	log.Info("received request to describe alias")
+
+	if in.GetAlias() == "" {
+		return &milvuspb.DescribeAliasResponse{
+			Status: merr.Status(merr.WrapErrParameterMissing("alias", "no input alias")),
+		}, nil
+	}
+
+	collectionName, err := c.meta.DescribeAlias(ctx, in.GetDbName(), in.GetAlias(), 0)
+	if err != nil {
+		log.Warn("fail to DescribeAlias", zap.Error(err))
+		return &milvuspb.DescribeAliasResponse{
+			Status: merr.Status(err),
+		}, nil
+	}
+	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.SuccessLabel).Inc()
+	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+
+	log.Info("done to describe alias")
+	return &milvuspb.DescribeAliasResponse{
+		Status:     merr.Status(nil),
+		DbName:     in.GetDbName(),
+		Alias:      in.GetAlias(),
+		Collection: collectionName,
+	}, nil
+}
+
+// ListAliases list aliases
+func (c *Core) ListAliases(ctx context.Context, in *milvuspb.ListAliasesRequest) (*milvuspb.ListAliasesResponse, error) {
+	if err := merr.CheckHealthy(c.GetStateCode()); err != nil {
+		return &milvuspb.ListAliasesResponse{
+			Status: merr.Status(err),
+		}, nil
+	}
+
+	method := "ListAliases"
+	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.TotalLabel).Inc()
+	tr := timerecord.NewTimeRecorder(method)
+
+	log := log.Ctx(ctx).With(
+		zap.String("role", typeutil.RootCoordRole),
+		zap.String("db", in.GetDbName()),
+		zap.String("collectionName", in.GetCollectionName()))
+	log.Info("received request to list aliases")
+
+	aliases, err := c.meta.ListAliases(ctx, in.GetDbName(), in.GetCollectionName(), 0)
+	if err != nil {
+		log.Warn("fail to ListAliases", zap.Error(err))
+		return &milvuspb.ListAliasesResponse{
+			Status: merr.Status(err),
+		}, nil
+	}
+
+	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.SuccessLabel).Inc()
+	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+
+	log.Info("done to list aliases")
+	return &milvuspb.ListAliasesResponse{
+		Status:         merr.Status(nil),
+		DbName:         in.GetDbName(),
+		CollectionName: in.GetCollectionName(),
+		Aliases:        aliases,
+	}, nil
+}
+
 // Import imports large files (json, numpy, etc.) on MinIO/S3 storage into Milvus storage.
 func (c *Core) Import(ctx context.Context, req *milvuspb.ImportRequest) (*milvuspb.ImportResponse, error) {
 	if err := merr.CheckHealthy(c.GetStateCode()); err != nil {
@@ -2039,7 +2120,7 @@ func (c *Core) ReportImport(ctx context.Context, ir *rootcoordpb.ImportResult) (
 		// Here ir.GetState() == commonpb.ImportState_ImportPersisted
 		// Seal these import segments, so they can be auto-flushed later.
 		log.Info("an import task turns to persisted state, flush segments to be sealed",
-			zap.Any("task ID", ir.GetTaskId()), zap.Any("segments", ir.GetSegments()))
+			zap.Int64("task ID", ir.GetTaskId()), zap.Any("segments", ir.GetSegments()))
 		if err := c.broker.Flush(ctx, ti.GetCollectionId(), ir.GetSegments()); err != nil {
 			log.Error("failed to call Flush on bulk insert segments",
 				zap.Int64("task ID", ir.GetTaskId()))

@@ -17,6 +17,9 @@
 package storage
 
 import (
+	"github.com/apache/arrow/go/v12/parquet"
+	"github.com/apache/arrow/go/v12/parquet/file"
+
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 )
 
@@ -37,6 +40,7 @@ type PayloadWriterInterface interface {
 	AddBinaryVectorToPayload(binVec []byte, dim int) error
 	AddFloatVectorToPayload(binVec []float32, dim int) error
 	AddFloat16VectorToPayload(binVec []byte, dim int) error
+	AddBFloat16VectorToPayload(binVec []byte, dim int) error
 	FinishPayloadWriter() error
 	GetPayloadBufferFromWriter() ([]byte, error)
 	GetPayloadLengthFromWriter() (int, error)
@@ -60,8 +64,12 @@ type PayloadReaderInterface interface {
 	GetJSONFromPayload() ([][]byte, error)
 	GetBinaryVectorFromPayload() ([]byte, int, error)
 	GetFloat16VectorFromPayload() ([]byte, int, error)
+	GetBFloat16VectorFromPayload() ([]byte, int, error)
 	GetFloatVectorFromPayload() ([]float32, int, error)
 	GetPayloadLengthFromReader() (int, error)
+
+	GetByteArrayDataSet() (*DataSet[parquet.ByteArray, *file.ByteArrayColumnChunkReader], error)
+
 	ReleasePayloadReader() error
 	Close() error
 }

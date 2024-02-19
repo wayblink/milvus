@@ -35,6 +35,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/common"
 	"github.com/milvus-io/milvus/pkg/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/util/typeutil"
 )
 
 type ReduceSuite struct {
@@ -165,9 +166,10 @@ func (suite *ReduceSuite) TestReduceAllFunc() {
 	proto.UnmarshalText(planStr, &planpb)
 	serializedPlan, err := proto.Marshal(&planpb)
 	suite.NoError(err)
-	plan, err := createSearchPlanByExpr(context.Background(), suite.collection, serializedPlan, "")
+	plan, err := createSearchPlanByExpr(context.Background(), suite.collection, serializedPlan)
 	suite.NoError(err)
 	searchReq, err := parseSearchRequest(context.Background(), plan, placeGroupByte)
+	searchReq.mvccTimestamp = typeutil.MaxTimestamp
 	suite.NoError(err)
 	defer searchReq.Delete()
 

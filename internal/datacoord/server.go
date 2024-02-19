@@ -117,7 +117,7 @@ type Server struct {
 	allocator        allocator
 	cluster          Cluster
 	sessionManager   SessionManager
-	channelManager   *ChannelManagerImpl
+	channelManager   ChannelManager
 	rootCoordClient  types.RootCoordClient
 	garbageCollector *garbageCollector
 	gcOpt            GcOption
@@ -553,7 +553,12 @@ func (s *Server) initServiceDiscovery() error {
 		datanodes = append(datanodes, info)
 	}
 
-	s.cluster.Startup(s.ctx, datanodes)
+	log.Info("DataCoord Cluster Manager start up")
+	if err := s.cluster.Startup(s.ctx, datanodes); err != nil {
+		log.Warn("DataCoord Cluster Manager failed to start up", zap.Error(err))
+		return err
+	}
+	log.Info("DataCoord Cluster Manager start up successfully")
 
 	// TODO implement rewatch logic
 	s.dnEventCh = s.session.WatchServicesWithVersionRange(typeutil.DataNodeRole, r, rev+1, nil)
@@ -784,7 +789,7 @@ func (s *Server) handleTimetickMessage(ctx context.Context, ttMsg *msgstream.Dat
 	}
 	err = s.cluster.Flush(s.ctx, ttMsg.GetBase().GetSourceID(), ch, finfo)
 	if err != nil {
-		log.Warn("failed to handle flush", zap.Any("source", ttMsg.GetBase().GetSourceID()), zap.Error(err))
+		log.Warn("failed to handle flush", zap.Int64("source", ttMsg.GetBase().GetSourceID()), zap.Error(err))
 		return err
 	}
 
@@ -947,6 +952,13 @@ func (s *Server) handleSessionEvent(ctx context.Context, role string, event *ses
 				zap.Any("type", event.EventType))
 		}
 	case typeutil.IndexNodeRole:
+		if Params.DataCoordCfg.BindIndexNodeMode.GetAsBool() {
+			log.Info("receive indexnode session event, but adding indexnode by bind mode, skip it",
+				zap.String("address", event.Session.Address),
+				zap.Int64("serverID", event.Session.ServerID),
+				zap.String("event type", event.EventType.String()))
+			return nil
+		}
 		switch event.EventType {
 		case sessionutil.SessionAddEvent:
 			log.Info("received indexnode register",
@@ -1011,7 +1023,7 @@ func (s *Server) startFlushLoop(ctx context.Context) {
 				log.Info("flush successfully", zap.Any("segmentID", segmentID))
 				err := s.postFlush(ctx, segmentID)
 				if err != nil {
-					log.Warn("failed to do post flush", zap.Any("segmentID", segmentID), zap.Error(err))
+					log.Warn("failed to do post flush", zap.Int64("segmentID", segmentID), zap.Error(err))
 				}
 			}
 		}

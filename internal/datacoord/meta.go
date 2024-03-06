@@ -203,6 +203,7 @@ func (m *meta) GetSegmentsChanPart(selector SegmentInfoSelector) []*chanPartSegm
 	defer m.RUnlock()
 	mDimEntry := make(map[string]*chanPartSegments)
 
+	log.Debug("GetSegmentsChanPart segment number", zap.Int("length", len(m.segments.GetSegments())))
 	for _, segmentInfo := range m.segments.segments {
 		if !selector(segmentInfo) {
 			continue
@@ -1140,6 +1141,59 @@ func (m *meta) CompleteCompactionMutation(plan *datapb.CompactionPlan, result *d
 		}
 	}
 
+	getMinPosition := func(positions []*msgpb.MsgPosition) *msgpb.MsgPosition {
+		var minPos *msgpb.MsgPosition
+		for _, pos := range positions {
+			if minPos == nil ||
+				pos != nil && pos.GetTimestamp() < minPos.GetTimestamp() {
+				minPos = pos
+			}
+		}
+		return minPos
+	}
+
+	if plan.GetType() == datapb.CompactionType_MajorCompaction {
+		newSegments := make([]*SegmentInfo, 0)
+		for _, seg := range result.GetSegments() {
+			segmentInfo := &datapb.SegmentInfo{
+				ID:                  seg.GetSegmentID(),
+				CollectionID:        latestCompactFromSegments[0].CollectionID,
+				PartitionID:         latestCompactFromSegments[0].PartitionID,
+				InsertChannel:       plan.GetChannel(),
+				NumOfRows:           seg.NumOfRows,
+				State:               commonpb.SegmentState_Flushed,
+				MaxRowNum:           latestCompactFromSegments[0].MaxRowNum,
+				Binlogs:             seg.GetInsertLogs(),
+				Statslogs:           seg.GetField2StatslogPaths(),
+				CreatedByCompaction: true,
+				CompactionFrom:      compactFromSegIDs,
+				LastExpireTime:      plan.GetStartTime(),
+				Level:               datapb.SegmentLevel_L2,
+				StartPosition: getMinPosition(lo.Map(latestCompactFromSegments, func(info *SegmentInfo, _ int) *msgpb.MsgPosition {
+					return info.GetStartPosition()
+				})),
+				DmlPosition: getMinPosition(lo.Map(latestCompactFromSegments, func(info *SegmentInfo, _ int) *msgpb.MsgPosition {
+					return info.GetDmlPosition()
+				})),
+			}
+			segment := NewSegmentInfo(segmentInfo)
+			newSegments = append(newSegments, segment)
+			metricMutation.addNewSeg(segment.GetState(), segment.GetLevel(), segment.GetNumOfRows())
+		}
+		compactionTo := make([]UniqueID, 0, len(newSegments))
+		for _, s := range newSegments {
+			compactionTo = append(compactionTo, s.GetID())
+		}
+
+		log.Info("meta update: prepare for complete compaction mutation - complete",
+			zap.Int64("collectionID", latestCompactFromSegments[0].CollectionID),
+			zap.Int64("partitionID", latestCompactFromSegments[0].PartitionID),
+			zap.Any("compacted from", compactFromSegIDs),
+			zap.Any("compacted to", compactionTo))
+
+		return newSegments, metricMutation, nil
+	}
+
 	// MixCompaction / MergeCompaction will generates one and only one segment
 	compactToSegment := result.GetSegments()[0]
 
@@ -1151,17 +1205,6 @@ func (m *meta) CompleteCompactionMutation(plan *datapb.CompactionPlan, result *d
 	}
 	if len(newDeltalogs) > 0 {
 		compactToSegment.Deltalogs = append(compactToSegment.GetDeltalogs(), &datapb.FieldBinlog{Binlogs: newDeltalogs})
-	}
-
-	getMinPosition := func(positions []*msgpb.MsgPosition) *msgpb.MsgPosition {
-		var minPos *msgpb.MsgPosition
-		for _, pos := range positions {
-			if minPos == nil ||
-				pos != nil && pos.GetTimestamp() < minPos.GetTimestamp() {
-				minPos = pos
-			}
-		}
-		return minPos
 	}
 
 	compactToSegmentInfo := NewSegmentInfo(

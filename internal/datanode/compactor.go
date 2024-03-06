@@ -142,8 +142,7 @@ func (t *compactionTask) getNumRows() (int64, error) {
 	return numRows, nil
 }
 
-func (t *compactionTask) mergeDeltalogs(dBlobs map[UniqueID][]*Blob) (map[interface{}]Timestamp, error) {
-	log := log.With(zap.Int64("planID", t.getPlanID()))
+func MergeDeltalogs(dBlobs map[UniqueID][]*Blob) (map[interface{}]Timestamp, error) {
 	mergeStart := time.Now()
 	dCodec := storage.NewDeleteCodec()
 
@@ -525,7 +524,7 @@ func (t *compactionTask) compact() (*datapb.CompactionPlanResult, error) {
 	}
 	log.Info("compact download deltalogs done", zap.Duration("elapse", t.tr.RecordSpan()))
 
-	deltaPk2Ts, err := t.mergeDeltalogs(dblobs)
+	deltaPk2Ts, err := MergeDeltalogs(dblobs)
 	if err != nil {
 		log.Warn("compact wrong, fail to merge deltalogs", zap.Error(err))
 		return nil, err
@@ -808,13 +807,5 @@ func (t *compactionTask) GetCurrentTime() typeutil.Timestamp {
 }
 
 func (t *compactionTask) isExpiredEntity(ts, now Timestamp) bool {
-	// entity expire is not enabled if duration <= 0
-	if t.plan.GetCollectionTtl() <= 0 {
-		return false
-	}
-
-	pts, _ := tsoutil.ParseTS(ts)
-	pnow, _ := tsoutil.ParseTS(now)
-	expireTime := pts.Add(time.Duration(t.plan.GetCollectionTtl()))
-	return expireTime.Before(pnow)
+	return IsExpiredEntity(t.plan.GetCollectionTtl(), ts, now)
 }

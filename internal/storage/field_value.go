@@ -1013,3 +1013,15 @@ func (ifv *FloatVectorFieldValue) GetValue() interface{} {
 func (ifv *FloatVectorFieldValue) Size() int64 {
 	return int64(len(ifv.Value) * 8)
 }
+
+func NewScalarFieldValue(key PrimaryKey) ScalarFieldValue {
+	switch key.Type() {
+	case schemapb.DataType_Int64:
+		return NewInt64FieldValue(key.GetValue().(int64))
+	case schemapb.DataType_VarChar:
+		return NewVarCharFieldValue(key.GetValue().(string))
+	default:
+		// should not be reach
+		return nil
+	}
+}

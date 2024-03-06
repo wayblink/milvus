@@ -67,6 +67,11 @@ func (h *spyCompactionHandler) getCompaction(planID int64) *compactionTask {
 	panic("not implemented") // TODO: Implement
 }
 
+func (h *spyCompactionHandler) setSegmentsCompacting(plan *datapb.CompactionPlan, compacting bool) {
+	//TODO implement me
+	panic("implement me")
+}
+
 // expireCompaction set the compaction state to expired
 func (h *spyCompactionHandler) updateCompaction(ts Timestamp) error {
 	panic("not implemented") // TODO: Implement
@@ -1768,11 +1773,11 @@ func Test_compactionTrigger_noplan_random_size(t *testing.T) {
 // Test shouldDoSingleCompaction
 func Test_compactionTrigger_shouldDoSingleCompaction(t *testing.T) {
 	indexMeta := newSegmentIndexMeta(nil)
-	trigger := newCompactionTrigger(&meta{
+	trigger := newCompactionTrigger(context.TODO(), &meta{
 		indexMeta:      indexMeta,
 		channelCPLocks: lock.NewKeyLock[string](),
 		channelCPs:     typeutil.NewConcurrentMap[string, *msgpb.MsgPosition](),
-	}, &compactionPlanHandler{}, newMockAllocator(), newMockHandler(), newIndexEngineVersionManager())
+	}, &compactionPlanHandler{}, newMockAllocator(), newMockHandler(), newIndexEngineVersionManager(), nil)
 
 	// Test too many deltalogs.
 	var binlogs []*datapb.FieldBinlog
@@ -2019,7 +2024,7 @@ func Test_compactionTrigger_new(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := newCompactionTrigger(tt.args.meta, tt.args.compactionHandler, tt.args.allocator, newMockHandler(), newMockVersionManager())
+			got := newCompactionTrigger(context.TODO(), tt.args.meta, tt.args.compactionHandler, tt.args.allocator, newMockHandler(), newMockVersionManager(), nil)
 			assert.Equal(t, tt.args.meta, got.meta)
 			assert.Equal(t, tt.args.compactionHandler, got.compactionHandler)
 			assert.Equal(t, tt.args.allocator, got.allocator)
@@ -2027,13 +2032,23 @@ func Test_compactionTrigger_new(t *testing.T) {
 	}
 }
 
+func Test_compactionTrigger_handleSignal(t *testing.T) {
+	got := newCompactionTrigger(context.TODO(), &meta{segments: NewSegmentsInfo()}, &compactionPlanHandler{scheduler: NewCompactionScheduler()}, newMockAllocator(), newMockHandler(), newMockVersionManager(), nil)
+	signal := &compactionSignal{
+		segmentID: 1,
+	}
+	assert.NotPanics(t, func() {
+		got.handleSignal(signal)
+	})
+}
+
 func Test_compactionTrigger_allocTs(t *testing.T) {
-	got := newCompactionTrigger(&meta{segments: NewSegmentsInfo()}, &compactionPlanHandler{scheduler: NewCompactionScheduler()}, newMockAllocator(), newMockHandler(), newMockVersionManager())
+	got := newCompactionTrigger(context.TODO(), &meta{segments: NewSegmentsInfo()}, &compactionPlanHandler{scheduler: NewCompactionScheduler()}, newMockAllocator(), newMockHandler(), newMockVersionManager(), nil)
 	ts, err := got.allocTs()
 	assert.NoError(t, err)
 	assert.True(t, ts > 0)
 
-	got = newCompactionTrigger(&meta{segments: NewSegmentsInfo()}, &compactionPlanHandler{scheduler: NewCompactionScheduler()}, &FailsAllocator{}, newMockHandler(), newMockVersionManager())
+	got = newCompactionTrigger(context.TODO(), &meta{segments: NewSegmentsInfo()}, &compactionPlanHandler{scheduler: NewCompactionScheduler()}, &FailsAllocator{}, newMockHandler(), newMockVersionManager(), nil)
 	ts, err = got.allocTs()
 	assert.Error(t, err)
 	assert.Equal(t, uint64(0), ts)
@@ -2060,12 +2075,12 @@ func Test_compactionTrigger_getCompactTime(t *testing.T) {
 	}
 
 	m := &meta{segments: NewSegmentsInfo(), collections: collections}
-	got := newCompactionTrigger(m, &compactionPlanHandler{scheduler: NewCompactionScheduler()}, newMockAllocator(),
+	got := newCompactionTrigger(context.TODO(), m, &compactionPlanHandler{scheduler: NewCompactionScheduler()}, newMockAllocator(),
 		&ServerHandler{
 			&Server{
 				meta: m,
 			},
-		}, newMockVersionManager())
+		}, newMockVersionManager(), nil)
 	coll := &collectionInfo{
 		ID:         1,
 		Schema:     newTestSchema(),
@@ -2091,12 +2106,12 @@ func Test_triggerSingleCompaction(t *testing.T) {
 		channelCPs:     typeutil.NewConcurrentMap[string, *msgpb.MsgPosition](),
 		segments:       NewSegmentsInfo(), collections: make(map[UniqueID]*collectionInfo),
 	}
-	got := newCompactionTrigger(m, &compactionPlanHandler{}, newMockAllocator(),
+	got := newCompactionTrigger(context.TODO(), m, &compactionPlanHandler{}, newMockAllocator(),
 		&ServerHandler{
 			&Server{
 				meta: m,
 			},
-		}, newMockVersionManager())
+		}, newMockVersionManager(), nil)
 	got.signals = make(chan *compactionSignal, 1)
 	{
 		err := got.triggerSingleCompaction(1, 1, 1, "a", false)
@@ -2311,11 +2326,13 @@ func (s *CompactionTriggerSuite) SetupTest() {
 	s.handler = NewNMockHandler(s.T())
 	s.versionManager = NewMockVersionManager(s.T())
 	s.tr = newCompactionTrigger(
+		context.TODO(),
 		s.meta,
 		s.compactionHandler,
 		s.allocator,
 		s.handler,
 		s.versionManager,
+		nil,
 	)
 	s.tr.testingOnly = true
 }

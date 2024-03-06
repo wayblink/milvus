@@ -429,6 +429,13 @@ dataCoord:
     maxParallelTaskNum: 10 # max parallel compaction task number
     indexBasedCompaction: true
 
+    major:
+      enable: true
+      minInterval: 3600
+      maxInterval: 86400
+      newDataRatioThreshold: 0.2
+      newDataSizeThreshold: 100m
+
     levelzero:
       forceTrigger:
         minSize: 8388608 # The minmum size in bytes to force trigger a LevelZero Compaction, default as 8MB
@@ -496,6 +503,10 @@ dataNode:
     updateChannelCheckpointMaxParallel: 1000
   import:
     maxConcurrentTaskNum: 16 # The maximum number of import/pre-import tasks allowed to run concurrently on a datanode.
+  majorCompaction:
+    memoryBuffer: 128m # The maximum size of in-memory data buffer of one major compaction task. Data larger than this will be spilled to storage.
+    preferSegmentSizeMin: 10m # In major compaction, data pieces whose size is smaller than preferSegmentSizeMin will be merged together to close to a prefer range [preferSegmentSizeMin, preferSegmentSizeMax].
+    preferSegmentSizeMax: 100g # In major compaction, data pieces whose size is larger than preferSegmentSizeMax will be redivided into multiple segments to make their sizes close to a prefer range [preferSegmentSizeMin, preferSegmentSizeMax].
 
 # Configures the system log output.
 log:

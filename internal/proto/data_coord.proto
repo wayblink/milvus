@@ -25,7 +25,7 @@ enum SegmentLevel {
   Legacy = 0; // zero value for legacy logic
   L0 = 1; // L0 segment, contains delta data for current channel
   L1 = 2; // L1 segment, normal segment, with no extra compaction attribute
-  L2 = 3; // L2 segemnt, segment with extra data distribution info
+  L2 = 3; // L2 segment, segment with extra data distribution info
 }
 
 service DataCoord {
@@ -529,6 +529,7 @@ message CompactionPlan {
   string channel = 7;
   int64 collection_ttl = 8;
   int64 total_rows = 9;
+  int64 partition_key_id = 10;
 }
 
 message CompactionSegment {

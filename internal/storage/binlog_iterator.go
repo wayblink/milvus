@@ -125,6 +125,14 @@ func (itr *InsertBinlogIterator) isDisposed() bool {
 	return atomic.LoadInt32(&itr.dispose) == 1
 }
 
+func (itr *InsertBinlogIterator) DataSize() int {
+	return itr.data.GetMemorySize()
+}
+
+func (itr *InsertBinlogIterator) RowNum() int {
+	return itr.data.GetRowNum()
+}
+
 /*
 type DeltalogIterator struct {
 	dispose int32
@@ -192,7 +200,7 @@ func (itr *DeltalogIterator) isDisposed() bool {
 type MergeIterator struct {
 	disposed   int32
 	pos        int
-	iteraotrs  []Iterator
+	iterators  []Iterator
 	tmpRecords []*Value
 	nextRecord *Value
 }
@@ -200,7 +208,7 @@ type MergeIterator struct {
 // NewMergeIterator return a new MergeIterator.
 func NewMergeIterator(iterators []Iterator) *MergeIterator {
 	return &MergeIterator{
-		iteraotrs:  iterators,
+		iterators:  iterators,
 		tmpRecords: make([]*Value, len(iterators)),
 	}
 }
@@ -231,7 +239,7 @@ func (itr *MergeIterator) Dispose() {
 		return
 	}
 
-	for _, tmpItr := range itr.iteraotrs {
+	for _, tmpItr := range itr.iterators {
 		if tmpItr != nil {
 			tmpItr.Dispose()
 		}
@@ -252,8 +260,8 @@ func (itr *MergeIterator) hasNext() bool {
 	var minPos int
 	for i, tmpRecord := range itr.tmpRecords {
 		if tmpRecord == nil {
-			if itr.iteraotrs[i] != nil && itr.iteraotrs[i].HasNext() {
-				next, _ := itr.iteraotrs[i].Next()
+			if itr.iterators[i] != nil && itr.iterators[i].HasNext() {
+				next, _ := itr.iterators[i].Next()
 				itr.tmpRecords[i] = next.(*Value)
 				tmpRecord = itr.tmpRecords[i]
 			}

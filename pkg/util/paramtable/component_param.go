@@ -2514,6 +2514,13 @@ type dataCoordConfig struct {
 	GlobalCompactionInterval          ParamItem `refreshable:"false"`
 	ChannelCheckpointMaxLag           ParamItem `refreshable:"true"`
 
+	// Major Compaction
+	MajorCompactionEnable                ParamItem `refreshable:"true"`
+	MajorCompactionMinInterval           ParamItem `refreshable:"true"`
+	MajorCompactionMaxInterval           ParamItem `refreshable:"true"`
+	MajorCompactionNewDataRatioThreshold ParamItem `refreshable:"true"`
+	MajorCompactionNewDataSizeThreshold  ParamItem `refreshable:"true"`
+
 	// LevelZero Segment
 	EnableLevelZeroSegment                   ParamItem `refreshable:"false"`
 	LevelZeroCompactionTriggerMinSize        ParamItem `refreshable:"true"`
@@ -2873,6 +2880,47 @@ During compaction, the size of segment # of rows is able to exceed segment max #
 	}
 	p.LevelZeroCompactionTriggerDeltalogMaxNum.Init(base.mgr)
 
+	p.MajorCompactionEnable = ParamItem{
+		Key:          "dataCoord.compaction.major.enable",
+		Version:      "2.4.0",
+		DefaultValue: "true",
+		Doc:          "Enable major compaction",
+		Export:       true,
+	}
+	p.MajorCompactionEnable.Init(base.mgr)
+
+	p.MajorCompactionMinInterval = ParamItem{
+		Key:          "dataCoord.compaction.major.minInterval",
+		Version:      "2.4.0",
+		Doc:          "The minimum interval between major compaction executions of one collection, to avoid redundant compaction",
+		DefaultValue: "3600",
+	}
+	p.MajorCompactionMinInterval.Init(base.mgr)
+
+	p.MajorCompactionMaxInterval = ParamItem{
+		Key:          "dataCoord.compaction.major.maxInterval",
+		Version:      "2.4.0",
+		Doc:          "If a collection haven't been major compacted for longer than maxInterval, force compact",
+		DefaultValue: "86400",
+	}
+	p.MajorCompactionMaxInterval.Init(base.mgr)
+
+	p.MajorCompactionNewDataRatioThreshold = ParamItem{
+		Key:          "dataCoord.compaction.major.newDataRatioThreshold",
+		Version:      "2.4.0",
+		Doc:          "If new data ratio is large than newDataRatioThreshold, execute major compaction",
+		DefaultValue: "0.2",
+	}
+	p.MajorCompactionNewDataRatioThreshold.Init(base.mgr)
+
+	p.MajorCompactionNewDataSizeThreshold = ParamItem{
+		Key:          "dataCoord.compaction.major.newDataSizeThreshold",
+		Version:      "2.4.0",
+		Doc:          "If new data size is large than newDataSizeThreshold, execute major compaction",
+		DefaultValue: "100m",
+	}
+	p.MajorCompactionNewDataSizeThreshold.Init(base.mgr)
+
 	p.EnableGarbageCollection = ParamItem{
 		Key:          "dataCoord.enableGarbageCollection",
 		Version:      "2.0.0",
@@ -3144,6 +3192,11 @@ type dataNodeConfig struct {
 	L0BatchMemoryRatio ParamItem `refreshable:"true"`
 
 	GracefulStopTimeout ParamItem `refreshable:"true"`
+
+	// major compaction
+	MajorCompactionMemoryBuffer         ParamItem `refreshable:"true"`
+	MajorCompactionPreferSegmentSizeMin ParamItem `refreshable:"true"`
+	MajorCompactionPreferSegmentSizeMax ParamItem `refreshable:"true"`
 }
 
 func (p *dataNodeConfig) init(base *BaseTable) {
@@ -3422,6 +3475,36 @@ func (p *dataNodeConfig) init(base *BaseTable) {
 		Export:       true,
 	}
 	p.GracefulStopTimeout.Init(base.mgr)
+
+	p.MajorCompactionMemoryBuffer = ParamItem{
+		Key:          "datanode.majorCompaction.memoryBuffer",
+		Version:      "2.4.0",
+		Doc:          "The maximum size of in-memory data buffer of one major compaction task. Data larger than this will be spilled to storage.",
+		DefaultValue: "128m",
+		PanicIfEmpty: false,
+		Export:       true,
+	}
+	p.MajorCompactionMemoryBuffer.Init(base.mgr)
+
+	p.MajorCompactionPreferSegmentSizeMin = ParamItem{
+		Key:          "datanode.majorCompaction.preferSegmentSizeMin",
+		Version:      "2.4.0",
+		Doc:          "In major compaction, data pieces whose size is smaller than preferSegmentSizeMin will be merged together to close to a prefer range [preferSegmentSizeMin, preferSegmentSizeMax].",
+		DefaultValue: "10m",
+		PanicIfEmpty: false,
+		Export:       true,
+	}
+	p.MajorCompactionPreferSegmentSizeMin.Init(base.mgr)
+
+	p.MajorCompactionPreferSegmentSizeMax = ParamItem{
+		Key:          "datanode.majorCompaction.preferSegmentSizeMax",
+		Version:      "2.4.0",
+		Doc:          "In major compaction, data pieces whose size is larger than preferSegmentSizeMax will be redivided into multiple segments to make their sizes close to a prefer range [preferSegmentSizeMin, preferSegmentSizeMax].",
+		DefaultValue: "100G",
+		PanicIfEmpty: false,
+		Export:       true,
+	}
+	p.MajorCompactionPreferSegmentSizeMax.Init(base.mgr)
 }
 
 // /////////////////////////////////////////////////////////////////////////////

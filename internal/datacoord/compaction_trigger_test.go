@@ -67,6 +67,11 @@ func (h *spyCompactionHandler) getCompaction(planID int64) *compactionTask {
 	panic("not implemented") // TODO: Implement
 }
 
+func (h *spyCompactionHandler) analyzeCompactionPlan(plan *datapb.CompactionPlan) (*datapb.AnalyzeStatsResult, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
 func (h *spyCompactionHandler) setSegmentsCompacting(plan *datapb.CompactionPlan, compacting bool) {
 	//TODO implement me
 	panic("implement me")

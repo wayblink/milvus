@@ -778,6 +778,21 @@ func (t *compactionTrigger) handleMajorCompactionSignal(signal *compactionSignal
 			// we set segments compacting before analyze to avoid conflicts
 			// manually release them if the compaction is skipped
 			t.compactionHandler.setSegmentsCompacting(plan, true)
+			analyzeResult, err := t.compactionHandler.analyzeCompactionPlan(plan)
+			if err != nil {
+				log.Warn("failed to analyze compaction plan", zap.Int64("planID", plan.PlanID), zap.Int64s("segmentIDs", segIDs), zap.Error(err))
+				continue
+			}
+			shouldDo, err := t.shouldDoMajorCompaction(analyzeResult)
+			if err != nil {
+				log.Warn("failed to decide whether to execute this compaction plan", zap.Int64("planID", plan.PlanID), zap.Int64s("segmentIDs", segIDs), zap.Error(err))
+				continue
+			}
+			if !shouldDo {
+				t.compactionHandler.setSegmentsCompacting(plan, false)
+				log.Info("skip execute compaction plan", zap.Int64("planID", plan.PlanID))
+				continue
+			}
 
 			err = t.compactionHandler.execCompactionPlan(signal, plan)
 			if err != nil {
@@ -798,6 +813,10 @@ func (t *compactionTrigger) handleMajorCompactionSignal(signal *compactionSignal
 		}
 	}
 	return nil
+}
+
+func (t *compactionTrigger) shouldDoMajorCompaction(analyzeResult *datapb.AnalyzeStatsResult) (bool, error) {
+	return true, nil
 }
 
 // handleSignal processes segment flush caused partition-chan level compaction signal

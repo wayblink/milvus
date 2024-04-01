@@ -181,6 +181,15 @@ KmeansMajorCompaction<T>::Train() {
     if (train_num >= data_num) {
         train_num = data_num;
     }
+    LOG_INFO(
+        "segment_size: {}, train_size: {}, data_size: {}, data_num: {}, "
+        "train_num: {}, dim: {}",
+        segment_size.value(),
+        train_size.value(),
+        data_size,
+        data_num,
+        train_num,
+        dim);
     auto train_size_new = train_num * dim * sizeof(T);
     auto buf = Sample(data_files, offsets, train_size_new, data_size);
     auto dataset = GenDataset(train_num, dim, buf.release());

@@ -89,8 +89,9 @@ type majorCompactionTask struct {
 	clusteringKeyField    *schemapb.FieldSchema
 	primaryKeyField       *schemapb.FieldSchema
 
+	spillMutex         sync.Mutex
 	memoryBufferSize   int64
-	clusterBuffers     []*ClusterBuffer
+	clusterBuffers     sync.Map // id -> *ClusterBuffer
 	clusterBufferLocks *lock.KeyLock[interface{}]
 	// scalar
 	keyToBufferFunc func(interface{}) *ClusterBuffer
@@ -148,7 +149,7 @@ func newMajorCompactionTask(
 		totalBufferSize:    atomic.Int64{},
 		spillChan:          make(chan SpillSignal, 100),
 		pool:               conc.NewPool[any](hardware.GetCPUNum() * 2),
-		clusterBuffers:     make([]*ClusterBuffer, 0),
+		clusterBuffers:     sync.Map{},
 		clusterBufferLocks: lock.NewKeyLock[interface{}](),
 	}
 }
@@ -309,10 +310,11 @@ func (t *majorCompactionTask) compact() (*datapb.CompactionPlanResult, error) {
 				uploadedSegmentStats:    make(map[UniqueID]storage.SegmentStats, 0),
 				clusteringKeyFieldStats: fieldStats,
 			}
-			t.clusterBuffers = append(t.clusterBuffers, clusterBuffer)
+			t.clusterBuffers.Store(id, clusterBuffer)
 		}
 		t.offsetToBufferFunc = func(offset int64, idMapping []uint32) *ClusterBuffer {
-			return t.clusterBuffers[idMapping[offset]]
+			buffer, _ := t.clusterBuffers.Load(idMapping[offset])
+			return buffer.(*ClusterBuffer)
 		}
 	} else {
 		analyzeDict, err := t.scalarAnalyze(ctx)
@@ -335,7 +337,7 @@ func (t *majorCompactionTask) compact() (*datapb.CompactionPlanResult, error) {
 				uploadedSegmentStats:    make(map[UniqueID]storage.SegmentStats, 0),
 				clusteringKeyFieldStats: fieldStats,
 			}
-			t.clusterBuffers = append(t.clusterBuffers, buffer)
+			t.clusterBuffers.Store(id, buffer)
 			for _, key := range bucket {
 				scalarToClusterBufferMap[key] = buffer
 			}
@@ -413,7 +415,8 @@ func (t *majorCompactionTask) mapping(ctx context.Context,
 	resultPartitionStats := &storage.PartitionStatsSnapshot{
 		SegmentStats: make(map[UniqueID]storage.SegmentStats, 0),
 	}
-	for _, buffer := range t.clusterBuffers {
+	t.clusterBuffers.Range(func(id interface{}, value interface{}) bool {
+		buffer := value.(*ClusterBuffer)
 		for _, seg := range buffer.uploadedSegments {
 			se := &datapb.CompactionSegment{
 				PlanID:              seg.GetPlanID(),
@@ -431,7 +434,8 @@ func (t *majorCompactionTask) mapping(ctx context.Context,
 			log.Debug("put segment into final partition stats", zap.Int64("segmentID", segID), zap.Any("stats", segmentStat))
 			resultPartitionStats.SegmentStats[segID] = segmentStat
 		}
-	}
+		return true
+	})
 
 	log.Info("mapping end",
 		zap.Int64("collectionID", t.getCollection()),
@@ -587,8 +591,8 @@ func (t *majorCompactionTask) writeToBuffer(ctx context.Context, clusterBuffer *
 	}
 	rowSize := int(reflect.TypeOf(row).Size())
 
-	t.clusterBufferLocks.Lock(clusterBuffer)
-	defer t.clusterBufferLocks.Unlock(clusterBuffer)
+	t.clusterBufferLocks.Lock(clusterBuffer.id)
+	defer t.clusterBufferLocks.Unlock(clusterBuffer.id)
 	// prepare
 	if clusterBuffer.currentSegmentID == 0 {
 		segmentID, err := t.allocator.AllocOne()
@@ -711,22 +715,27 @@ func (t *majorCompactionTask) backgroundSpill(ctx context.Context) {
 func (t *majorCompactionTask) spillLargestBuffers(ctx context.Context) error {
 	log.Info("spillLargestBuffers")
 	bufferIDs := make([]int, 0)
-	for _, buffer := range t.clusterBuffers {
-		bufferIDs = append(bufferIDs, buffer.id)
-	}
+	t.spillMutex.Lock()
+	defer t.spillMutex.Unlock()
+	t.clusterBuffers.Range(func(id interface{}, _ interface{}) bool {
+		bufferIDs = append(bufferIDs, id.(int))
+		return true
+	})
 	sort.Slice(bufferIDs, func(i, j int) bool {
-		return t.clusterBuffers[i].bufferSize > t.clusterBuffers[j].bufferSize
+		left, _ := t.clusterBuffers.Load(i)
+		right, _ := t.clusterBuffers.Load(j)
+		return left.(*ClusterBuffer).bufferSize > right.(*ClusterBuffer).bufferSize
 	})
 	var spilledSize int64 = 0
 	for _, id := range bufferIDs {
-		buffer := t.clusterBuffers[id]
-		t.clusterBufferLocks.Lock(buffer)
-		defer t.clusterBufferLocks.Unlock(buffer)
-		err := t.spill(ctx, buffer)
+		buffer, _ := t.clusterBuffers.Load(id)
+		t.clusterBufferLocks.Lock(id)
+		defer t.clusterBufferLocks.Unlock(id)
+		err := t.spill(ctx, buffer.(*ClusterBuffer))
 		if err != nil {
 			return err
 		}
-		spilledSize += buffer.bufferSize
+		spilledSize += buffer.(*ClusterBuffer).bufferSize
 		if spilledSize >= t.memoryBufferSize/2 {
 			break
 		}
@@ -736,22 +745,27 @@ func (t *majorCompactionTask) spillLargestBuffers(ctx context.Context) error {
 
 func (t *majorCompactionTask) forceSpillAll(ctx context.Context) error {
 	log.Info("forceSpillAll")
-	for _, buffer := range t.clusterBuffers {
+	t.spillMutex.Lock()
+	defer t.spillMutex.Unlock()
+	t.clusterBuffers.Range(func(id interface{}, _ interface{}) bool {
 		err := func() error {
-			t.clusterBufferLocks.Lock(buffer)
-			defer t.clusterBufferLocks.Unlock(buffer)
-			err := t.spill(ctx, buffer)
+			buffer, _ := t.clusterBuffers.Load(id)
+			t.clusterBufferLocks.Lock(id)
+			defer t.clusterBufferLocks.Unlock(id)
+			err := t.spill(ctx, buffer.(*ClusterBuffer))
 			if err != nil {
 				log.Error("spill fail")
 				return err
 			}
-			err = t.packBuffersToSegments(ctx, t.clusterBuffers[buffer.id])
+			buffer2, _ := t.clusterBuffers.Load(id)
+			err = t.packBuffersToSegments(ctx, buffer2.(*ClusterBuffer))
 			return err
 		}()
 		if err != nil {
-			return err
+			return false
 		}
-	}
+		return true
+	})
 	t.totalBufferSize.Store(0)
 	return nil
 }

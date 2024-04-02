@@ -632,33 +632,46 @@ func (t *majorCompactionTask) writeToBuffer(ctx context.Context, clusterBuffer *
 	// trigger spill
 	if clusterBuffer.bufferRowNum > t.plan.GetMaxSegmentRows() ||
 		clusterBuffer.bufferSize > int64(Params.DataNodeCfg.BinLogMaxSize.GetAsInt()) {
-		t.spillChan <- SpillSignal{
-			buffer: clusterBuffer,
+		//t.spillChan <- SpillSignal{
+		//	buffer: clusterBuffer,
+		//}
+		err := t.spill(ctx, clusterBuffer)
+		if err != nil {
+			return err
 		}
 	} else if totalBufferSize >= t.memoryBufferSize {
-		t.spillChan <- SpillSignal{}
-		// block here, wait for memory release by spill
-	loop:
-		for {
-			select {
-			case <-ctx.Done():
-				log.Warn("stop waiting for memory buffer release as context done")
-				return nil
-			case <-t.done:
-				log.Warn("stop waiting for memory buffer release as task chan done")
-				return nil
-			default:
-				currentSize := t.totalBufferSize.Load()
-				if currentSize < t.getSpillMemorySizeThreshold() {
-					break loop
-				}
-				time.Sleep(time.Millisecond * 50)
-			}
+		err := t.spillLargestBuffers(ctx)
+		if err != nil {
+			return err
 		}
-	} else if totalBufferSize >= t.getSpillMemorySizeThreshold() {
-		// if totalBufferSize reaches memorybufferSize * 0.8, trigger spill without block
-		t.spillChan <- SpillSignal{}
 	}
+	//	t.spillChan <- SpillSignal{}
+	//	// block here, wait for memory release by spill
+	//loop:
+	//	for {
+	//		select {
+	//		case <-ctx.Done():
+	//			log.Warn("stop waiting for memory buffer release as context done")
+	//			return nil
+	//		case <-t.done:
+	//			log.Warn("stop waiting for memory buffer release as task chan done")
+	//			return nil
+	//		default:
+	//			currentSize := t.totalBufferSize.Load()
+	//			if currentSize < t.getSpillMemorySizeThreshold() {
+	//				break loop
+	//			}
+	//			time.Sleep(time.Millisecond * 50)
+	//		}
+	//	}
+	//} else if totalBufferSize >= t.getSpillMemorySizeThreshold() {
+	//	// if totalBufferSize reaches memorybufferSize * 0.8, trigger spill without block
+	//	//t.spillChan <- SpillSignal{}
+	//	err := t.spillLargestBuffers(ctx)
+	//	if err != nil {
+	//		return err
+	//	}
+	//}
 	return nil
 }
 

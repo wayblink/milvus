@@ -709,6 +709,7 @@ func (t *majorCompactionTask) backgroundSpill(ctx context.Context) {
 }
 
 func (t *majorCompactionTask) spillLargestBuffers(ctx context.Context) error {
+	log.Info("spillLargestBuffers")
 	bufferIDs := make([]int, 0)
 	for _, buffer := range t.clusterBuffers {
 		bufferIDs = append(bufferIDs, buffer.id)
@@ -718,12 +719,14 @@ func (t *majorCompactionTask) spillLargestBuffers(ctx context.Context) error {
 	})
 	var spilledSize int64 = 0
 	for _, id := range bufferIDs {
-		spillSize := t.clusterBuffers[id].bufferSize
-		err := t.spill(ctx, t.clusterBuffers[id])
+		buffer := t.clusterBuffers[id]
+		t.clusterBufferLocks.Lock(buffer)
+		defer t.clusterBufferLocks.Unlock(buffer)
+		err := t.spill(ctx, buffer)
 		if err != nil {
 			return err
 		}
-		spilledSize += spillSize
+		spilledSize += buffer.bufferSize
 		if spilledSize >= t.memoryBufferSize/2 {
 			break
 		}
@@ -732,16 +735,17 @@ func (t *majorCompactionTask) spillLargestBuffers(ctx context.Context) error {
 }
 
 func (t *majorCompactionTask) forceSpillAll(ctx context.Context) error {
+	log.Info("forceSpillAll")
 	for _, buffer := range t.clusterBuffers {
-		err := t.spill(ctx, buffer)
-		if err != nil {
-			log.Error("spill fail")
-			return err
-		}
-		err = func() error {
+		err := func() error {
 			t.clusterBufferLocks.Lock(buffer)
 			defer t.clusterBufferLocks.Unlock(buffer)
-			err = t.packBuffersToSegments(ctx, buffer)
+			err := t.spill(ctx, buffer)
+			if err != nil {
+				log.Error("spill fail")
+				return err
+			}
+			err = t.packBuffersToSegments(ctx, t.clusterBuffers[buffer.id])
 			return err
 		}()
 		if err != nil {
@@ -753,6 +757,7 @@ func (t *majorCompactionTask) forceSpillAll(ctx context.Context) error {
 }
 
 func (t *majorCompactionTask) packBuffersToSegments(ctx context.Context, buffer *ClusterBuffer) error {
+	log.Info("forceSpillAll", zap.Int("id", buffer.id), zap.Int("binligs", len(buffer.currentSpillBinlogs)), zap.Any("stats", buffer.currentPKStats))
 	if len(buffer.currentSpillBinlogs) == 0 {
 		return nil
 	}
@@ -810,9 +815,7 @@ func (t *majorCompactionTask) packBuffersToSegments(ctx context.Context, buffer 
 }
 
 func (t *majorCompactionTask) spill(ctx context.Context, buffer *ClusterBuffer) error {
-	t.clusterBufferLocks.Lock(buffer)
-	defer t.clusterBufferLocks.Unlock(buffer)
-
+	log.Info("spill", zap.Int("id", buffer.id))
 	if buffer.currentSpillRowNum > t.plan.GetMaxSegmentRows() {
 		t.packBuffersToSegments(ctx, buffer)
 	}

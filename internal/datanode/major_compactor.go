@@ -92,7 +92,7 @@ type majorCompactionTask struct {
 	spillMutex         sync.Mutex
 	memoryBufferSize   int64
 	clusterBuffers     []*ClusterBuffer
-	clusterBufferLocks *lock.KeyLock[interface{}]
+	clusterBufferLocks *lock.KeyLock[int]
 	// scalar
 	keyToBufferFunc func(interface{}) *ClusterBuffer
 	// vector
@@ -150,7 +150,7 @@ func newMajorCompactionTask(
 		spillChan:          make(chan SpillSignal, 100),
 		pool:               conc.NewPool[any](hardware.GetCPUNum() * 2),
 		clusterBuffers:     make([]*ClusterBuffer, 0),
-		clusterBufferLocks: lock.NewKeyLock[interface{}](),
+		clusterBufferLocks: lock.NewKeyLock[int](),
 	}
 }
 
@@ -348,7 +348,7 @@ func (t *majorCompactionTask) compact() (*datapb.CompactionPlanResult, error) {
 	}
 
 	// 3, mapping
-	log.Info("L2 compaction start mapping")
+	log.Info("L2 compaction start mapping", zap.Int("bufferNum", len(t.clusterBuffers)))
 	uploadSegments, partitionStats, err := t.mapping(ctx, deltaPk2Ts)
 	if err != nil {
 		return nil, err
@@ -760,10 +760,10 @@ func (t *majorCompactionTask) spillAll(ctx context.Context) error {
 }
 
 func (t *majorCompactionTask) packBuffersToSegments(ctx context.Context, buffer *ClusterBuffer) error {
+	log.Info("packBuffersToSegments", zap.Int("bufferID", buffer.id), zap.Any("currentSpillBinlogs", buffer.currentSpillBinlogs))
 	if len(buffer.currentSpillBinlogs) == 0 {
 		return nil
 	}
-
 	insertLogs := make([]*datapb.FieldBinlog, 0)
 	for _, fieldBinlog := range buffer.currentSpillBinlogs {
 		insertLogs = append(insertLogs, fieldBinlog)
@@ -771,7 +771,7 @@ func (t *majorCompactionTask) packBuffersToSegments(ctx context.Context, buffer 
 	iCodec := storage.NewInsertCodecWithSchema(t.collectionMeta)
 	statPaths, err := uploadStatsLog(ctx, t.io, t.allocator, t.collectionID, t.partitionID, buffer.currentSegmentID, buffer.currentPKStats, buffer.currentSpillRowNum, iCodec)
 	if err != nil {
-		log.Error("fail to upload stats log", zap.Int("bufferID", buffer.id), zap.Any("buffer", buffer), zap.Error(err))
+		log.Error("fail to upload stats log", zap.Int("bufferID", buffer.id), zap.Any("currentSpillBinlogs", buffer.currentSpillBinlogs), zap.Error(err))
 		return err
 	}
 	statsLogs := make([]*datapb.FieldBinlog, 0)
@@ -848,10 +848,10 @@ func (t *majorCompactionTask) spill(ctx context.Context, buffer *ClusterBuffer) 
 	buffer.currentSpillRowNum = buffer.currentSpillRowNum + buffer.bufferRowNum
 
 	// clean buffer
+	t.totalBufferSize.Add(-buffer.bufferSize)
 	buffer.buffer = nil
 	buffer.bufferSize = 0
 	buffer.bufferRowNum = 0
-	t.totalBufferSize.Add(-buffer.bufferSize)
 
 	return nil
 }

@@ -815,10 +815,6 @@ func (t *majorCompactionTask) packBuffersToSegments(ctx context.Context, buffer 
 }
 
 func (t *majorCompactionTask) spill(ctx context.Context, buffer *ClusterBuffer) error {
-	if buffer.currentSpillRowNum > t.plan.GetMaxSegmentRows() {
-		t.packBuffersToSegments(ctx, buffer)
-	}
-
 	if buffer.buffer.IsEmpty() {
 		return nil
 	}
@@ -849,6 +845,10 @@ func (t *majorCompactionTask) spill(ctx context.Context, buffer *ClusterBuffer) 
 	buffer.buffer = nil
 	buffer.bufferSize = 0
 	buffer.bufferRowNum = 0
+
+	if buffer.currentSpillRowNum > t.plan.GetMaxSegmentRows() {
+		t.packBuffersToSegments(ctx, buffer)
+	}
 	log.Info("finishSpill", zap.Int64("segID", buffer.currentSegmentID), zap.Any("stats", buffer.currentPKStats), zap.Any("currentSpillBinlogs", buffer.currentSpillBinlogs))
 	return nil
 }

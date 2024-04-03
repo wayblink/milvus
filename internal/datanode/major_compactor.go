@@ -108,12 +108,11 @@ type ClusterBuffer struct {
 	bufferTimeStampFrom int64
 	bufferTimeStampTo   int64
 
-	currentSegmentID      int64
-	currentSpillSize      int64
-	currentSpillRowNum    int64
-	currentSpillBinlogs   map[UniqueID]*datapb.FieldBinlog
-	currentSpillStatslogs []*datapb.FieldBinlog
-	currentPKStats        *storage.PrimaryKeyStats
+	currentSegmentID    int64
+	currentSpillSize    int64
+	currentSpillRowNum  int64
+	currentSpillBinlogs map[UniqueID]*datapb.FieldBinlog
+	currentPKStats      *storage.PrimaryKeyStats
 
 	uploadedSegments     []*datapb.CompactionSegment
 	uploadedSegmentStats map[UniqueID]storage.SegmentStats
@@ -629,7 +628,6 @@ func (t *majorCompactionTask) writeToBuffer(ctx context.Context, clusterBuffer *
 		}
 		clusterBuffer.currentSegmentID = segmentID
 		clusterBuffer.currentSpillBinlogs = make(map[UniqueID]*datapb.FieldBinlog, 0)
-		clusterBuffer.currentSpillStatslogs = make([]*datapb.FieldBinlog, 0)
 		clusterBuffer.bufferTimeStampFrom = -1
 		clusterBuffer.bufferTimeStampTo = -1
 	}
@@ -760,7 +758,7 @@ func (t *majorCompactionTask) spillAll(ctx context.Context) error {
 }
 
 func (t *majorCompactionTask) packBuffersToSegments(ctx context.Context, buffer *ClusterBuffer) error {
-	log.Info("packBuffersToSegments", zap.Int("bufferID", buffer.id), zap.Any("currentSpillBinlogs", buffer.currentSpillBinlogs))
+	log.Info("packBuffersToSegments", zap.Int("bufferID", buffer.id), zap.Int64("segID", buffer.currentSegmentID), zap.Any("currentSpillBinlogs", buffer.currentSpillBinlogs))
 	if len(buffer.currentSpillBinlogs) == 0 {
 		return nil
 	}
@@ -771,7 +769,7 @@ func (t *majorCompactionTask) packBuffersToSegments(ctx context.Context, buffer 
 	iCodec := storage.NewInsertCodecWithSchema(t.collectionMeta)
 	statPaths, err := uploadStatsLog(ctx, t.io, t.allocator, t.collectionID, t.partitionID, buffer.currentSegmentID, buffer.currentPKStats, buffer.currentSpillRowNum, iCodec)
 	if err != nil {
-		log.Error("fail to upload stats log", zap.Int("bufferID", buffer.id), zap.Any("currentSpillBinlogs", buffer.currentSpillBinlogs), zap.Error(err))
+		log.Error("fail to upload stats log", zap.Int("bufferID", buffer.id), zap.Int64("segID", buffer.currentSegmentID), zap.Any("currentSpillBinlogs", buffer.currentSpillBinlogs), zap.Error(err))
 		return err
 	}
 	statsLogs := make([]*datapb.FieldBinlog, 0)
@@ -813,7 +811,6 @@ func (t *majorCompactionTask) packBuffersToSegments(ctx context.Context, buffer 
 	}
 	buffer.currentSegmentID = segmentID
 	buffer.currentSpillBinlogs = make(map[UniqueID]*datapb.FieldBinlog, 0)
-	buffer.currentSpillStatslogs = make([]*datapb.FieldBinlog, 0)
 	return nil
 }
 
@@ -852,7 +849,7 @@ func (t *majorCompactionTask) spill(ctx context.Context, buffer *ClusterBuffer) 
 	buffer.buffer = nil
 	buffer.bufferSize = 0
 	buffer.bufferRowNum = 0
-
+	log.Info("finishSpill", zap.Int64("segID", buffer.currentSegmentID), zap.Any("stats", buffer.currentPKStats), zap.Any("currentSpillBinlogs", buffer.currentSpillBinlogs))
 	return nil
 }
 

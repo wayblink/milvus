@@ -619,8 +619,8 @@ func (t *majorCompactionTask) writeToBuffer(ctx context.Context, clusterBuffer *
 	}
 	rowSize := int(reflect.TypeOf(row).Size())
 
-	t.clusterBufferLocks.Lock(clusterBuffer)
-	defer t.clusterBufferLocks.Unlock(clusterBuffer)
+	t.clusterBufferLocks.Lock(clusterBuffer.id)
+	defer t.clusterBufferLocks.Unlock(clusterBuffer.id)
 	// prepare
 	if clusterBuffer.currentSegmentID == 0 {
 		segmentID, err := t.allocator.AllocOne()
@@ -687,8 +687,8 @@ func (t *majorCompactionTask) backgroundSpill(ctx context.Context) {
 				err = t.spillLargestBuffers(ctx)
 			} else {
 				err = func() error {
-					t.clusterBufferLocks.Lock(signal.buffer)
-					defer t.clusterBufferLocks.Unlock(signal.buffer)
+					t.clusterBufferLocks.Lock(signal.buffer.id)
+					defer t.clusterBufferLocks.Unlock(signal.buffer.id)
 					return t.spill(ctx, signal.buffer)
 				}()
 			}
@@ -707,11 +707,11 @@ func (t *majorCompactionTask) spillLargestBuffers(ctx context.Context) error {
 	bufferIDs := make([]int, 0)
 	for _, buffer := range t.clusterBuffers {
 		bufferIDs = append(bufferIDs, buffer.id)
-		t.clusterBufferLocks.Lock(buffer)
+		t.clusterBufferLocks.Lock(buffer.id)
 	}
 	defer func() {
 		for _, buffer := range t.clusterBuffers {
-			t.clusterBufferLocks.Unlock(buffer)
+			t.clusterBufferLocks.Unlock(buffer.id)
 		}
 	}()
 	sort.Slice(bufferIDs, func(i, j int) bool {
@@ -734,11 +734,11 @@ func (t *majorCompactionTask) spillAll(ctx context.Context) error {
 	t.spillMutex.Lock()
 	defer t.spillMutex.Unlock()
 	for _, buffer := range t.clusterBuffers {
-		t.clusterBufferLocks.Lock(buffer)
+		t.clusterBufferLocks.Lock(buffer.id)
 	}
 	defer func() {
 		for _, buffer := range t.clusterBuffers {
-			t.clusterBufferLocks.Unlock(buffer)
+			t.clusterBufferLocks.Unlock(buffer.id)
 		}
 	}()
 	for _, buffer := range t.clusterBuffers {
@@ -771,6 +771,7 @@ func (t *majorCompactionTask) packBuffersToSegments(ctx context.Context, buffer 
 	iCodec := storage.NewInsertCodecWithSchema(t.collectionMeta)
 	statPaths, err := uploadStatsLog(ctx, t.io, t.allocator, t.collectionID, t.partitionID, buffer.currentSegmentID, buffer.currentPKStats, buffer.currentSpillRowNum, iCodec)
 	if err != nil {
+		log.Error("fail to upload stats log", zap.Int("bufferID", buffer.id), zap.Any("buffer", buffer), zap.Error(err))
 		return err
 	}
 	statsLogs := make([]*datapb.FieldBinlog, 0)

@@ -111,6 +111,27 @@ func TestIndexNodeServer(t *testing.T) {
 		assert.Equal(t, commonpb.ErrorCode_Success, resp.GetStatus().GetErrorCode())
 	})
 
+	t.Run("CreateJobV2", func(t *testing.T) {
+		req := &indexpb.CreateJobV2Request{}
+		resp, err := server.CreateJobV2(ctx, req)
+		assert.NoError(t, err)
+		assert.Equal(t, commonpb.ErrorCode_Success, resp.GetErrorCode())
+	})
+
+	t.Run("QueryJobsV2", func(t *testing.T) {
+		req := &indexpb.QueryJobsV2Request{}
+		resp, err := server.QueryJobsV2(ctx, req)
+		assert.NoError(t, err)
+		assert.Equal(t, commonpb.ErrorCode_Success, resp.GetStatus().GetErrorCode())
+	})
+
+	t.Run("DropJobsV2", func(t *testing.T) {
+		req := &indexpb.DropJobsV2Request{}
+		resp, err := server.DropJobsV2(ctx, req)
+		assert.NoError(t, err)
+		assert.Equal(t, commonpb.ErrorCode_Success, resp.GetErrorCode())
+	})
+
 	err = server.Stop()
 	assert.NoError(t, err)
 }

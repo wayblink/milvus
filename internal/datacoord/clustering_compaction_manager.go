@@ -229,28 +229,52 @@ func (t *ClusteringCompactionManager) checkJobState(job *ClusteringCompactionJob
 				for _, seg := range compactionTask.result.Segments {
 					segmentIDs = append(segmentIDs, seg.GetSegmentID())
 				}
-				err := t.meta.SavePartitionStatsInfo(&datapb.PartitionStatsInfo{
-					CollectionID: job.collectionID,
-					PartitionID:  compactionTask.plan.SegmentBinlogs[0].PartitionID,
-					VChannel:     compactionTask.plan.GetChannel(),
-					Version:      compactionTask.plan.PlanID,
-					SegmentIDs:   segmentIDs,
-				})
-				if err != nil {
-					return err
+
+				// wait for segment indexed
+				collectionIndexes := t.meta.indexMeta.GetIndexesForCollection(job.collectionID, "")
+				indexed := func() bool {
+					for _, collectionIndex := range collectionIndexes {
+						for _, segmentID := range segmentIDs {
+							segmentIndexState := t.meta.indexMeta.GetSegmentIndexState(job.collectionID, segmentID, collectionIndex.IndexID)
+							if segmentIndexState.GetState() != commonpb.IndexState_Finished {
+								return false
+							}
+						}
+					}
+					return true
+				}()
+				log.Debug("check compaction result segments index states", zap.Bool("indexed", indexed), zap.Int64("planID", plan.GetPlanID()), zap.Int64s("segments", segmentIDs))
+				if indexed {
+					err := t.meta.SavePartitionStatsInfo(&datapb.PartitionStatsInfo{
+						CollectionID: job.collectionID,
+						PartitionID:  compactionTask.plan.SegmentBinlogs[0].PartitionID,
+						VChannel:     compactionTask.plan.GetChannel(),
+						Version:      compactionTask.plan.PlanID,
+						SegmentIDs:   segmentIDs,
+					})
+					if err != nil {
+						return err
+					}
+
+					job.compactionPlanStates[index] = completed
+					job.state = completed
+					// not mark job.compactionPlanStates[index]==completed before index complete
 				}
 			}
 			// todo: for now, a clustering compaction job has only one compactionPlan
-			job.state = completed
 		case failed:
 			// todo: retry sub tasks
 			job.state = failed
+			job.compactionPlanStates[index] = compactionTask.state
 		case timeout:
 			// todo: retry sub tasks
 			job.state = timeout
-
+			job.compactionPlanStates[index] = compactionTask.state
+		case pipelining:
+			job.compactionPlanStates[index] = compactionTask.state
+		case executing:
+			job.compactionPlanStates[index] = compactionTask.state
 		}
-		job.compactionPlanStates[index] = compactionTask.state
 	}
 
 	log.Info("Update clustering compaction job", zap.Int64("tiggerID", job.triggerID), zap.Int64("collectionID", job.collectionID), zap.String("state", fmt.Sprint(job.state)))

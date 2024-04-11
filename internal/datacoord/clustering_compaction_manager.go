@@ -33,6 +33,7 @@ import (
 	"github.com/milvus-io/milvus/internal/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/common"
 	"github.com/milvus-io/milvus/pkg/log"
+	"github.com/milvus-io/milvus/pkg/metrics"
 	"github.com/milvus-io/milvus/pkg/util/logutil"
 	"github.com/milvus-io/milvus/pkg/util/metautil"
 	"github.com/milvus-io/milvus/pkg/util/paramtable"
@@ -258,8 +259,18 @@ func (t *ClusteringCompactionManager) checkJobState(job *ClusteringCompactionJob
 
 					job.compactionPlanStates[index] = completed
 					job.state = completed
-					// not mark job.compactionPlanStates[index]==completed before index complete
+					ts, err := t.allocator.allocTimestamp(t.ctx)
+					if err != nil {
+						return err
+					}
+					job.endTime = ts
+					elapse := tsoutil.PhysicalTime(ts).UnixMilli() - tsoutil.PhysicalTime(job.startTime).UnixMilli()
+					log.Debug("clustering compaction job elapse", zap.Int64("triggerID", job.triggerID), zap.Int64("collectionID", job.collectionID), zap.Int64("elapse", elapse))
+					metrics.DataCoordCompactionLatency.
+						WithLabelValues(fmt.Sprint(typeutil.IsVectorType(job.clusteringKeyType)), datapb.CompactionType_ClusteringCompaction.String()).
+						Observe(float64(elapse))
 				}
+				// not mark job.compactionPlanStates[index]==completed before index complete
 			}
 			// todo: for now, a clustering compaction job has only one compactionPlan
 		case failed:

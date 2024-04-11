@@ -31,9 +31,9 @@ type ClusteringCompactionJob struct {
 	//   trigger -> pipelining:
 	//              executing:
 	//              completed or failed or timeout
-	state          compactionTaskState
-	startTime      uint64
-	lastUpdateTime uint64
+	state     compactionTaskState
+	startTime uint64
+	endTime   uint64
 	// should only store partial info in meta
 	compactionPlans      []*datapb.CompactionPlan
 	compactionPlanStates []compactionTaskState
@@ -53,7 +53,7 @@ func convertClusteringCompactionJob(info *datapb.ClusteringCompactionInfo) *Clus
 		clusteringKeyType:    info.GetClusteringKeyType(),
 		state:                compactionTaskState(info.GetState()),
 		startTime:            info.GetStartTime(),
-		lastUpdateTime:       info.GetLastUpdateTime(),
+		endTime:              info.GetEndTime(),
 		compactionPlans:      info.GetCompactionPlans(),
 		compactionPlanStates: compactionPlanStates,
 		analysisTaskID:       info.GetAnalysisTaskID(),
@@ -102,7 +102,7 @@ func convertFromClusteringCompactionJob(job *ClusteringCompactionJob) *datapb.Cl
 		ClusteringKeyType:    job.clusteringKeyType,
 		State:                int32(job.state),
 		StartTime:            job.startTime,
-		LastUpdateTime:       job.lastUpdateTime,
+		EndTime:              job.endTime,
 		CompactionPlans:      job.compactionPlans,
 		CompactionPlanStates: compactionPlanStates,
 		AnalysisTaskID:       job.analysisTaskID,

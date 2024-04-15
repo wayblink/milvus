@@ -55,8 +55,6 @@ type ClusteringCompactionManager struct {
 	signals  chan *compactionSignal
 	ticker   *time.Ticker
 	gcTicker *time.Ticker
-
-	jobs map[UniqueID]*ClusteringCompactionJob
 }
 
 func newClusteringCompactionManager(
@@ -92,6 +90,11 @@ func (t *ClusteringCompactionManager) stop() {
 func (t *ClusteringCompactionManager) submit(job *ClusteringCompactionJob) error {
 	log.Info("Insert clustering compaction job", zap.Int64("tiggerID", job.triggerID), zap.Int64("collectionID", job.collectionID))
 	return t.saveJob(job)
+}
+
+func (t *ClusteringCompactionManager) getByTriggerId(triggerID int64) *datapb.ClusteringCompactionInfo {
+	clusteringInfos := t.meta.GetClusteringCompactionInfosByTriggerID(triggerID)
+	return clusteringInfos[0]
 }
 
 func (t *ClusteringCompactionManager) startJobCheckLoop() {

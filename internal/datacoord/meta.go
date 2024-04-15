@@ -1611,6 +1611,19 @@ func (m *meta) GetClusteringCompactionInfosByID(collectionID UniqueID) []*datapb
 	return res
 }
 
+// GetClusteringCompactionInfosByTriggerID get clustering compaction infos by collection id
+func (m *meta) GetClusteringCompactionInfosByTriggerID(triggerID UniqueID) []*datapb.ClusteringCompactionInfo {
+	m.RLock()
+	defer m.RUnlock()
+	res := make([]*datapb.ClusteringCompactionInfo, 0)
+	for _, info := range m.clusteringCompactions {
+		if info.TriggerID == triggerID {
+			res = append(res, info)
+		}
+	}
+	return res
+}
+
 // DropClusteringCompactionInfo drop clustering compaction info in meta
 func (m *meta) DropClusteringCompactionInfo(info *datapb.ClusteringCompactionInfo) error {
 	m.Lock()

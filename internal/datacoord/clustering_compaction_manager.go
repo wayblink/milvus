@@ -213,7 +213,7 @@ func (t *ClusteringCompactionManager) checkJobState(job *ClusteringCompactionJob
 		}
 		return nil
 	}
-	
+
 	for index, plan := range job.compactionPlans {
 		compactionTask := t.compactionHandler.getCompaction(plan.GetPlanID())
 		if compactionTask == nil {
@@ -225,7 +225,7 @@ func (t *ClusteringCompactionManager) checkJobState(job *ClusteringCompactionJob
 
 		switch compactionTask.state {
 		case completed:
-			if job.compactionPlanStates[index] == executing {
+			if job.compactionPlans[index].State == int32(executing) {
 				segmentIDs := make([]int64, 0)
 				for _, seg := range compactionTask.result.Segments {
 					segmentIDs = append(segmentIDs, seg.GetSegmentID())
@@ -257,7 +257,7 @@ func (t *ClusteringCompactionManager) checkJobState(job *ClusteringCompactionJob
 						return err
 					}
 
-					job.compactionPlanStates[index] = completed
+					job.compactionPlans[index].State = int32(completed)
 					job.state = completed
 					ts, err := t.allocator.allocTimestamp(t.ctx)
 					if err != nil {
@@ -276,15 +276,15 @@ func (t *ClusteringCompactionManager) checkJobState(job *ClusteringCompactionJob
 		case failed:
 			// todo: retry sub tasks
 			job.state = failed
-			job.compactionPlanStates[index] = compactionTask.state
+			job.compactionPlans[index].State = int32(compactionTask.state)
 		case timeout:
 			// todo: retry sub tasks
 			job.state = timeout
-			job.compactionPlanStates[index] = compactionTask.state
+			job.compactionPlans[index].State = int32(compactionTask.state)
 		case pipelining:
-			job.compactionPlanStates[index] = compactionTask.state
+			job.compactionPlans[index].State = int32(compactionTask.state)
 		case executing:
-			job.compactionPlanStates[index] = compactionTask.state
+			job.compactionPlans[index].State = int32(compactionTask.state)
 		}
 	}
 
@@ -302,7 +302,7 @@ func (t *ClusteringCompactionManager) runCompactionJob(job *ClusteringCompaction
 
 	plans := job.compactionPlans
 	for index, plan := range plans {
-		if job.compactionPlanStates[index] != pipelining {
+		if job.compactionPlans[index].State != int32(pipelining) {
 			continue
 		}
 		segIDs := fetchSegIDs(plan.GetSegmentBinlogs())
@@ -442,7 +442,7 @@ func (t *ClusteringCompactionManager) GetAllJobs() []*ClusteringCompactionJob {
 	jobs := make([]*ClusteringCompactionJob, 0)
 	infos := t.meta.GetClusteringCompactionInfos()
 	for _, info := range infos {
-		job := convertClusteringCompactionJob(info)
+		job := convertToClusteringCompactionJob(info)
 		jobs = append(jobs, job)
 	}
 	return jobs

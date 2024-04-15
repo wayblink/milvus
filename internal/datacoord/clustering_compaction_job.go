@@ -35,37 +35,27 @@ type ClusteringCompactionJob struct {
 	startTime uint64
 	endTime   uint64
 	// should only store partial info in meta
-	compactionPlans      []*datapb.CompactionPlan
-	compactionPlanStates []compactionTaskState
-	analysisTaskID       UniqueID
+	compactionPlans []*datapb.CompactionPlan
+	analysisTaskID  UniqueID
 }
 
-func convertClusteringCompactionJob(info *datapb.ClusteringCompactionInfo) *ClusteringCompactionJob {
-	compactionPlanStates := make([]compactionTaskState, 0)
-	for _, compactionPlanState := range info.GetCompactionPlanStates() {
-		compactionPlanStates = append(compactionPlanStates, compactionTaskState(compactionPlanState))
-	}
+func convertToClusteringCompactionJob(info *datapb.ClusteringCompactionInfo) *ClusteringCompactionJob {
 	job := &ClusteringCompactionJob{
-		triggerID:            info.GetTriggerID(),
-		collectionID:         info.GetCollectionID(),
-		clusteringKeyID:      info.GetClusteringKeyID(),
-		clusteringKeyName:    info.GetClusteringKeyName(),
-		clusteringKeyType:    info.GetClusteringKeyType(),
-		state:                compactionTaskState(info.GetState()),
-		startTime:            info.GetStartTime(),
-		endTime:              info.GetEndTime(),
-		compactionPlans:      info.GetCompactionPlans(),
-		compactionPlanStates: compactionPlanStates,
-		analysisTaskID:       info.GetAnalysisTaskID(),
+		triggerID:         info.GetTriggerID(),
+		collectionID:      info.GetCollectionID(),
+		clusteringKeyID:   info.GetClusteringKeyID(),
+		clusteringKeyName: info.GetClusteringKeyName(),
+		clusteringKeyType: info.GetClusteringKeyType(),
+		state:             compactionTaskState(info.GetState()),
+		startTime:         info.GetStartTime(),
+		endTime:           info.GetEndTime(),
+		compactionPlans:   info.GetCompactionPlans(),
+		analysisTaskID:    info.GetAnalysisTaskID(),
 	}
 	return job
 }
 
 func convertFromClusteringCompactionJob(job *ClusteringCompactionJob) *datapb.ClusteringCompactionInfo {
-	compactionPlanStates := make([]int32, 0)
-	for _, compactionPlanState := range job.compactionPlanStates {
-		compactionPlanStates = append(compactionPlanStates, int32(compactionPlanState))
-	}
 	compactionPlans := make([]*datapb.CompactionPlan, 0)
 	for _, compactionPlan := range job.compactionPlans {
 		segments := make([]*datapb.CompactionSegmentBinlogs, 0)
@@ -95,22 +85,21 @@ func convertFromClusteringCompactionJob(job *ClusteringCompactionJob) *datapb.Cl
 	}
 
 	info := &datapb.ClusteringCompactionInfo{
-		TriggerID:            job.triggerID,
-		CollectionID:         job.collectionID,
-		ClusteringKeyID:      job.clusteringKeyID,
-		ClusteringKeyName:    job.clusteringKeyName,
-		ClusteringKeyType:    job.clusteringKeyType,
-		State:                int32(job.state),
-		StartTime:            job.startTime,
-		EndTime:              job.endTime,
-		CompactionPlans:      job.compactionPlans,
-		CompactionPlanStates: compactionPlanStates,
-		AnalysisTaskID:       job.analysisTaskID,
+		TriggerID:         job.triggerID,
+		CollectionID:      job.collectionID,
+		ClusteringKeyID:   job.clusteringKeyID,
+		ClusteringKeyName: job.clusteringKeyName,
+		ClusteringKeyType: job.clusteringKeyType,
+		State:             int32(job.state),
+		StartTime:         job.startTime,
+		EndTime:           job.endTime,
+		CompactionPlans:   job.compactionPlans,
+		AnalysisTaskID:    job.analysisTaskID,
 	}
 	return info
 }
 
 func (job *ClusteringCompactionJob) addCompactionPlan(plan *datapb.CompactionPlan, state compactionTaskState) {
+	plan.State = int32(state)
 	job.compactionPlans = append(job.compactionPlans, plan)
-	job.compactionPlanStates = append(job.compactionPlanStates, state)
 }

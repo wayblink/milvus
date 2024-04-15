@@ -648,15 +648,14 @@ func (t *compactionTrigger) handleClusteringCompactionSignal(signal *compactionS
 	}
 
 	clusteringCompactionJob := &ClusteringCompactionJob{
-		triggerID:            signal.id,
-		collectionID:         signal.collectionID,
-		clusteringKeyID:      clusteringKeyField.FieldID,
-		clusteringKeyName:    clusteringKeyField.Name,
-		clusteringKeyType:    clusteringKeyField.DataType,
-		startTime:            ts,
-		state:                pipelining,
-		compactionPlans:      make([]*datapb.CompactionPlan, 0),
-		compactionPlanStates: make([]compactionTaskState, 0),
+		triggerID:         signal.id,
+		collectionID:      signal.collectionID,
+		clusteringKeyID:   clusteringKeyField.FieldID,
+		clusteringKeyName: clusteringKeyField.Name,
+		clusteringKeyType: clusteringKeyField.DataType,
+		startTime:         ts,
+		state:             pipelining,
+		compactionPlans:   make([]*datapb.CompactionPlan, 0),
 	}
 
 	for _, group := range partSegments {

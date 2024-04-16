@@ -1073,13 +1073,19 @@ func (s *Server) ManualCompaction(ctx context.Context, req *milvuspb.ManualCompa
 		return resp, nil
 	}
 
-	plans := s.compactionHandler.getCompactionTasksBySignalID(id)
-	if len(plans) == 0 {
-		resp.CompactionID = -1
-		resp.CompactionPlanCount = 0
-	} else {
+	if req.GetMajorCompaction() {
 		resp.CompactionID = id
-		resp.CompactionPlanCount = int32(len(plans))
+		compactionJob := s.clusteringCompactionManager.getByTriggerId(id)
+		resp.CompactionPlanCount = int32(len(compactionJob.CompactionPlans))
+	} else {
+		plans := s.compactionHandler.getCompactionTasksBySignalID(id)
+		if len(plans) == 0 {
+			resp.CompactionID = -1
+			resp.CompactionPlanCount = 0
+		} else {
+			resp.CompactionID = id
+			resp.CompactionPlanCount = int32(len(plans))
+		}
 	}
 
 	log.Info("success to trigger manual compaction", zap.Int64("compactionID", id))

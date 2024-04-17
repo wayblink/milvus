@@ -470,6 +470,7 @@ func (t *ClusteringCompactionManager) dropJob(job *ClusteringCompactionJob) erro
 
 func (t *ClusteringCompactionManager) saveJob(job *ClusteringCompactionJob) error {
 	info := convertFromClusteringCompactionJob(job)
+	log.Info("saveJob", zap.Any("info", info))
 	return t.meta.SaveClusteringCompactionInfo(info)
 }
 

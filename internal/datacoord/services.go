@@ -1126,8 +1126,8 @@ func (s *Server) GetCompactionState(ctx context.Context, req *milvuspb.GetCompac
 		)
 		tasks = make([]*compactionTask, 0)
 		plans := compactionJob.GetCompactionPlans()
+		log.Info("wayblink", zap.Int("plan", int(compactionJob.State)))
 		for _, plan := range plans {
-			log.Info("wayblink", zap.Any("plan", plan))
 			task := s.compactionHandler.getCompaction(plan.GetPlanID())
 			if task == nil {
 				continue
@@ -1146,7 +1146,13 @@ func (s *Server) GetCompactionState(ctx context.Context, req *milvuspb.GetCompac
 				timeoutCnt++
 			}
 		}
-		resp.State = commonpb.CompactionState(compactionJob.State)
+
+		state := compactionTaskState(compactionJob.State)
+		if state == pipelining || state == executing {
+			resp.State = commonpb.CompactionState_Executing
+		} else {
+			resp.State = commonpb.CompactionState_Completed
+		}
 		resp.ExecutingPlanNo = executingCnt
 		resp.CompletedPlanNo = completedCnt
 		resp.TimeoutPlanNo = timeoutCnt

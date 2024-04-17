@@ -50,7 +50,7 @@ func convertToClusteringCompactionJob(info *datapb.ClusteringCompactionInfo) *Cl
 		startTime:         info.GetStartTime(),
 		endTime:           info.GetEndTime(),
 		compactionPlans:   info.GetCompactionPlans(),
-		analyzeTaskID:     info.GetAnalysisTaskID(),
+		analyzeTaskID:     info.GetAnalyzeTaskID(),
 	}
 	return job
 }

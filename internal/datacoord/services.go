@@ -1076,7 +1076,9 @@ func (s *Server) ManualCompaction(ctx context.Context, req *milvuspb.ManualCompa
 	if req.GetMajorCompaction() {
 		resp.CompactionID = id
 		compactionJob := s.clusteringCompactionManager.getByTriggerId(id)
-		resp.CompactionPlanCount = int32(len(compactionJob.CompactionPlans))
+		if compactionJob != nil {
+			resp.CompactionPlanCount = int32(len(compactionJob.CompactionPlans))
+		}
 	} else {
 		plans := s.compactionHandler.getCompactionTasksBySignalID(id)
 		if len(plans) == 0 {

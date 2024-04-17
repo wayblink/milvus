@@ -25,13 +25,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/milvus-io/milvus/internal/proto/indexpb"
-
 	"github.com/samber/lo"
 	"go.uber.org/zap"
 
+	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/internal/metastore/model"
 	"github.com/milvus-io/milvus/internal/proto/datapb"
+	"github.com/milvus-io/milvus/internal/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/common"
 	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/metrics"
@@ -50,7 +50,6 @@ type ClusteringCompactionManager struct {
 	scheduler         Scheduler
 	analyzeScheduler  *taskScheduler
 
-	forceMu sync.Mutex
 	quit    chan struct{}
 	wg      sync.WaitGroup
 	signals chan *compactionSignal
@@ -305,20 +304,21 @@ func (t *ClusteringCompactionManager) generateNewPlans(job *ClusteringCompaction
 }
 
 func (t *ClusteringCompactionManager) runCompactionJob(job *ClusteringCompactionJob) error {
-	t.forceMu.Lock()
-	defer t.forceMu.Unlock()
-
 	plans := job.compactionPlans
+	currentID, _, err := t.allocator.allocN(int64(2 * len(plans)))
+	if err != nil {
+		return err
+	}
 	for index, plan := range plans {
 		if job.compactionPlans[index].State != int32(pipelining) {
 			continue
 		}
 		segIDs := fetchSegIDs(plan.GetSegmentBinlogs())
 		start := time.Now()
-		planId, analyzeTaskID, err := t.allocator.allocN(2)
-		if err != nil {
-			return err
-		}
+		planId := currentID
+		currentID++
+		analyzeTaskID := currentID
+		currentID++
 		plan.PlanID = planId
 		plan.TimeoutInSeconds = Params.DataCoordCfg.ClusteringCompactionTimeoutInSeconds.GetAsInt32()
 
@@ -414,7 +414,7 @@ func (t *ClusteringCompactionManager) runCompactionJob(job *ClusteringCompaction
 		job.state = executing
 	}
 	log.Info("Update clustering compaction job", zap.Int64("tiggerID", job.triggerID), zap.Int64("collectionID", job.collectionID))
-	err := t.saveJob(job)
+	err = t.saveJob(job)
 	return err
 }
 

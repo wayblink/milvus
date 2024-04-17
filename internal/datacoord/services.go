@@ -1115,16 +1115,55 @@ func (s *Server) GetCompactionState(ctx context.Context, req *milvuspb.GetCompac
 		return resp, nil
 	}
 
-	tasks := s.compactionHandler.getCompactionTasksBySignalID(req.GetCompactionID())
-	state, executingCnt, completedCnt, failedCnt, timeoutCnt := getCompactionState(tasks)
+	var tasks []*compactionTask
+	compactionJob := s.clusteringCompactionManager.getByTriggerId(req.GetCompactionID())
+	if compactionJob != nil {
+		var (
+			executingCnt int64
+			completedCnt int64
+			timeoutCnt   int64
+			failedCnt    int64
+		)
+		tasks = make([]*compactionTask, 0)
+		plans := compactionJob.GetCompactionPlans()
+		for _, plan := range plans {
+			log.Info("wayblink", zap.Any("plan", plan))
+			task := s.compactionHandler.getCompaction(plan.GetPlanID())
+			if task == nil {
+				continue
+			}
+			tasks = append(tasks, task)
+			switch task.state {
+			case pipelining:
+				executingCnt++
+			case executing:
+				executingCnt++
+			case completed:
+				completedCnt++
+			case failed:
+				failedCnt++
+			case timeout:
+				timeoutCnt++
+			}
+		}
+		resp.State = commonpb.CompactionState(compactionJob.State)
+		resp.ExecutingPlanNo = executingCnt
+		resp.CompletedPlanNo = completedCnt
+		resp.TimeoutPlanNo = timeoutCnt
+		resp.FailedPlanNo = failedCnt
+	} else {
+		tasks = s.compactionHandler.getCompactionTasksBySignalID(req.GetCompactionID())
+		state, executingCnt, completedCnt, failedCnt, timeoutCnt := getCompactionState(tasks)
 
-	resp.State = state
-	resp.ExecutingPlanNo = int64(executingCnt)
-	resp.CompletedPlanNo = int64(completedCnt)
-	resp.TimeoutPlanNo = int64(timeoutCnt)
-	resp.FailedPlanNo = int64(failedCnt)
-	log.Info("success to get compaction state", zap.Any("state", state), zap.Int("executing", executingCnt),
-		zap.Int("completed", completedCnt), zap.Int("failed", failedCnt), zap.Int("timeout", timeoutCnt),
+		resp.State = state
+		resp.ExecutingPlanNo = int64(executingCnt)
+		resp.CompletedPlanNo = int64(completedCnt)
+		resp.TimeoutPlanNo = int64(timeoutCnt)
+		resp.FailedPlanNo = int64(failedCnt)
+	}
+
+	log.Info("success to get compaction state", zap.Any("state", resp.GetState()), zap.Int64("executing", resp.GetExecutingPlanNo()),
+		zap.Int64("completed", resp.GetCompletedPlanNo()), zap.Int64("failed", resp.GetFailedPlanNo()), zap.Int64("timeout", resp.GetTimeoutPlanNo()),
 		zap.Int64s("plans", lo.Map(tasks, func(t *compactionTask, _ int) int64 {
 			if t.plan == nil {
 				return -1

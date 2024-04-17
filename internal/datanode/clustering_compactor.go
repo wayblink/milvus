@@ -583,6 +583,7 @@ func (t *clusteringCompactionTask) mappingSegment(
 			// block here, wait for memory release by spill
 			currentSize := t.totalBufferSize.Load()
 			if currentSize > t.getSpillMemorySizeThreshold() {
+				t.spillChan <- SpillSignal{}
 			loop:
 				for {
 					select {
@@ -685,7 +686,7 @@ func (t *clusteringCompactionTask) backgroundSpill(ctx context.Context) {
 			log.Info("clustering compaction task done")
 			return
 		case signal := <-t.spillChan:
-			log.Info("receive spill signal", zap.Int("id", signal.buffer.id))
+			//log.Info("receive spill signal", zap.Int("id", signal.buffer.id))
 			var err error
 			if signal.buffer == nil {
 				err = t.spillLargestBuffers(ctx)

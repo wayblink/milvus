@@ -97,6 +97,39 @@ func (t *ClusteringCompactionManager) getByTriggerId(triggerID int64) *datapb.Cl
 	return clusteringInfos[0]
 }
 
+func (t *ClusteringCompactionManager) getCompactionJobState(triggerID int64) (state commonpb.CompactionState, executingCnt, completedCnt, failedCnt, timeoutCnt int) {
+	tasks := make([]*compactionTask, 0)
+	compactionJob := t.getByTriggerId(triggerID)
+	plans := compactionJob.GetCompactionPlans()
+	for _, plan := range plans {
+		task := t.compactionHandler.getCompaction(plan.GetPlanID())
+		if task == nil {
+			continue
+		}
+		tasks = append(tasks, task)
+		switch task.state {
+		case pipelining:
+			executingCnt++
+		case executing:
+			executingCnt++
+		case completed:
+			completedCnt++
+		case failed:
+			failedCnt++
+		case timeout:
+			timeoutCnt++
+		}
+	}
+
+	compactionState := compactionTaskState(compactionJob.State)
+	if compactionState == pipelining || compactionState == executing {
+		state = commonpb.CompactionState_Executing
+	} else {
+		state = commonpb.CompactionState_Completed
+	}
+	return
+}
+
 func (t *ClusteringCompactionManager) startJobCheckLoop() {
 	defer logutil.LogPanic()
 	defer t.wg.Done()
@@ -470,7 +503,6 @@ func (t *ClusteringCompactionManager) dropJob(job *ClusteringCompactionJob) erro
 
 func (t *ClusteringCompactionManager) saveJob(job *ClusteringCompactionJob) error {
 	info := convertFromClusteringCompactionJob(job)
-	log.Info("saveJob", zap.Any("info", info))
 	return t.meta.SaveClusteringCompactionInfo(info)
 }
 

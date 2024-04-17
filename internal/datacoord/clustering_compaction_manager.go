@@ -263,9 +263,10 @@ func (t *ClusteringCompactionManager) checkJobState(job *ClusteringCompactionJob
 			break
 		}
 
+		log.Info("compaction task ", zap.Int64("planID", plan.GetPlanID()), zap.Any("state", compactionTask.state))
 		switch compactionTask.state {
 		case completed:
-			if job.compactionPlans[index].State == int32(executing) {
+			if job.compactionPlans[index].State == int32(executing) || job.compactionPlans[index].State == int32(pipelining) {
 				segmentIDs := make([]int64, 0)
 				for _, seg := range compactionTask.result.Segments {
 					segmentIDs = append(segmentIDs, seg.GetSegmentID())

@@ -525,9 +525,10 @@ message CompactionPlan {
   int64 clustering_key_id = 10;
   int64 max_segment_rows = 11;
   int64 prefer_segment_rows = 12;
-  string analyze_result_path = 13;
-  repeated int64 analyze_segment_ids = 14;
-  int32 state = 15;
+  int64 analyze_id = 13;
+  string analyze_result_path = 14;
+  repeated int64 analyze_segment_ids = 15;
+  int32 state = 16;
 }
 
 message CompactionSegment {

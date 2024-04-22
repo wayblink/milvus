@@ -1077,7 +1077,7 @@ func (s *Server) ManualCompaction(ctx context.Context, req *milvuspb.ManualCompa
 		resp.CompactionID = id
 		compactionJob := s.clusteringCompactionManager.getByTriggerId(id)
 		if compactionJob != nil {
-			resp.CompactionPlanCount = int32(len(compactionJob.CompactionPlans))
+			resp.CompactionPlanCount = int32(len(compactionJob.compactionPlans))
 		}
 	} else {
 		plans := s.compactionHandler.getCompactionTasksBySignalID(id)
@@ -1125,7 +1125,7 @@ func (s *Server) GetCompactionState(ctx context.Context, req *milvuspb.GetCompac
 	)
 	compactionJob := s.clusteringCompactionManager.getByTriggerId(req.GetCompactionID())
 	if compactionJob != nil {
-		plans = lo.Map(compactionJob.GetCompactionPlans(), func(plan *datapb.CompactionPlan, _ int) int64 {
+		plans = lo.Map(compactionJob.compactionPlans, func(plan *datapb.CompactionPlan, _ int) int64 {
 			if plan == nil {
 				return -1
 			}

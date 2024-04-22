@@ -21,6 +21,16 @@ import (
 	"github.com/milvus-io/milvus/internal/proto/datapb"
 )
 
+type clusteringCompactionTaskState int8
+
+const (
+	clustering_pipelining clusteringCompactionTaskState = iota + 1
+	clustering_executing
+	clustering_completed
+	clustering_failed
+	clustering_timeout
+)
+
 type ClusteringCompactionJob struct {
 	triggerID         UniqueID
 	collectionID      UniqueID
@@ -31,12 +41,11 @@ type ClusteringCompactionJob struct {
 	//   trigger -> pipelining:
 	//              executing:
 	//              completed or failed or timeout
-	state     compactionTaskState
+	state     clusteringCompactionTaskState
 	startTime uint64
 	endTime   uint64
 	// should only store partial info in meta
 	compactionPlans []*datapb.CompactionPlan
-	analyzeTaskID   UniqueID
 }
 
 func convertToClusteringCompactionJob(info *datapb.ClusteringCompactionInfo) *ClusteringCompactionJob {
@@ -46,11 +55,10 @@ func convertToClusteringCompactionJob(info *datapb.ClusteringCompactionInfo) *Cl
 		clusteringKeyID:   info.GetClusteringKeyID(),
 		clusteringKeyName: info.GetClusteringKeyName(),
 		clusteringKeyType: info.GetClusteringKeyType(),
-		state:             compactionTaskState(info.GetState()),
+		state:             clusteringCompactionTaskState(info.GetState()),
 		startTime:         info.GetStartTime(),
 		endTime:           info.GetEndTime(),
 		compactionPlans:   info.GetCompactionPlans(),
-		analyzeTaskID:     info.GetAnalyzeTaskID(),
 	}
 	return job
 }
@@ -93,8 +101,7 @@ func convertFromClusteringCompactionJob(job *ClusteringCompactionJob) *datapb.Cl
 		State:             int32(job.state),
 		StartTime:         job.startTime,
 		EndTime:           job.endTime,
-		CompactionPlans:   job.compactionPlans,
-		AnalyzeTaskID:     job.analyzeTaskID,
+		CompactionPlans:   compactionPlans,
 	}
 	return info
 }

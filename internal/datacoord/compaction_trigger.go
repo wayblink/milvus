@@ -654,7 +654,7 @@ func (t *compactionTrigger) handleClusteringCompactionSignal(signal *compactionS
 		clusteringKeyName: clusteringKeyField.Name,
 		clusteringKeyType: clusteringKeyField.DataType,
 		startTime:         ts,
-		state:             pipelining,
+		state:             clustering_pipelining,
 		compactionPlans:   make([]*datapb.CompactionPlan, 0),
 	}
 

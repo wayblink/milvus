@@ -526,8 +526,6 @@ message CompactionPlan {
   int64 max_segment_rows = 11;
   int64 prefer_segment_rows = 12;
   string analyze_result_path = 13;
-  repeated int64 analyze_segment_ids = 14;
-  int32 state = 15;
 }
 
 message CompactionSegment {
@@ -833,6 +831,23 @@ message GcControlRequest {
   repeated common.KeyValuePair params = 3;
 }
 
+message ClusteringCompactionPlan {
+  int64 planID = 1;
+  int32 state = 2;
+  uint64 start_time = 3;
+  int32 timeout_in_seconds = 4;
+  uint64 timetravel = 5;
+  string channel = 6;
+  int64 collection_ttl = 7;
+  int64 total_rows = 8;
+  int64 partitionID = 9;
+  repeated int64 inputSegments = 10;
+  repeated int64 resultSegments = 11;
+  bool resultIndexed = 12;
+  int64 analyze_task_id = 13;
+  int64 analyze_task_version = 14;
+}
+
 message ClusteringCompactionInfo {
   int64 triggerID = 1;
   int64 collectionID = 2;
@@ -842,8 +857,9 @@ message ClusteringCompactionInfo {
   int32 state = 6;
   uint64 startTime = 7;
   uint64 endTime = 8;
-  repeated CompactionPlan compactionPlans = 9;
-  int64 analyzeTaskID = 10;
+  repeated ClusteringCompactionPlan subPlans = 9;
+  int64 max_segment_rows = 11;
+  int64 prefer_segment_rows = 12;
 }
 
 message PartitionStatsInfo {

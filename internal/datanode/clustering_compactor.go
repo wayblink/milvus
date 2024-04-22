@@ -289,7 +289,11 @@ func (t *clusteringCompactionTask) compact() (*datapb.CompactionPlanResult, erro
 		}
 		log.Debug("read clustering centroids stats", zap.String("path", centroidFilePath), zap.Int("centroidNum", len(centroids.GetCentroids())))
 		offsetMappingFiles := make(map[int64]string, 0)
-		for _, segmentID := range t.plan.AnalyzeSegmentIds {
+		var segIDs []int64
+		for _, segBinLog := range t.plan.SegmentBinlogs {
+			segIDs = append(segIDs, segBinLog.GetSegmentID())
+		}
+		for _, segmentID := range segIDs {
 			path := t.io.JoinFullPath(common.AnalyzeStatsPath, analyzeResultPath, metautil.JoinIDPath(t.collectionID, t.partitionID, t.clusteringKeyField.FieldID, segmentID), "offsets_mapping")
 			offsetMappingFiles[segmentID] = path
 			log.Debug("read segment offset mapping file", zap.Int64("segmentID", segmentID), zap.String("path", path))

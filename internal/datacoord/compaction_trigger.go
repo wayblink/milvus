@@ -654,8 +654,8 @@ func (t *compactionTrigger) handleClusteringCompactionSignal(signal *compactionS
 		clusteringKeyName: clusteringKeyField.Name,
 		clusteringKeyType: clusteringKeyField.DataType,
 		startTime:         ts,
-		state:             pipelining,
-		compactionPlans:   make([]*datapb.CompactionPlan, 0),
+		state:             clustering_pipelining,
+		subPlans:          make([]*datapb.ClusteringCompactionPlan, 0),
 	}
 
 	for _, group := range partSegments {
@@ -688,14 +688,20 @@ func (t *compactionTrigger) handleClusteringCompactionSignal(signal *compactionS
 			}
 		}
 
+		clusteringMaxSegmentSize := paramtable.Get().DataCoordCfg.ClusteringCompactionMaxSegmentSize.GetAsSize()
+		clusteringPreferSegmentSize := paramtable.Get().DataCoordCfg.ClusteringCompactionPreferSegmentSize.GetAsSize()
+		segmentMaxSize := paramtable.Get().DataCoordCfg.SegmentMaxSize.GetAsInt64() * 1024 * 1024
+		clusteringCompactionJob.maxSegmentRows = group.segments[0].MaxRowNum * clusteringMaxSegmentSize / segmentMaxSize
+		clusteringCompactionJob.preferSegmentRows = group.segments[0].MaxRowNum * clusteringPreferSegmentSize / segmentMaxSize
+
 		plans := t.clusteringCompactionManager.fillClusteringCompactionPlans(group.segments, clusteringKeyField.FieldID, ct)
 		// mark all segments prepare for clustering compaction
 		t.setSegmentsCompacting(plans, true)
 		for _, plan := range plans {
-			clusteringCompactionJob.addCompactionPlan(plan, pipelining)
+			t.clusteringCompactionManager.addCompactionPlan(clusteringCompactionJob, plan, pipelining)
 		}
 	}
-	if len(clusteringCompactionJob.compactionPlans) > 0 {
+	if len(clusteringCompactionJob.subPlans) > 0 {
 		t.clusteringCompactionManager.submit(clusteringCompactionJob)
 	}
 	return nil

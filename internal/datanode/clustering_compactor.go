@@ -808,7 +808,7 @@ func (t *clusteringCompactionTask) packBuffersToSegments(ctx context.Context, bu
 	}
 	buffer.currentSegmentID = segmentID
 	buffer.currentSpillBinlogs = make(map[UniqueID]*datapb.FieldBinlog, 0)
-	log.Debug("finish pack segment", zap.Int64("segID", buffer.currentSegmentID), zap.String("seg", seg.String()), zap.Any("segStats", segmentStats))
+	log.Debug("finish pack segment", zap.Int64("partitionID", t.partitionID), zap.Int64("segID", buffer.currentSegmentID), zap.String("seg", seg.String()), zap.Any("segStats", segmentStats))
 	return nil
 }
 

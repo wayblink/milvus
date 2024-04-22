@@ -835,17 +835,41 @@ message GcControlRequest {
   repeated common.KeyValuePair params = 3;
 }
 
-message ClusteringCompactionInfo {
-  int64 triggerID = 1;
-  int64 collectionID = 2;
-  int64 clusteringKeyID = 3;
-  string clusteringKeyName = 4;
-  schema.DataType clusteringKeyType = 5;
-  int32 state = 6;
-  uint64 startTime = 7;
-  uint64 endTime = 8;
-  repeated CompactionPlan compactionPlans = 9;
-  int64 analyzeTaskID = 10;
+enum CompactionTaskState {
+  unknown = 0;
+  compacting = 1; // => executing
+  pipelining = 2; 
+  compacted = 3; // => completed
+  failed = 4;
+  timeout = 5;
+  analyzing = 6;
+  analyzed = 7;
+  indexing = 8;
+  indexed = 9;
+}
+
+message CompactionTask {
+  int64 plan_id = 1;
+  int64 trigger_id = 2;
+  CompactionTaskState state = 3;
+  uint64 start_time = 4;
+  uint64 end_time = 5;
+  int32 timeout_in_seconds = 6;
+  CompactionType type = 7;
+  uint64 timetravel = 8;
+  int64 collection_ttl = 9;
+  int64 total_rows = 10;
+  int64 collection_id = 11;
+  int64 partition_id = 12;
+  string channel = 13;
+  schema.FieldSchema clustering_key_field = 14;
+  int64 max_segment_rows = 15;
+  int64 prefer_segment_rows = 16;
+  repeated int64 inputSegments = 17;
+  repeated int64 resultSegments = 18;
+  int64 analyze_task_id = 19;
+  string centroid_file_path = 20;
+  map<int64, string> offset_mapping_files = 21;
 }
 
 message PartitionStatsInfo {

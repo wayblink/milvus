@@ -54,8 +54,8 @@ type CompactionMeta interface {
 	UpdateSegmentsInfo(operators ...UpdateOperator) error
 	SetSegmentCompacting(segmentID int64, compacting bool)
 
-	DropClusteringCompactionInfo(info *datapb.ClusteringCompactionInfo) error
-	SaveClusteringCompactionInfo(info *datapb.ClusteringCompactionInfo) error
+	DropClusteringCompactionJob(info *ClusteringCompactionJob) error
+	SaveClusteringCompactionJob(info *ClusteringCompactionJob) error
 
 	CompleteCompactionMutation(plan *datapb.CompactionPlan, result *datapb.CompactionPlanResult) ([]*SegmentInfo, *segMetricMutation, error)
 }
@@ -70,7 +70,7 @@ type meta struct {
 	segments              *SegmentsInfo                // segment id to segment info
 	channelCPs            *channelCPs                  // vChannel -> channel checkpoint/see position
 	chunkManager          storage.ChunkManager
-	clusteringCompactions map[string]*datapb.ClusteringCompactionInfo
+	clusteringCompactions map[string]*ClusteringCompactionJob
 	partitionStatsInfos   map[string]*datapb.PartitionStatsInfo
 
 	indexMeta   *indexMeta
@@ -125,7 +125,7 @@ func newMeta(ctx context.Context, catalog metastore.DataCoordCatalog, chunkManag
 		indexMeta:             im,
 		analyzeMeta:           am,
 		chunkManager:          chunkManager,
-		clusteringCompactions: make(map[string]*datapb.ClusteringCompactionInfo, 0),
+		clusteringCompactions: make(map[string]*ClusteringCompactionJob, 0),
 		partitionStatsInfos:   make(map[string]*datapb.PartitionStatsInfo, 0),
 	}
 	err = mt.reloadFromKV()
@@ -188,7 +188,8 @@ func (m *meta) reloadFromKV() error {
 		return err
 	}
 	for _, info := range compactionInfos {
-		m.clusteringCompactions[fmt.Sprintf("%d-%d", info.CollectionID, info.TriggerID)] = info
+		job := convertToClusteringCompactionJob(info)
+		m.clusteringCompactions[fmt.Sprintf("%d-%d", info.CollectionID, info.TriggerID)] = job
 	}
 
 	partitionStatsInfos, err := m.catalog.ListPartitionStatsInfos(m.ctx)
@@ -1593,64 +1594,66 @@ func updateSegStateAndPrepareMetrics(segToUpdate *SegmentInfo, targetState commo
 	segToUpdate.State = targetState
 }
 
-// GetClusteringCompactionInfos returns cloned ClusteringCompactionInfos from local cache
-func (m *meta) GetClusteringCompactionInfos() []*datapb.ClusteringCompactionInfo {
+// GetClusteringCompactionJobs returns cloned ClusteringCompactionInfos from local cache
+func (m *meta) GetClusteringCompactionJobs() []*ClusteringCompactionJob {
 	m.RLock()
 	defer m.RUnlock()
-	infos := make([]*datapb.ClusteringCompactionInfo, 0)
-	for _, info := range m.clusteringCompactions {
-		infos = append(infos, info)
+	jobs := make([]*ClusteringCompactionJob, 0)
+	for _, job := range m.clusteringCompactions {
+		jobs = append(jobs, job)
 	}
-	return infos
+	return jobs
 }
 
-// GetClusteringCompactionInfosByID get clustering compaction infos by collection id
-func (m *meta) GetClusteringCompactionInfosByID(collectionID UniqueID) []*datapb.ClusteringCompactionInfo {
+// GetClusteringCompactionJobsByID get clustering compaction infos by collection id
+func (m *meta) GetClusteringCompactionJobsByID(collectionID UniqueID) []*ClusteringCompactionJob {
 	m.RLock()
 	defer m.RUnlock()
-	res := make([]*datapb.ClusteringCompactionInfo, 0)
+	res := make([]*ClusteringCompactionJob, 0)
+	for _, job := range m.clusteringCompactions {
+		if job.collectionID == collectionID {
+			res = append(res, job)
+		}
+	}
+	return res
+}
+
+// GetClusteringCompactionJobsByTriggerID get clustering compaction infos by collection id
+func (m *meta) GetClusteringCompactionJobsByTriggerID(triggerID UniqueID) []*ClusteringCompactionJob {
+	m.RLock()
+	defer m.RUnlock()
+	res := make([]*ClusteringCompactionJob, 0)
 	for _, info := range m.clusteringCompactions {
-		if info.CollectionID == collectionID {
+		if info.triggerID == triggerID {
 			res = append(res, info)
 		}
 	}
 	return res
 }
 
-// GetClusteringCompactionInfosByTriggerID get clustering compaction infos by collection id
-func (m *meta) GetClusteringCompactionInfosByTriggerID(triggerID UniqueID) []*datapb.ClusteringCompactionInfo {
-	m.RLock()
-	defer m.RUnlock()
-	res := make([]*datapb.ClusteringCompactionInfo, 0)
-	for _, info := range m.clusteringCompactions {
-		if info.TriggerID == triggerID {
-			res = append(res, info)
-		}
-	}
-	return res
-}
-
-// DropClusteringCompactionInfo drop clustering compaction info in meta
-func (m *meta) DropClusteringCompactionInfo(info *datapb.ClusteringCompactionInfo) error {
+// SaveClusteringCompactionJob update clustering compaction job
+func (m *meta) SaveClusteringCompactionJob(job *ClusteringCompactionJob) error {
 	m.Lock()
 	defer m.Unlock()
-	if err := m.catalog.DropClusteringCompactionInfo(m.ctx, info); err != nil {
-		log.Error("meta update: drop clustering compaction info fail", zap.Int64("collectionID", info.CollectionID), zap.Error(err))
-		return err
-	}
-	delete(m.clusteringCompactions, fmt.Sprintf("%d-%d", info.CollectionID, info.TriggerID))
-	return nil
-}
-
-// SaveClusteringCompactionInfo update collection compaction plan
-func (m *meta) SaveClusteringCompactionInfo(info *datapb.ClusteringCompactionInfo) error {
-	m.Lock()
-	defer m.Unlock()
+	info := convertFromClusteringCompactionJob(job)
 	if err := m.catalog.SaveClusteringCompactionInfo(m.ctx, info); err != nil {
 		log.Error("meta update: update clustering compaction info fail", zap.Error(err))
 		return err
 	}
-	m.clusteringCompactions[fmt.Sprintf("%d-%d", info.CollectionID, info.TriggerID)] = info
+	m.clusteringCompactions[fmt.Sprintf("%d-%d", job.collectionID, job.triggerID)] = job
+	return nil
+}
+
+// DropClusteringCompactionJob drop clustering compaction job in meta
+func (m *meta) DropClusteringCompactionJob(job *ClusteringCompactionJob) error {
+	m.Lock()
+	defer m.Unlock()
+	info := convertFromClusteringCompactionJob(job)
+	if err := m.catalog.DropClusteringCompactionInfo(m.ctx, info); err != nil {
+		log.Error("meta update: drop clustering compaction info fail", zap.Int64("collectionID", info.CollectionID), zap.Error(err))
+		return err
+	}
+	delete(m.clusteringCompactions, fmt.Sprintf("%d-%d", job.collectionID, job.triggerID))
 	return nil
 }
 

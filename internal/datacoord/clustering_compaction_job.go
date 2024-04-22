@@ -21,6 +21,16 @@ import (
 	"github.com/milvus-io/milvus/internal/proto/datapb"
 )
 
+type clusteringCompactionTaskState int
+
+const (
+	clustering_pipelining clusteringCompactionTaskState = iota + 1
+	clustering_executing
+	clustering_completed
+	clustering_failed
+	clustering_timeout
+)
+
 type ClusteringCompactionJob struct {
 	triggerID         UniqueID
 	collectionID      UniqueID
@@ -31,12 +41,13 @@ type ClusteringCompactionJob struct {
 	//   trigger -> pipelining:
 	//              executing:
 	//              completed or failed or timeout
-	state     compactionTaskState
-	startTime uint64
-	endTime   uint64
-	// should only store partial info in meta
-	compactionPlans []*datapb.CompactionPlan
-	analyzeTaskID   UniqueID
+	state             clusteringCompactionTaskState
+	startTime         uint64
+	endTime           uint64
+	maxSegmentRows    int64
+	preferSegmentRows int64
+	subPlans          []*datapb.ClusteringCompactionPlan
+	//persistSubPlans   []*datapb.ClusteringCompactionPlan
 }
 
 func convertToClusteringCompactionJob(info *datapb.ClusteringCompactionInfo) *ClusteringCompactionJob {
@@ -46,44 +57,17 @@ func convertToClusteringCompactionJob(info *datapb.ClusteringCompactionInfo) *Cl
 		clusteringKeyID:   info.GetClusteringKeyID(),
 		clusteringKeyName: info.GetClusteringKeyName(),
 		clusteringKeyType: info.GetClusteringKeyType(),
-		state:             compactionTaskState(info.GetState()),
+		state:             clusteringCompactionTaskState(info.GetState()),
 		startTime:         info.GetStartTime(),
 		endTime:           info.GetEndTime(),
-		compactionPlans:   info.GetCompactionPlans(),
-		analyzeTaskID:     info.GetAnalyzeTaskID(),
+		maxSegmentRows:    info.GetMaxSegmentRows(),
+		preferSegmentRows: info.GetPreferSegmentRows(),
+		subPlans:          info.GetSubPlans(),
 	}
 	return job
 }
 
 func convertFromClusteringCompactionJob(job *ClusteringCompactionJob) *datapb.ClusteringCompactionInfo {
-	compactionPlans := make([]*datapb.CompactionPlan, 0)
-	for _, compactionPlan := range job.compactionPlans {
-		segments := make([]*datapb.CompactionSegmentBinlogs, 0)
-		for _, segment := range compactionPlan.SegmentBinlogs {
-			segments = append(segments, &datapb.CompactionSegmentBinlogs{
-				SegmentID:    segment.GetSegmentID(),
-				CollectionID: segment.GetCollectionID(),
-				PartitionID:  segment.GetPartitionID(),
-			})
-		}
-		compactionPlans = append(compactionPlans, &datapb.CompactionPlan{
-			PlanID:            compactionPlan.GetPlanID(),
-			SegmentBinlogs:    segments,
-			StartTime:         compactionPlan.GetStartTime(),
-			TimeoutInSeconds:  compactionPlan.GetTimeoutInSeconds(),
-			Type:              compactionPlan.GetType(),
-			Timetravel:        compactionPlan.GetTimetravel(),
-			Channel:           compactionPlan.GetChannel(),
-			CollectionTtl:     compactionPlan.GetCollectionTtl(),
-			TotalRows:         compactionPlan.GetTotalRows(),
-			ClusteringKeyId:   compactionPlan.GetClusteringKeyId(),
-			MaxSegmentRows:    compactionPlan.GetMaxSegmentRows(),
-			PreferSegmentRows: compactionPlan.GetPreferSegmentRows(),
-			AnalyzeResultPath: compactionPlan.GetAnalyzeResultPath(),
-			AnalyzeSegmentIds: compactionPlan.GetAnalyzeSegmentIds(),
-		})
-	}
-
 	info := &datapb.ClusteringCompactionInfo{
 		TriggerID:         job.triggerID,
 		CollectionID:      job.collectionID,
@@ -93,13 +77,9 @@ func convertFromClusteringCompactionJob(job *ClusteringCompactionJob) *datapb.Cl
 		State:             int32(job.state),
 		StartTime:         job.startTime,
 		EndTime:           job.endTime,
-		CompactionPlans:   job.compactionPlans,
-		AnalyzeTaskID:     job.analyzeTaskID,
+		MaxSegmentRows:    job.maxSegmentRows,
+		PreferSegmentRows: job.preferSegmentRows,
+		SubPlans:          job.subPlans,
 	}
 	return info
-}
-
-func (job *ClusteringCompactionJob) addCompactionPlan(plan *datapb.CompactionPlan, state compactionTaskState) {
-	plan.State = int32(state)
-	job.compactionPlans = append(job.compactionPlans, plan)
 }

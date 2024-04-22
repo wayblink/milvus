@@ -184,7 +184,11 @@ func (t *clusteringCompactionTask) init() error {
 	for _, s := range t.plan.GetSegmentBinlogs() {
 		segIDs = append(segIDs, s.GetSegmentID())
 	}
+
+	collectionID := t.plan.GetSegmentBinlogs()[0].GetCollectionID()
+	partitionID2 := t.plan.GetSegmentBinlogs()[0].GetPartitionID()
 	collectionID, partitionID, meta, err := t.getSegmentMeta(segIDs[0])
+	log.Info("wayblink debug", zap.Int64("partitionID", partitionID), zap.Int64("partitionID2", partitionID2))
 	if err != nil {
 		return err
 	}
@@ -808,7 +812,7 @@ func (t *clusteringCompactionTask) packBuffersToSegments(ctx context.Context, bu
 	}
 	buffer.currentSegmentID = segmentID
 	buffer.currentSpillBinlogs = make(map[UniqueID]*datapb.FieldBinlog, 0)
-	log.Debug("finish pack segment", zap.Int64("segID", buffer.currentSegmentID), zap.String("seg", seg.String()), zap.Any("segStats", segmentStats))
+	log.Debug("finish pack segment", zap.Int64("partitionID", t.partitionID), zap.Int64("segID", buffer.currentSegmentID), zap.String("seg", seg.String()), zap.Any("segStats", segmentStats))
 	return nil
 }
 

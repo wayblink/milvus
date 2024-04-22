@@ -368,10 +368,10 @@ func (t *compactionTrigger) triggerManualCompaction(collectionID int64, clusteri
 	}
 
 	if clusteringCompaction {
-		compactingJobs := t.clusteringCompactionManager.getClusteringCompactingInfo(signal.collectionID)
+		compactingJobs := t.clusteringCompactionManager.getClusteringCompactingJobs(signal.collectionID)
 		if len(compactingJobs) > 0 {
-			log.Info("collection is clustering compacting", zap.Int64("collectionID", signal.collectionID), zap.Int64("executing_trigger_id", compactingJobs[0].GetTriggerID()))
-			return compactingJobs[0].GetTriggerID(), nil
+			log.Info("collection is clustering compacting", zap.Int64("collectionID", signal.collectionID), zap.Int64("executing_trigger_id", compactingJobs[0].triggerID))
+			return compactingJobs[0].triggerID, nil
 		}
 		err = t.handleClusteringCompactionSignal(signal)
 	} else {
@@ -649,8 +649,8 @@ func (t *compactionTrigger) handleClusteringCompactionSignal(signal *compactionS
 		clusteringKeyName: clusteringKeyField.Name,
 		clusteringKeyType: clusteringKeyField.DataType,
 		startTime:         ts,
-		state:             pipelining,
-		compactionPlans:   make([]*datapb.CompactionPlan, 0),
+		state:             clustering_pipelining,
+		subPlans:          make([]*datapb.ClusteringCompactionPlan, 0),
 	}
 
 	for _, group := range partSegments {
@@ -683,14 +683,22 @@ func (t *compactionTrigger) handleClusteringCompactionSignal(signal *compactionS
 			}
 		}
 
+		clusteringMaxSegmentSize := paramtable.Get().DataCoordCfg.ClusteringCompactionMaxSegmentSize.GetAsSize()
+		clusteringPreferSegmentSize := paramtable.Get().DataCoordCfg.ClusteringCompactionPreferSegmentSize.GetAsSize()
+		segmentMaxSize := paramtable.Get().DataCoordCfg.SegmentMaxSize.GetAsInt64() * 1024 * 1024
+		clusteringCompactionJob.maxSegmentRows = group.segments[0].MaxRowNum * clusteringMaxSegmentSize / segmentMaxSize
+		clusteringCompactionJob.preferSegmentRows = group.segments[0].MaxRowNum * clusteringPreferSegmentSize / segmentMaxSize
+
 		plans := t.clusteringCompactionManager.fillClusteringCompactionPlans(group.segments, clusteringKeyField.FieldID, ct)
 		// mark all segments prepare for clustering compaction
 		t.setSegmentsCompacting(plans, true)
-		for _, plan := range plans {
-			clusteringCompactionJob.addCompactionPlan(plan, pipelining)
+		err = t.clusteringCompactionManager.addCompactionPlans(clusteringCompactionJob, plans, pipelining)
+		if err != nil {
+			log.Warn("failed to add compaction plans", zap.Error(err))
+			continue
 		}
 	}
-	if len(clusteringCompactionJob.compactionPlans) > 0 {
+	if len(clusteringCompactionJob.subPlans) > 0 {
 		t.clusteringCompactionManager.submit(clusteringCompactionJob)
 	}
 	return nil

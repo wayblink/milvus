@@ -119,9 +119,10 @@ type shardDelegator struct {
 	tsCond      *sync.Cond
 	latestTsafe *atomic.Uint64
 	// queryHook
-	queryHook      optimizers.QueryHook
-	partitionStats map[UniqueID]*storage.PartitionStatsSnapshot
-	chunkManager   storage.ChunkManager
+	queryHook         optimizers.QueryHook
+	partitionStatsMut sync.RWMutex
+	partitionStats    map[UniqueID]*storage.PartitionStatsSnapshot
+	chunkManager      storage.ChunkManager
 }
 
 // getLogger returns the zap logger with pre-defined shard attributes.
@@ -210,8 +211,10 @@ func (sd *shardDelegator) search(ctx context.Context, req *querypb.SearchRequest
 		return nil, err
 	}
 	if paramtable.Get().QueryNodeCfg.EnableSegmentPrune.GetAsBool() {
+		sd.partitionStatsMut.RLock()
 		PruneSegments(ctx, sd.partitionStats, req.GetReq(), nil, sd.collection.Schema(), sealed,
 			PruneInfo{filterRatio: paramtable.Get().QueryNodeCfg.DefaultSegmentFilterRatio.GetAsFloat()})
+		sd.partitionStatsMut.Unlock()
 	}
 
 	tasks, err := organizeSubTask(ctx, req, sealed, growing, sd, sd.modifySearchRequest)
@@ -504,9 +507,11 @@ func (sd *shardDelegator) Query(ctx context.Context, req *querypb.QueryRequest) 
 		})
 	}
 
+	sd.partitionStatsMut.RLock()
 	if paramtable.Get().QueryNodeCfg.EnableSegmentPrune.GetAsBool() {
 		PruneSegments(ctx, sd.partitionStats, nil, req.GetReq(), sd.collection.Schema(), sealed, PruneInfo{paramtable.Get().QueryNodeCfg.DefaultSegmentFilterRatio.GetAsFloat()})
 	}
+	defer sd.partitionStatsMut.RUnlock()
 
 	sealedNum := lo.SumBy(sealed, func(item SnapshotItem) int { return len(item.Segments) })
 	log.Debug("query segments...",
@@ -832,21 +837,30 @@ func (sd *shardDelegator) maybeReloadPartitionStats(ctx context.Context, partIDs
 			log.Info("failed to find valid partition stats file for partition", zap.Int64("partitionID", partID))
 			continue
 		}
-		partStats, exists := sd.partitionStats[partID]
-		if !exists || (exists && partStats.GetVersion() < maxVersion) {
-			statsBytes, err := sd.chunkManager.Read(ctx, maxVersionFilePath)
-			if err != nil {
-				log.Error("failed to read stats file from object storage", zap.String("path", maxVersionFilePath))
-				continue
+
+		err = func() error {
+			sd.partitionStatsMut.Lock()
+			defer sd.partitionStatsMut.Unlock()
+			partStats, exists := sd.partitionStats[partID]
+			if !exists || (exists && partStats.GetVersion() < maxVersion) {
+				statsBytes, err := sd.chunkManager.Read(ctx, maxVersionFilePath)
+				if err != nil {
+					log.Error("failed to read stats file from object storage", zap.String("path", maxVersionFilePath))
+					return err
+				}
+				partStats, err := storage.DeserializePartitionsStatsSnapshot(statsBytes)
+				if err != nil {
+					log.Error("failed to parse partition stats from bytes", zap.Int("bytes_length", len(statsBytes)))
+					return err
+				}
+				sd.partitionStats[partID] = partStats
+				partStats.SetVersion(maxVersion)
+				log.Info("Updated partitionStats for partition", zap.Int64("partitionID", partID))
 			}
-			partStats, err := storage.DeserializePartitionsStatsSnapshot(statsBytes)
-			if err != nil {
-				log.Error("failed to parse partition stats from bytes", zap.Int("bytes_length", len(statsBytes)))
-				continue
-			}
-			sd.partitionStats[partID] = partStats
-			partStats.SetVersion(maxVersion)
-			log.Info("Updated partitionStats for partition", zap.Int64("partitionID", partID))
+			return nil
+		}()
+		if err != nil {
+			break
 		}
 	}
 }

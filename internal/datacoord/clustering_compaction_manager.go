@@ -495,13 +495,13 @@ func (t *ClusteringCompactionManager) submitToCompact(job *ClusteringCompactionJ
 //}
 
 // IsClusteringCompacting get clustering compaction info by collection id
-func (t *ClusteringCompactionManager) IsClusteringCompacting(collectionID UniqueID) bool {
+func (t *ClusteringCompactionManager) getClusteringCompactingJob(collectionID UniqueID) []*ClusteringCompactionJob {
 	jobs := t.meta.GetClusteringCompactionJobsByID(collectionID)
-	executingInfos := lo.Filter(jobs, func(job *ClusteringCompactionJob, _ int) bool {
+	executingJobs := lo.Filter(jobs, func(job *ClusteringCompactionJob, _ int) bool {
 		state := compactionTaskState(job.state)
 		return state == pipelining || state == executing
 	})
-	return len(executingInfos) > 0
+	return executingJobs
 }
 
 func (t *ClusteringCompactionManager) setSegmentsCompacting(plan *datapb.CompactionPlan, compacting bool) {

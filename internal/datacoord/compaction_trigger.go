@@ -368,6 +368,11 @@ func (t *compactionTrigger) triggerManualCompaction(collectionID int64, clusteri
 	}
 
 	if clusteringCompaction {
+		compactingJobs := t.clusteringCompactionManager.getClusteringCompactingJob(signal.collectionID)
+		if len(compactingJobs) > 0 {
+			log.Info("collection is clustering compacting", zap.Int64("collectionID", signal.collectionID), zap.Int64("executing_trigger_id", compactingJobs[0].triggerID))
+			return compactingJobs[0].triggerID, nil
+		}
 		err = t.handleClusteringCompactionSignal(signal)
 	} else {
 		err = t.handleGlobalSignal(signal)
@@ -610,27 +615,17 @@ func (t *compactionTrigger) handleClusteringCompactionSignal(signal *compactionS
 	defer t.forceMu.Unlock()
 
 	log := log.With(zap.Int64("compactionID", signal.id), zap.Int64("collectionID", signal.collectionID))
-
 	coll, err := t.getCollection(signal.collectionID)
 	if err != nil {
 		log.Warn("get collection info failed, skip handling compaction", zap.Error(err))
 		return err
 	}
+
 	clusteringKeyField := clustering.GetClusteringKeyField(coll.Schema)
 	if clusteringKeyField == nil {
 		err := merr.WrapErrClusteringCompactionCollectionNotSupport(fmt.Sprint(signal.collectionID))
 		log.Debug(err.Error())
 		return err
-	}
-	compacting := t.clusteringCompactionManager.IsClusteringCompacting(coll.ID)
-	if compacting {
-		err := merr.WrapErrClusteringCompactionCollectionIsCompacting(fmt.Sprint(signal.collectionID))
-		log.Debug(err.Error())
-		// only return error if it is a manual compaction
-		if signal.isForce {
-			return err
-		}
-		return nil
 	}
 
 	partSegments := t.meta.GetSegmentsChanPart(func(segment *SegmentInfo) bool {

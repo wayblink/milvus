@@ -278,8 +278,7 @@ func (t *ClusteringCompactionManager) checkJobState(job *ClusteringCompactionJob
 	}
 
 	var analyzingCnt, analyzeFailedCnt, executingCnt, completedCnt, indexedCnt, failedCnt, timeoutCnt int
-	for idx, _ := range job.subPlans {
-		plan := job.subPlans[idx]
+	for idx, plan := range job.subPlans {
 		// check analyze task state, and submit to compact after analyze finished
 		if typeutil.IsVectorType(job.clusteringKeyType) && plan.GetAnalyzeTaskId() != 0 && plan.GetAnalyzeTaskVersion() == 0 {
 			analyzeTask := t.meta.analyzeMeta.GetTask(plan.GetAnalyzeTaskId())
@@ -327,23 +326,26 @@ func (t *ClusteringCompactionManager) checkJobState(job *ClusteringCompactionJob
 			if plan.ResultIndexed {
 				continue
 			}
-			compactionTask := t.compactionHandler.getCompaction(plan.GetPlanID())
-			if compactionTask == nil {
-				// if one compaction task is lost, mark it as failed, and the clustering compaction will be marked failed as well
-				// todo: retry
-				log.Warn("compaction task lost", zap.Int64("planID", plan.GetPlanID()))
-				return errors.New("compaction task lost")
-			}
-			segmentIDs := make([]int64, 0)
-			for _, seg := range compactionTask.result.Segments {
-				segmentIDs = append(segmentIDs, seg.GetSegmentID())
+			if len(plan.ResultSegments) == 0 {
+				compactionTask := t.compactionHandler.getCompaction(plan.GetPlanID())
+				if compactionTask == nil {
+					// if one compaction task is lost, mark it as failed, and the clustering compaction will be marked failed as well
+					// todo: retry
+					log.Warn("compaction task lost", zap.Int64("planID", plan.GetPlanID()))
+					return errors.New("compaction task lost")
+				}
+				segmentIDs := make([]int64, 0)
+				for _, seg := range compactionTask.result.Segments {
+					segmentIDs = append(segmentIDs, seg.GetSegmentID())
+				}
+				plan.ResultSegments = segmentIDs
 			}
 
 			// wait for segment indexed
 			collectionIndexes := t.meta.indexMeta.GetIndexesForCollection(job.collectionID, "")
 			indexed := func() bool {
 				for _, collectionIndex := range collectionIndexes {
-					for _, segmentID := range segmentIDs {
+					for _, segmentID := range plan.ResultSegments {
 						segmentIndexState := t.meta.indexMeta.GetSegmentIndexState(job.collectionID, segmentID, collectionIndex.IndexID)
 						if segmentIndexState.GetState() != commonpb.IndexState_Finished {
 							return false
@@ -352,14 +354,14 @@ func (t *ClusteringCompactionManager) checkJobState(job *ClusteringCompactionJob
 				}
 				return true
 			}()
-			log.Info("check compaction result segments index states", zap.Bool("indexed", indexed), zap.Int64("planID", plan.GetPlanID()), zap.Int64s("segments", segmentIDs))
+			log.Info("check compaction result segments index states", zap.Bool("indexed", indexed), zap.Int64("planID", plan.GetPlanID()), zap.Int64s("segments", plan.ResultSegments))
 			if indexed {
 				err := t.meta.SavePartitionStatsInfo(&datapb.PartitionStatsInfo{
 					CollectionID: job.collectionID,
-					PartitionID:  compactionTask.plan.SegmentBinlogs[0].PartitionID,
-					VChannel:     compactionTask.plan.GetChannel(),
-					Version:      compactionTask.plan.PlanID,
-					SegmentIDs:   segmentIDs,
+					PartitionID:  plan.PartitionID,
+					VChannel:     plan.GetChannel(),
+					Version:      plan.PlanID,
+					SegmentIDs:   plan.ResultSegments,
 				})
 				if err != nil {
 					return err
@@ -454,7 +456,7 @@ func (t *ClusteringCompactionManager) submitToAnalyze(job *ClusteringCompactionJ
 				State:  indexpb.JobState_JobStateInit,
 			},
 		})
-		log.Info("submit analyze task", zap.Int64("triggerID", job.triggerID), zap.Int64("collectionID", job.collectionID), zap.Int64("id", analyzeTaskID))
+		log.Info("submit analyze task", zap.Int64("planID", planId), zap.Int64("triggerID", job.triggerID), zap.Int64("collectionID", job.collectionID), zap.Int64("id", analyzeTaskID))
 		job.subPlans[idx].AnalyzeTaskId = analyzeTaskID
 	}
 	return t.saveJob(job)
@@ -486,7 +488,10 @@ func (t *ClusteringCompactionManager) submitToCompact(job *ClusteringCompactionJ
 		return err
 	}
 	job.subPlans[idx].State = int32(executing)
-	log.Info("send compaction plan to execute", zap.Int64("triggerID", job.triggerID), zap.Int64("planID", plan.GetPlanID()))
+	log.Info("send compaction plan to execute", zap.Int64("triggerID", job.triggerID),
+		zap.Int64("planID", plan.GetPlanID()),
+		zap.Int64("partitionID", plan.PartitionID),
+		zap.Int64s("inputSegments", plan.InputSegments))
 	return t.saveJob(job)
 }
 

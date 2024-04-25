@@ -370,7 +370,7 @@ queryNode:
     serverMaxRecvSize: 268435456
     clientMaxSendSize: 268435456
     clientMaxRecvSize: 536870912
-  enableSegmentPrune: false # use partition prune function on shard delegator
+  enableSegmentPrune: true # use partition prune function on shard delegator
 
 indexCoord:
   bindIndexNodeMode:
@@ -641,8 +641,8 @@ common:
   bloomFilterSize: 100000
   maxBloomFalsePositive: 0.05
   
-  usePartitionKeyAsClusteringKey: false
-  useVectorAsClusteringKey: false
+  usePartitionKeyAsClusteringKey: true
+  useVectorAsClusteringKey: true
 
 # QuotaConfig, configurations of Milvus quota and limits.
 # By default, we enable:

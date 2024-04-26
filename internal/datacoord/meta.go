@@ -54,8 +54,9 @@ type CompactionMeta interface {
 	UpdateSegmentsInfo(operators ...UpdateOperator) error
 	SetSegmentCompacting(segmentID int64, compacting bool)
 
-	DropClusteringCompactionJob(info *ClusteringCompactionJob) error
-	SaveClusteringCompactionJob(info *ClusteringCompactionJob) error
+	GetClusteringCompactionTasksBySelector(selector CompactionTaskSelector) []*datapb.CompactionTask
+	DropClusteringCompactionTask(task *datapb.CompactionTask) error
+	SaveClusteringCompactionTask(task *datapb.CompactionTask) error
 
 	CompleteCompactionMutation(plan *datapb.CompactionPlan, result *datapb.CompactionPlanResult) ([]*SegmentInfo, *segMetricMutation, error)
 }
@@ -64,14 +65,15 @@ var _ CompactionMeta = (*meta)(nil)
 
 type meta struct {
 	sync.RWMutex
-	ctx                   context.Context
-	catalog               metastore.DataCoordCatalog
-	collections           map[UniqueID]*collectionInfo // collection id to collection info
-	segments              *SegmentsInfo                // segment id to segment info
-	channelCPs            *channelCPs                  // vChannel -> channel checkpoint/see position
-	chunkManager          storage.ChunkManager
-	clusteringCompactions map[string]*ClusteringCompactionJob
-	partitionStatsInfos   map[string]*datapb.PartitionStatsInfo
+	ctx          context.Context
+	catalog      metastore.DataCoordCatalog
+	collections  map[UniqueID]*collectionInfo // collection id to collection info
+	segments     *SegmentsInfo                // segment id to segment info
+	channelCPs   *channelCPs                  // vChannel -> channel checkpoint/see position
+	chunkManager storage.ChunkManager
+
+	clusteringCompactionTasks map[int64]map[int64]map[int64]*datapb.CompactionTask // collectionID -> triggerID -> planID
+	partitionStatsInfos       map[string]*datapb.PartitionStatsInfo
 
 	indexMeta   *indexMeta
 	analyzeMeta *analyzeMeta
@@ -117,16 +119,16 @@ func newMeta(ctx context.Context, catalog metastore.DataCoordCatalog, chunkManag
 		return nil, err
 	}
 	mt := &meta{
-		ctx:                   ctx,
-		catalog:               catalog,
-		collections:           make(map[UniqueID]*collectionInfo),
-		segments:              NewSegmentsInfo(),
-		channelCPs:            newChannelCps(),
-		indexMeta:             im,
-		analyzeMeta:           am,
-		chunkManager:          chunkManager,
-		clusteringCompactions: make(map[string]*ClusteringCompactionJob, 0),
-		partitionStatsInfos:   make(map[string]*datapb.PartitionStatsInfo, 0),
+		ctx:                       ctx,
+		catalog:                   catalog,
+		collections:               make(map[UniqueID]*collectionInfo),
+		segments:                  NewSegmentsInfo(),
+		channelCPs:                newChannelCps(),
+		indexMeta:                 im,
+		analyzeMeta:               am,
+		chunkManager:              chunkManager,
+		clusteringCompactionTasks: make(map[int64]map[int64]map[int64]*datapb.CompactionTask, 0),
+		partitionStatsInfos:       make(map[string]*datapb.PartitionStatsInfo, 0),
 	}
 	err = mt.reloadFromKV()
 	if err != nil {
@@ -183,13 +185,12 @@ func (m *meta) reloadFromKV() error {
 		m.channelCPs.checkpoints[vChannel] = pos
 	}
 
-	compactionInfos, err := m.catalog.ListClusteringCompactionInfos(m.ctx)
+	compactionTasks, err := m.catalog.ListCompactionTask(m.ctx)
 	if err != nil {
 		return err
 	}
-	for _, info := range compactionInfos {
-		job := convertToClusteringCompactionJob(info)
-		m.clusteringCompactions[fmt.Sprintf("%d-%d", info.CollectionID, info.TriggerID)] = job
+	for _, task := range compactionTasks {
+		m.SaveClusteringCompactionTask(task)
 	}
 
 	partitionStatsInfos, err := m.catalog.ListPartitionStatsInfos(m.ctx)
@@ -1594,66 +1595,84 @@ func updateSegStateAndPrepareMetrics(segToUpdate *SegmentInfo, targetState commo
 	segToUpdate.State = targetState
 }
 
-// GetClusteringCompactionJobs returns cloned ClusteringCompactionInfos from local cache
-func (m *meta) GetClusteringCompactionJobs() []*ClusteringCompactionJob {
+// CompactionTaskSelector is the function type to select CompactionTask from meta
+type CompactionTaskSelector func(*datapb.CompactionTask) bool
+
+// GetClusteringCompactionTasks returns clustering compaction tasks from local cache
+func (m *meta) GetClusteringCompactionTasks() map[int64]map[int64]map[int64]*datapb.CompactionTask {
 	m.RLock()
 	defer m.RUnlock()
-	jobs := make([]*ClusteringCompactionJob, 0)
-	for _, job := range m.clusteringCompactions {
-		jobs = append(jobs, job)
-	}
-	return jobs
+	return m.clusteringCompactionTasks
 }
 
-// GetClusteringCompactionJobsByID get clustering compaction infos by collection id
-func (m *meta) GetClusteringCompactionJobsByID(collectionID UniqueID) []*ClusteringCompactionJob {
+func (m *meta) GetLatestClusteringCompactionTask(collectionID int64) []*datapb.CompactionTask {
 	m.RLock()
 	defer m.RUnlock()
-	res := make([]*ClusteringCompactionJob, 0)
-	for _, job := range m.clusteringCompactions {
-		if job.collectionID == collectionID {
-			res = append(res, job)
+	triggers, exist := m.clusteringCompactionTasks[collectionID]
+	tasks := make([]*datapb.CompactionTask, 0)
+	if exist {
+		var latestTriggerID int64 = 0
+		for triggerID, _ := range triggers {
+			if triggerID > latestTriggerID {
+				latestTriggerID = triggerID
+			}
+		}
+		for _, task := range triggers[latestTriggerID] {
+			tasks = append(tasks, proto.Clone(task).(*datapb.CompactionTask))
 		}
 	}
-	return res
+	return tasks
 }
 
-// GetClusteringCompactionJobsByTriggerID get clustering compaction infos by collection id
-func (m *meta) GetClusteringCompactionJobsByTriggerID(triggerID UniqueID) []*ClusteringCompactionJob {
+func (m *meta) GetClusteringCompactionTasksBySelector(selector CompactionTaskSelector) []*datapb.CompactionTask {
 	m.RLock()
 	defer m.RUnlock()
-	res := make([]*ClusteringCompactionJob, 0)
-	for _, info := range m.clusteringCompactions {
-		if info.triggerID == triggerID {
-			res = append(res, info)
+	tasks := make([]*datapb.CompactionTask, 0)
+	for _, collection := range m.clusteringCompactionTasks {
+		for _, trigger := range collection {
+			for _, task := range trigger {
+				if selector(task) {
+					tasks = append(tasks, proto.Clone(task).(*datapb.CompactionTask))
+				}
+			}
 		}
 	}
-	return res
+	return tasks
 }
 
-// SaveClusteringCompactionJob update clustering compaction job
-func (m *meta) SaveClusteringCompactionJob(job *ClusteringCompactionJob) error {
+func (m *meta) SaveClusteringCompactionTask(task *datapb.CompactionTask) error {
 	m.Lock()
 	defer m.Unlock()
-	info := convertFromClusteringCompactionJob(job)
-	if err := m.catalog.SaveClusteringCompactionInfo(m.ctx, info); err != nil {
-		log.Error("meta update: update clustering compaction info fail", zap.Error(err))
+	if err := m.catalog.SaveCompactionTask(m.ctx, task); err != nil {
+		log.Error("meta update: update compaction task fail", zap.Error(err))
 		return err
 	}
-	m.clusteringCompactions[fmt.Sprintf("%d-%d", job.collectionID, job.triggerID)] = job
+	_, collectionIDExist := m.clusteringCompactionTasks[task.CollectionId]
+	if !collectionIDExist {
+		m.clusteringCompactionTasks[task.CollectionId] = make(map[int64]map[int64]*datapb.CompactionTask, 0)
+	}
+	_, triggerIDExist := m.clusteringCompactionTasks[task.CollectionId][task.TriggerId]
+	if !triggerIDExist {
+		m.clusteringCompactionTasks[task.CollectionId][task.TriggerId] = make(map[int64]*datapb.CompactionTask, 0)
+	}
+	m.clusteringCompactionTasks[task.CollectionId][task.TriggerId][task.PlanId] = task
 	return nil
 }
 
-// DropClusteringCompactionJob drop clustering compaction job in meta
-func (m *meta) DropClusteringCompactionJob(job *ClusteringCompactionJob) error {
+func (m *meta) DropClusteringCompactionTask(task *datapb.CompactionTask) error {
 	m.Lock()
 	defer m.Unlock()
-	info := convertFromClusteringCompactionJob(job)
-	if err := m.catalog.DropClusteringCompactionInfo(m.ctx, info); err != nil {
-		log.Error("meta update: drop clustering compaction info fail", zap.Int64("collectionID", info.CollectionID), zap.Error(err))
+	if err := m.catalog.DropCompactionTask(m.ctx, task); err != nil {
+		log.Error("meta update: drop compaction task fail", zap.Int64("triggerID", task.TriggerId), zap.Int64("planID", task.PlanId), zap.Int64("collectionID", task.CollectionId), zap.Error(err))
 		return err
 	}
-	delete(m.clusteringCompactions, fmt.Sprintf("%d-%d", job.collectionID, job.triggerID))
+	_, collectionIDExist := m.clusteringCompactionTasks[task.CollectionId]
+	if collectionIDExist {
+		_, triggerIDExist := m.clusteringCompactionTasks[task.CollectionId][task.TriggerId]
+		if triggerIDExist {
+			delete(m.clusteringCompactionTasks[task.CollectionId][task.TriggerId], task.PlanId)
+		}
+	}
 	return nil
 }
 

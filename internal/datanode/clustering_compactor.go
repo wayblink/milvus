@@ -184,11 +184,7 @@ func (t *clusteringCompactionTask) init() error {
 	for _, s := range t.plan.GetSegmentBinlogs() {
 		segIDs = append(segIDs, s.GetSegmentID())
 	}
-
-	collectionID := t.plan.GetSegmentBinlogs()[0].GetCollectionID()
-	partitionID2 := t.plan.GetSegmentBinlogs()[0].GetPartitionID()
 	collectionID, partitionID, meta, err := t.getSegmentMeta(segIDs[0])
-	log.Info("wayblink debug", zap.Int64("partitionID", partitionID), zap.Int64("partitionID2", partitionID2))
 	if err != nil {
 		return err
 	}

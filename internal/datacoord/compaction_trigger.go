@@ -368,10 +368,10 @@ func (t *compactionTrigger) triggerManualCompaction(collectionID int64, clusteri
 	}
 
 	if clusteringCompaction {
-		compactingJobs := t.clusteringCompactionManager.getClusteringCompactingJobs(signal.collectionID)
-		if len(compactingJobs) > 0 {
-			log.Info("collection is clustering compacting", zap.Int64("collectionID", signal.collectionID), zap.Int64("executing_trigger_id", compactingJobs[0].triggerID))
-			return compactingJobs[0].triggerID, nil
+		compacting, triggerID := t.clusteringCompactionManager.collectionIsClusteringCompacting(signal.collectionID)
+		if compacting {
+			log.Info("collection is clustering compacting", zap.Int64("collectionID", signal.collectionID), zap.Int64("triggerID", triggerID))
+			return triggerID, nil
 		}
 		err = t.handleClusteringCompactionSignal(signal)
 	} else {
@@ -642,24 +642,11 @@ func (t *compactionTrigger) handleClusteringCompactionSignal(signal *compactionS
 		return nil
 	}
 
-	clusteringCompactionJob := &ClusteringCompactionJob{
-		triggerID:         signal.id,
-		collectionID:      signal.collectionID,
-		clusteringKeyID:   clusteringKeyField.FieldID,
-		clusteringKeyName: clusteringKeyField.Name,
-		clusteringKeyType: clusteringKeyField.DataType,
-		startTime:         ts,
-		state:             clustering_pipelining,
-		subPlans:          make([]*datapb.ClusteringCompactionPlan, 0),
-	}
-
+	clusteringCompactionTasks := make([]*datapb.CompactionTask, 0)
 	for _, group := range partSegments {
 		log := log.With(zap.Int64("collectionID", group.collectionID),
 			zap.Int64("partitionID", group.partitionID),
 			zap.String("channel", group.channelName))
-		//if Params.DataCoordCfg.IndexBasedCompaction.GetAsBool() {
-		//	group.segments = FilterInIndexedSegments(t.handler, t.meta, group.segments...)
-		//}
 
 		ct, err := getCompactTime(ts, coll)
 		if err != nil {
@@ -683,23 +670,26 @@ func (t *compactionTrigger) handleClusteringCompactionSignal(signal *compactionS
 			}
 		}
 
-		clusteringMaxSegmentSize := paramtable.Get().DataCoordCfg.ClusteringCompactionMaxSegmentSize.GetAsSize()
-		clusteringPreferSegmentSize := paramtable.Get().DataCoordCfg.ClusteringCompactionPreferSegmentSize.GetAsSize()
-		segmentMaxSize := paramtable.Get().DataCoordCfg.SegmentMaxSize.GetAsInt64() * 1024 * 1024
-		clusteringCompactionJob.maxSegmentRows = group.segments[0].MaxRowNum * clusteringMaxSegmentSize / segmentMaxSize
-		clusteringCompactionJob.preferSegmentRows = group.segments[0].MaxRowNum * clusteringPreferSegmentSize / segmentMaxSize
-
-		plans := t.clusteringCompactionManager.fillClusteringCompactionPlans(group.segments, clusteringKeyField.FieldID, ct)
-		// mark all segments prepare for clustering compaction
-		t.setSegmentsCompacting(plans, true)
-		err = t.clusteringCompactionManager.addCompactionPlans(clusteringCompactionJob, plans, pipelining)
-		if err != nil {
-			log.Warn("failed to add compaction plans", zap.Error(err))
-			continue
+		clusteringCompactionTask := &datapb.CompactionTask{
+			// PlanId:
+			TriggerId:          signal.id,
+			StartTime:          ts,
+			Type:               datapb.CompactionType_ClusteringCompaction,
+			CollectionTtl:      ct.collectionTTL.Nanoseconds(),
+			CollectionId:       signal.collectionID,
+			PartitionId:        group.partitionID,
+			Channel:            group.channelName,
+			ClusteringKeyField: clusteringKeyField,
 		}
+		t.clusteringCompactionManager.fillClusteringCompactionTask(clusteringCompactionTask, group.segments)
+		// mark all segments prepare for clustering compaction
+		for _, seg := range group.segments {
+			t.meta.SetSegmentCompacting(seg.ID, true)
+		}
+		clusteringCompactionTasks = append(clusteringCompactionTasks, clusteringCompactionTask)
 	}
-	if len(clusteringCompactionJob.subPlans) > 0 {
-		t.clusteringCompactionManager.submit(clusteringCompactionJob)
+	if len(clusteringCompactionTasks) > 0 {
+		t.clusteringCompactionManager.submit(clusteringCompactionTasks)
 	}
 	return nil
 }

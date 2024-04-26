@@ -1075,10 +1075,8 @@ func (s *Server) ManualCompaction(ctx context.Context, req *milvuspb.ManualCompa
 
 	if req.GetMajorCompaction() {
 		resp.CompactionID = id
-		compactionJob := s.clusteringCompactionManager.getByTriggerId(id)
-		if compactionJob != nil {
-			resp.CompactionPlanCount = int32(len(compactionJob.subPlans))
-		}
+		compactionTasks := s.clusteringCompactionManager.getByTriggerId(id)
+		resp.CompactionPlanCount = int32(len(compactionTasks))
 	} else {
 		plans := s.compactionHandler.getCompactionTasksBySignalID(id)
 		if len(plans) == 0 {
@@ -1123,15 +1121,9 @@ func (s *Server) GetCompactionState(ctx context.Context, req *milvuspb.GetCompac
 		state        commonpb.CompactionState
 		plans        []int64
 	)
-	compactionJob := s.clusteringCompactionManager.getByTriggerId(req.GetCompactionID())
-	if compactionJob != nil {
-		plans = lo.Map(compactionJob.subPlans, func(plan *datapb.ClusteringCompactionPlan, _ int) int64 {
-			if plan == nil {
-				return -1
-			}
-			return plan.PlanID
-		})
-		state, executingCnt, completedCnt, failedCnt, timeoutCnt = s.clusteringCompactionManager.getCompactionJobState(compactionJob)
+	compactionTasks := s.clusteringCompactionManager.getByTriggerId(req.GetCompactionID())
+	if len(compactionTasks) > 0 {
+		state, executingCnt, completedCnt, failedCnt, timeoutCnt = s.clusteringCompactionManager.getCompactionJobState(compactionTasks)
 	} else {
 		tasks := s.compactionHandler.getCompactionTasksBySignalID(req.GetCompactionID())
 		plans = lo.Map(tasks, func(t *compactionTask, _ int) int64 {

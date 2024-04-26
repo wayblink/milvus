@@ -277,7 +277,7 @@ func (t *ClusteringCompactionManager) checkJobState(job *ClusteringCompactionJob
 		return err
 	}
 
-	var analyzingCnt, analyzeFailedCnt, executingCnt, completedCnt, indexedCnt, failedCnt, timeoutCnt int
+	var pipeliningCnt, analyzingCnt, analyzeFailedCnt, executingCnt, completedCnt, indexedCnt, failedCnt, timeoutCnt int
 	for idx, plan := range job.subPlans {
 		// check analyze task state, and submit to compact after analyze finished
 		if typeutil.IsVectorType(job.clusteringKeyType) && plan.GetAnalyzeTaskId() != 0 && plan.GetAnalyzeTaskVersion() == 0 {
@@ -285,11 +285,6 @@ func (t *ClusteringCompactionManager) checkJobState(job *ClusteringCompactionJob
 			log.Info("check analysis task state", zap.Int64("id", plan.GetAnalyzeTaskId()), zap.String("state", analyzeTask.State.String()))
 			switch analyzeTask.State {
 			case indexpb.JobState_JobStateFinished:
-				//offSetSegmentIDs := make([]int64, 0)
-				//for _, segID := range analyzeTask.SegmentIDs {
-				//	offSetSegmentIDs = append(offSetSegmentIDs, segID)
-				//}
-				//plan.InputSegments = offSetSegmentIDs
 				plan.AnalyzeTaskVersion = analyzeTask.Version
 				err := t.submitToCompact(job, idx, plan)
 				if err != nil {
@@ -309,9 +304,7 @@ func (t *ClusteringCompactionManager) checkJobState(job *ClusteringCompactionJob
 
 		// check compaction state
 		switch compactionTaskState(plan.GetState()) {
-		case pipelining:
-			// do nothing
-		case executing:
+		case pipelining, executing:
 			compactionTask := t.compactionHandler.getCompaction(plan.GetPlanID())
 			if compactionTask == nil {
 				// if one compaction task is lost, mark it as failed, and the clustering compaction will be marked failed as well
@@ -321,9 +314,21 @@ func (t *ClusteringCompactionManager) checkJobState(job *ClusteringCompactionJob
 			}
 			log.Info("compaction task state", zap.Int64("planID", compactionTask.plan.PlanID), zap.Int32("state", int32(compactionTask.state)))
 			job.subPlans[idx].State = int32(compactionTask.state)
-			executingCnt++
+			switch compactionTask.state {
+			case pipelining:
+				pipeliningCnt++
+			case executing:
+				executingCnt++
+			case completed:
+				completedCnt++
+			case failed:
+				failedCnt++
+			case timeout:
+				timeoutCnt++
+			}
 		case completed:
 			if plan.ResultIndexed {
+				indexedCnt++
 				continue
 			}
 			if len(plan.ResultSegments) == 0 {
@@ -400,6 +405,7 @@ func (t *ClusteringCompactionManager) checkJobState(job *ClusteringCompactionJob
 	log.Info("Update clustering compaction job", zap.Int64("tiggerID", job.triggerID), zap.Int64("collectionID", job.collectionID),
 		zap.Int("analyzingCnt", analyzingCnt),
 		zap.Int("analyzeFailedCnt", analyzeFailedCnt),
+		zap.Int("pipeliningCnt", pipeliningCnt),
 		zap.Int("executingCnt", executingCnt),
 		zap.Int("completedCnt", completedCnt),
 		zap.Int("indexedCnt", indexedCnt),
@@ -421,17 +427,14 @@ func (t *ClusteringCompactionManager) submitToAnalyze(job *ClusteringCompactionJ
 		plans = job.subPlans
 	}
 	// pre-alloc ids in batch
-	currentID, _, err := t.allocator.allocN(int64(2 * len(plans)))
+	currentID, _, err := t.allocator.allocN(int64(len(plans)))
 	if err != nil {
 		return err
 	}
 
 	for idx, plan := range plans {
-		planId := currentID
-		currentID++
 		analyzeTaskID := currentID
 		currentID++
-		job.subPlans[idx].PlanID = planId
 		job.subPlans[idx].TimeoutInSeconds = Params.DataCoordCfg.ClusteringCompactionTimeoutInSeconds.GetAsInt32()
 
 		// clustering compaction firstly analyze the plan, then decide whether to execute compaction
@@ -456,7 +459,7 @@ func (t *ClusteringCompactionManager) submitToAnalyze(job *ClusteringCompactionJ
 				State:  indexpb.JobState_JobStateInit,
 			},
 		})
-		log.Info("submit analyze task", zap.Int64("planID", planId), zap.Int64("triggerID", job.triggerID), zap.Int64("collectionID", job.collectionID), zap.Int64("id", analyzeTaskID))
+		log.Info("submit analyze task", zap.Int64("planID", plan.GetPlanID()), zap.Int64("triggerID", job.triggerID), zap.Int64("collectionID", job.collectionID), zap.Int64("id", analyzeTaskID))
 		job.subPlans[idx].AnalyzeTaskId = analyzeTaskID
 	}
 	return t.saveJob(job)
@@ -603,22 +606,32 @@ func triggerCompactionPolicy(ctx context.Context, meta *meta, collectionID int64
 	return false, nil
 }
 
-func (t *ClusteringCompactionManager) addCompactionPlan(job *ClusteringCompactionJob, plan *datapb.CompactionPlan, state compactionTaskState) {
-	segmentIDs := make([]int64, 0)
-	for _, segment := range plan.SegmentBinlogs {
-		segmentIDs = append(segmentIDs, segment.GetSegmentID())
+func (t *ClusteringCompactionManager) addCompactionPlans(job *ClusteringCompactionJob, plans []*datapb.CompactionPlan, state compactionTaskState) error {
+	currentID, _, err := t.allocator.allocN(int64(len(plans)))
+	if err != nil {
+		return err
 	}
-	subPlan := &datapb.ClusteringCompactionPlan{
-		PlanID:           plan.GetPlanID(),
-		State:            int32(state),
-		StartTime:        plan.GetStartTime(),
-		TimeoutInSeconds: plan.GetTimeoutInSeconds(),
-		Timetravel:       plan.GetTimetravel(),
-		Channel:          plan.GetChannel(),
-		CollectionTtl:    plan.GetCollectionTtl(),
-		TotalRows:        plan.GetTotalRows(),
-		PartitionID:      plan.SegmentBinlogs[0].PartitionID,
-		InputSegments:    segmentIDs,
+
+	for _, plan := range plans {
+		segmentIDs := make([]int64, 0)
+		for _, segment := range plan.SegmentBinlogs {
+			segmentIDs = append(segmentIDs, segment.GetSegmentID())
+		}
+		planID := currentID
+		currentID++
+		subPlan := &datapb.ClusteringCompactionPlan{
+			PlanID:           planID,
+			State:            int32(state),
+			StartTime:        plan.GetStartTime(),
+			TimeoutInSeconds: plan.GetTimeoutInSeconds(),
+			Timetravel:       plan.GetTimetravel(),
+			Channel:          plan.GetChannel(),
+			CollectionTtl:    plan.GetCollectionTtl(),
+			TotalRows:        plan.GetTotalRows(),
+			PartitionID:      plan.SegmentBinlogs[0].PartitionID,
+			InputSegments:    segmentIDs,
+		}
+		job.subPlans = append(job.subPlans, subPlan)
 	}
-	job.subPlans = append(job.subPlans, subPlan)
+	return nil
 }

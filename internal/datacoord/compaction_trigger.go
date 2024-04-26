@@ -692,8 +692,10 @@ func (t *compactionTrigger) handleClusteringCompactionSignal(signal *compactionS
 		plans := t.clusteringCompactionManager.fillClusteringCompactionPlans(group.segments, clusteringKeyField.FieldID, ct)
 		// mark all segments prepare for clustering compaction
 		t.setSegmentsCompacting(plans, true)
-		for _, plan := range plans {
-			t.clusteringCompactionManager.addCompactionPlan(clusteringCompactionJob, plan, pipelining)
+		err = t.clusteringCompactionManager.addCompactionPlans(clusteringCompactionJob, plans, pipelining)
+		if err != nil {
+			log.Warn("failed to add compaction plans", zap.Error(err))
+			continue
 		}
 	}
 	if len(clusteringCompactionJob.subPlans) > 0 {

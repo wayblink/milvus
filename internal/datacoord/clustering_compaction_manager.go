@@ -431,8 +431,8 @@ func (t *ClusteringCompactionManager) submitToAnalyze(job *ClusteringCompactionJ
 		currentID++
 		analyzeTaskID := currentID
 		currentID++
-		plan.PlanID = planId
-		plan.TimeoutInSeconds = Params.DataCoordCfg.ClusteringCompactionTimeoutInSeconds.GetAsInt32()
+		job.subPlans[idx].PlanID = planId
+		job.subPlans[idx].TimeoutInSeconds = Params.DataCoordCfg.ClusteringCompactionTimeoutInSeconds.GetAsInt32()
 
 		// clustering compaction firstly analyze the plan, then decide whether to execute compaction
 		newAnalyzeTask := &model.AnalyzeTask{

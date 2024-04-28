@@ -219,8 +219,8 @@ func (t *ClusteringCompactionManager) processAllTasks() error {
 				if err != nil {
 					log.Error("fail in process task", zap.Int64("TriggerId", task.TriggerId), zap.Int64("collectionID", task.CollectionId), zap.Int64("planID", task.PlanId), zap.Error(err))
 					task.State = datapb.CompactionTaskState_failed
-					t.saveTask(task)
 				}
+				t.saveTask(task)
 			}
 		}
 	}

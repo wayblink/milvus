@@ -673,6 +673,7 @@ func (t *compactionTrigger) handleClusteringCompactionSignal(signal *compactionS
 		clusteringCompactionTask := &datapb.CompactionTask{
 			// PlanId:
 			TriggerId:          signal.id,
+			State:              datapb.CompactionTaskState_pipelining,
 			StartTime:          ts,
 			Type:               datapb.CompactionType_ClusteringCompaction,
 			CollectionTtl:      ct.collectionTTL.Nanoseconds(),

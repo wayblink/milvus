@@ -220,6 +220,7 @@ func (t *ClusteringCompactionManager) processAllTasks() error {
 					log.Error("fail in process task", zap.Int64("TriggerId", task.TriggerId), zap.Int64("collectionID", task.CollectionId), zap.Int64("planID", task.PlanId), zap.Error(err))
 					task.State = datapb.CompactionTaskState_failed
 				}
+				log.Info("task state", zap.Int64("planID", task.GetPlanId()), zap.String("state", task.State.String()))
 				t.saveTask(task)
 			}
 		}
@@ -241,6 +242,7 @@ func (t *ClusteringCompactionManager) processTask(task *datapb.CompactionTask) e
 		return merr.WrapErrCollectionNotFound(task.GetCollectionId())
 	}
 
+	log.Info("process task", zap.Int64("planID", task.GetPlanId()), zap.String("state", task.State.String()))
 	switch task.State {
 	case datapb.CompactionTaskState_pipelining:
 		return t.processPipeliningTask(task)

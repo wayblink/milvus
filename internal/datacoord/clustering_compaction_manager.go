@@ -244,11 +244,13 @@ func (t *ClusteringCompactionManager) processTask(task *datapb.CompactionTask) e
 
 	log.Info("process task", zap.Int64("planID", task.GetPlanId()), zap.String("state", task.State.String()))
 	switch task.State {
-	case datapb.CompactionTaskState_pipelining:
-		return t.processPipeliningTask(task)
-	case datapb.CompactionTaskState_compacting:
+	case datapb.CompactionTaskState_init:
+		return t.processInitTask(task)
+	case datapb.CompactionTaskState_compact_pipelining:
 		return t.processExecutingTask(task)
-	case datapb.CompactionTaskState_compacted:
+	case datapb.CompactionTaskState_compact_executing:
+		return t.processExecutingTask(task)
+	case datapb.CompactionTaskState_compact_completed:
 		return t.processCompactedTask(task)
 	case datapb.CompactionTaskState_analyzing:
 		return t.processAnalyzingTask(task)
@@ -264,7 +266,7 @@ func (t *ClusteringCompactionManager) processTask(task *datapb.CompactionTask) e
 	return nil
 }
 
-func (t *ClusteringCompactionManager) processPipeliningTask(task *datapb.CompactionTask) error {
+func (t *ClusteringCompactionManager) processInitTask(task *datapb.CompactionTask) error {
 	if typeutil.IsVectorType(task.GetClusteringKeyField().DataType) {
 		err := t.submitToAnalyze(task)
 		if err != nil {
@@ -291,7 +293,7 @@ func (t *ClusteringCompactionManager) processExecutingTask(task *datapb.Compacti
 	}
 	log.Info("compaction task state", zap.Int64("planID", compactionTask.plan.PlanID), zap.Int32("state", int32(compactionTask.state)))
 	task.State = compactionTaskStateV2(compactionTask.state)
-	if task.State == datapb.CompactionTaskState_compacted {
+	if task.State == datapb.CompactionTaskState_compact_completed {
 		return t.processCompactedTask(task)
 	}
 	return nil
@@ -438,7 +440,7 @@ func (t *ClusteringCompactionManager) submitToCompact(task *datapb.CompactionTas
 		log.Warn("failed to execute compaction task", zap.Int64("planID", task.GetPlanId()), zap.Error(err))
 		return err
 	}
-	task.State = datapb.CompactionTaskState_compacting
+	task.State = datapb.CompactionTaskState_compact_pipelining
 	log.Info("send compaction task to execute", zap.Int64("triggerID", task.GetTriggerId()),
 		zap.Int64("planID", task.GetPlanId()),
 		zap.Int64("collectionID", task.GetCollectionId()),
@@ -577,11 +579,11 @@ func triggerCompactionPolicy(ctx context.Context, meta *meta, collectionID int64
 func compactionTaskStateV2(state compactionTaskState) datapb.CompactionTaskState {
 	switch state {
 	case pipelining:
-		return datapb.CompactionTaskState_pipelining
+		return datapb.CompactionTaskState_compact_pipelining
 	case executing:
-		return datapb.CompactionTaskState_compacting
+		return datapb.CompactionTaskState_compact_executing
 	case completed:
-		return datapb.CompactionTaskState_compacted
+		return datapb.CompactionTaskState_compact_completed
 	case timeout:
 		return datapb.CompactionTaskState_timeout
 	case failed:

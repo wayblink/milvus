@@ -837,15 +837,16 @@ message GcControlRequest {
 
 enum CompactionTaskState {
   unknown = 0;
-  compacting = 1; // => executing
-  pipelining = 2; 
-  compacted = 3; // => completed
+  compact_executing = 1; // => executing
+  compact_pipelining = 2;
+  compact_completed = 3; // => completed
   failed = 4;
   timeout = 5;
-  analyzing = 6;
-  analyzed = 7;
-  indexing = 8;
-  indexed = 9;
+  init = 6;
+  analyzing = 7;
+  analyzed = 8;
+  indexing = 9;
+  indexed = 10;
 }
 
 message CompactionTask {

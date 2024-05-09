@@ -328,11 +328,16 @@ func (t *clusteringCompactionTask) getScalarAnalyzeResult(ctx context.Context) e
 		for _, key := range bucket {
 			fieldStats.UpdateMinMax(storage.NewScalarFieldValue(t.clusteringKeyField.DataType, key))
 		}
+		writeBuffer, err := storage.NewInsertData(t.collectionMeta.GetSchema())
+		if err != nil {
+			return err
+		}
 		buffer := &ClusterBuffer{
 			id:                      id,
 			uploadedSegments:        make([]*datapb.CompactionSegment, 0),
 			uploadedSegmentStats:    make(map[UniqueID]storage.SegmentStats, 0),
 			clusteringKeyFieldStats: fieldStats,
+			buffer:                  writeBuffer,
 		}
 		t.clusterBuffers = append(t.clusterBuffers, buffer)
 		for _, key := range bucket {
@@ -857,7 +862,11 @@ func (t *clusteringCompactionTask) spill(ctx context.Context, buffer *ClusterBuf
 
 	// clean buffer
 	t.totalBufferSize.Add(-buffer.bufferSize.Load())
-	buffer.buffer = nil
+	writeBuffer, err := storage.NewInsertData(t.collectionMeta.GetSchema())
+	if err != nil {
+		return err
+	}
+	buffer.buffer = writeBuffer
 	buffer.bufferSize.Store(0)
 	buffer.bufferRowNum.Store(0)
 

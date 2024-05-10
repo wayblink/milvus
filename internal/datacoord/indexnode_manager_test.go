@@ -45,7 +45,7 @@ func TestIndexNodeManager_AddNode(t *testing.T) {
 	})
 }
 
-func TestIndexNodeManager_SelectNodeAndAssignTask(t *testing.T) {
+func TestIndexNodeManager_PickClient(t *testing.T) {
 	getMockedGetJobStatsClient := func(resp *indexpb.GetJobStatsResponse, err error) types.IndexNodeClient {
 		ic := mocks.NewMockIndexNodeClient(t)
 		ic.EXPECT().GetJobStats(mock.Anything, mock.Anything, mock.Anything).Return(resp, err)

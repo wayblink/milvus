@@ -403,11 +403,6 @@ enum JobType {
     JobTypeAnalyzeJob = 2;
 }
 
-//message JobDescriptor {
-//    JobType job_type = 1;
-//    google.protobuf.Any parameters = 2;
-//}
-
 message CreateJobV2Request {
     string clusterID = 1;
     int64 taskID = 2;

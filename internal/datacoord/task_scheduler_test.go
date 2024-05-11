@@ -671,6 +671,7 @@ func (s *taskSchedulerSuite) createAnalyzeMeta(catalog metastore.DataCoordCatalo
 				SegmentIDs:   s.segmentIDs,
 				TaskID:       1,
 				State:        indexpb.JobState_JobStateInit,
+				FieldType:    schemapb.DataType_FloatVector,
 			},
 			2: {
 				CollectionID: s.collectionID,
@@ -680,6 +681,7 @@ func (s *taskSchedulerSuite) createAnalyzeMeta(catalog metastore.DataCoordCatalo
 				TaskID:       2,
 				NodeID:       s.nodeID,
 				State:        indexpb.JobState_JobStateInProgress,
+				FieldType:    schemapb.DataType_FloatVector,
 			},
 			3: {
 				CollectionID: s.collectionID,
@@ -689,6 +691,7 @@ func (s *taskSchedulerSuite) createAnalyzeMeta(catalog metastore.DataCoordCatalo
 				TaskID:       3,
 				NodeID:       s.nodeID,
 				State:        indexpb.JobState_JobStateFinished,
+				FieldType:    schemapb.DataType_FloatVector,
 			},
 			4: {
 				CollectionID: s.collectionID,
@@ -698,6 +701,7 @@ func (s *taskSchedulerSuite) createAnalyzeMeta(catalog metastore.DataCoordCatalo
 				TaskID:       4,
 				NodeID:       s.nodeID,
 				State:        indexpb.JobState_JobStateFailed,
+				FieldType:    schemapb.DataType_FloatVector,
 			},
 			5: {
 				CollectionID: s.collectionID,
@@ -707,6 +711,7 @@ func (s *taskSchedulerSuite) createAnalyzeMeta(catalog metastore.DataCoordCatalo
 				TaskID:       5,
 				NodeID:       s.nodeID,
 				State:        indexpb.JobState_JobStateRetry,
+				FieldType:    schemapb.DataType_FloatVector,
 			},
 		},
 	}
@@ -715,6 +720,11 @@ func (s *taskSchedulerSuite) createAnalyzeMeta(catalog metastore.DataCoordCatalo
 func (s *taskSchedulerSuite) SetupTest() {
 	paramtable.Init()
 	s.initParams()
+	Params.DataCoordCfg.ClusteringCompactionMinCentroidsNum.SwapTempValue("0")
+}
+
+func (s *taskSchedulerSuite) TearDownSuite() {
+	Params.DataCoordCfg.ClusteringCompactionMinCentroidsNum.SwapTempValue("16")
 }
 
 func (s *taskSchedulerSuite) scheduler(handler Handler) {
@@ -986,7 +996,8 @@ func (s *taskSchedulerSuite) Test_analyzeTaskFailCase() {
 			ID: collID,
 			Schema: &schemapb.CollectionSchema{
 				Fields: []*schemapb.FieldSchema{
-					{FieldID: s.fieldID, Name: "vec", TypeParams: []*commonpb.KeyValuePair{{Key: "dim", Value: "10"}}},
+					{FieldID: s.fieldID, Name: "vec", DataType: schemapb.DataType_FloatVector,
+						TypeParams: []*commonpb.KeyValuePair{{Key: "dim", Value: "10"}}},
 				},
 			},
 		}, nil)

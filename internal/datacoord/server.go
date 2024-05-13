@@ -124,10 +124,9 @@ type Server struct {
 	importScheduler  ImportScheduler
 	importChecker    ImportChecker
 
-	compactionTrigger           trigger
-	clusteringCompactionManager *ClusteringCompactionManager
-	compactionHandler           compactionPlanContext
-	compactionViewManager       *CompactionViewManager
+	compactionTrigger     trigger
+	compactionHandler     compactionPlanContext
+	compactionViewManager *CompactionViewManager
 
 	metricsCacheManager *metricsinfo.MetricsCacheManager
 
@@ -418,12 +417,12 @@ func (s *Server) Start() error {
 }
 
 func (s *Server) startDataCoord() {
+	s.taskScheduler.Start()
 	if Params.DataCoordCfg.EnableCompaction.GetAsBool() {
 		s.compactionHandler.start()
 		s.compactionTrigger.start()
 		s.compactionViewManager.Start()
 	}
-	s.taskScheduler.Start()
 	s.startServerLoop()
 
 	// http.Register(&http.Handler{
@@ -526,7 +525,7 @@ func (s *Server) SetIndexNodeCreator(f func(context.Context, string, int64) (typ
 }
 
 func (s *Server) createCompactionHandler() {
-	s.compactionHandler = newCompactionPlanHandler(s.sessionManager, s.channelManager, s.meta, s.allocator)
+	s.compactionHandler = newCompactionPlanHandler(s.sessionManager, s.channelManager, s.meta, s.allocator, s.taskScheduler)
 	triggerv2 := NewCompactionTriggerManager(s.allocator, s.compactionHandler)
 	s.compactionViewManager = NewCompactionViewManager(s.meta, triggerv2, s.allocator)
 }
@@ -537,8 +536,7 @@ func (s *Server) stopCompactionHandler() {
 }
 
 func (s *Server) createCompactionTrigger() {
-	s.clusteringCompactionManager = newClusteringCompactionManager(s.ctx, s.meta, s.allocator, s.compactionHandler, s.taskScheduler, s.handler)
-	s.compactionTrigger = newCompactionTrigger(s.ctx, s.meta, s.compactionHandler, s.allocator, s.handler, s.indexEngineVersionManager, s.clusteringCompactionManager)
+	s.compactionTrigger = newCompactionTrigger(s.ctx, s.meta, s.compactionHandler, s.allocator, s.handler, s.indexEngineVersionManager)
 }
 
 func (s *Server) stopCompactionTrigger() {

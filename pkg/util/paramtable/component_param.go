@@ -3035,7 +3035,7 @@ During compaction, the size of segment # of rows is able to exceed segment max #
 		Key:          "dataCoord.segment.enableLevelZero",
 		Version:      "2.4.0",
 		Doc:          "Whether to enable LevelZeroCompaction",
-		DefaultValue: "true",
+		DefaultValue: "false",
 	}
 	p.EnableLevelZeroSegment.Init(base.mgr)
 

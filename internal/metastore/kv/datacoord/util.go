@@ -254,7 +254,7 @@ func buildPartitionStatsInfoPath(info *datapb.PartitionStatsInfo) string {
 	return fmt.Sprintf("%s/%d/%d/%s/%d", PartitionStatsInfoPrefix, info.CollectionID, info.PartitionID, info.VChannel, info.Version)
 }
 
-func buildPartitionStatsCurrentVersionPath(collID, partID int64, channel string) string {
+func buildCurrentPartitionStatsVersionPath(collID, partID int64, channel string) string {
 	return fmt.Sprintf("%s/%d/%d/%s", PartitionStatsCurrentPlanIDPrefix, collID, partID, channel)
 }
 

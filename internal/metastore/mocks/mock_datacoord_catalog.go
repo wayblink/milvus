@@ -647,7 +647,7 @@ func (_c *DataCoordCatalog_DropIndex_Call) RunAndReturn(run func(context.Context
 }
 
 // DropPartitionStatsCurrentPlanID provides a mock function with given fields: ctx, collID, partID, vChannel
-func (_m *DataCoordCatalog) DropPartitionStatsCurrentPlanID(ctx context.Context, collID int64, partID int64, vChannel string) error {
+func (_m *DataCoordCatalog) DropCurrentPartitionStatsVersion(ctx context.Context, collID int64, partID int64, vChannel string) error {
 	ret := _m.Called(ctx, collID, partID, vChannel)
 
 	var r0 error
@@ -660,7 +660,7 @@ func (_m *DataCoordCatalog) DropPartitionStatsCurrentPlanID(ctx context.Context,
 	return r0
 }
 
-// DataCoordCatalog_DropPartitionStatsCurrentPlanID_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DropPartitionStatsCurrentPlanID'
+// DataCoordCatalog_DropPartitionStatsCurrentPlanID_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DropCurrentPartitionStatsVersion'
 type DataCoordCatalog_DropPartitionStatsCurrentPlanID_Call struct {
 	*mock.Call
 }
@@ -671,7 +671,7 @@ type DataCoordCatalog_DropPartitionStatsCurrentPlanID_Call struct {
 //   - partID int64
 //   - vChannel string
 func (_e *DataCoordCatalog_Expecter) DropPartitionStatsCurrentPlanID(ctx interface{}, collID interface{}, partID interface{}, vChannel interface{}) *DataCoordCatalog_DropPartitionStatsCurrentPlanID_Call {
-	return &DataCoordCatalog_DropPartitionStatsCurrentPlanID_Call{Call: _e.mock.On("DropPartitionStatsCurrentPlanID", ctx, collID, partID, vChannel)}
+	return &DataCoordCatalog_DropPartitionStatsCurrentPlanID_Call{Call: _e.mock.On("DropCurrentPartitionStatsVersion", ctx, collID, partID, vChannel)}
 }
 
 func (_c *DataCoordCatalog_DropPartitionStatsCurrentPlanID_Call) Run(run func(ctx context.Context, collID int64, partID int64, vChannel string)) *DataCoordCatalog_DropPartitionStatsCurrentPlanID_Call {
@@ -909,8 +909,8 @@ func (_c *DataCoordCatalog_GcConfirm_Call) RunAndReturn(run func(context.Context
 	return _c
 }
 
-// GetPartitionStatsCurrentPlanID provides a mock function with given fields: ctx, collID, partID, vChannel
-func (_m *DataCoordCatalog) GetPartitionStatsCurrentPlanID(ctx context.Context, collID int64, partID int64, vChannel string) (int64, error) {
+// GetCurrentPartitionStatsVersion provides a mock function with given fields: ctx, collID, partID, vChannel
+func (_m *DataCoordCatalog) GetCurrentPartitionStatsVersion(ctx context.Context, collID int64, partID int64, vChannel string) (int64, error) {
 	ret := _m.Called(ctx, collID, partID, vChannel)
 
 	var r0 int64
@@ -933,33 +933,33 @@ func (_m *DataCoordCatalog) GetPartitionStatsCurrentPlanID(ctx context.Context, 
 	return r0, r1
 }
 
-// DataCoordCatalog_GetPartitionStatsCurrentPlanID_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetPartitionStatsCurrentPlanID'
-type DataCoordCatalog_GetPartitionStatsCurrentPlanID_Call struct {
+// DataCoordCatalog_GetCurrentPartitionStatsVersion_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetCurrentPartitionStatsVersion'
+type DataCoordCatalog_GetCurrentPartitionStatsVersion_Call struct {
 	*mock.Call
 }
 
-// GetPartitionStatsCurrentPlanID is a helper method to define mock.On call
+// GetCurrentPartitionStatsVersion is a helper method to define mock.On call
 //   - ctx context.Context
 //   - collID int64
 //   - partID int64
 //   - vChannel string
-func (_e *DataCoordCatalog_Expecter) GetPartitionStatsCurrentPlanID(ctx interface{}, collID interface{}, partID interface{}, vChannel interface{}) *DataCoordCatalog_GetPartitionStatsCurrentPlanID_Call {
-	return &DataCoordCatalog_GetPartitionStatsCurrentPlanID_Call{Call: _e.mock.On("GetPartitionStatsCurrentPlanID", ctx, collID, partID, vChannel)}
+func (_e *DataCoordCatalog_Expecter) GetCurrentPartitionStatsVersion(ctx interface{}, collID interface{}, partID interface{}, vChannel interface{}) *DataCoordCatalog_GetCurrentPartitionStatsVersion_Call {
+	return &DataCoordCatalog_GetCurrentPartitionStatsVersion_Call{Call: _e.mock.On("GetCurrentPartitionStatsVersion", ctx, collID, partID, vChannel)}
 }
 
-func (_c *DataCoordCatalog_GetPartitionStatsCurrentPlanID_Call) Run(run func(ctx context.Context, collID int64, partID int64, vChannel string)) *DataCoordCatalog_GetPartitionStatsCurrentPlanID_Call {
+func (_c *DataCoordCatalog_GetCurrentPartitionStatsVersion_Call) Run(run func(ctx context.Context, collID int64, partID int64, vChannel string)) *DataCoordCatalog_GetCurrentPartitionStatsVersion_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run(args[0].(context.Context), args[1].(int64), args[2].(int64), args[3].(string))
 	})
 	return _c
 }
 
-func (_c *DataCoordCatalog_GetPartitionStatsCurrentPlanID_Call) Return(_a0 int64, _a1 error) *DataCoordCatalog_GetPartitionStatsCurrentPlanID_Call {
+func (_c *DataCoordCatalog_GetCurrentPartitionStatsVersion_Call) Return(_a0 int64, _a1 error) *DataCoordCatalog_GetCurrentPartitionStatsVersion_Call {
 	_c.Call.Return(_a0, _a1)
 	return _c
 }
 
-func (_c *DataCoordCatalog_GetPartitionStatsCurrentPlanID_Call) RunAndReturn(run func(context.Context, int64, int64, string) (int64, error)) *DataCoordCatalog_GetPartitionStatsCurrentPlanID_Call {
+func (_c *DataCoordCatalog_GetCurrentPartitionStatsVersion_Call) RunAndReturn(run func(context.Context, int64, int64, string) (int64, error)) *DataCoordCatalog_GetCurrentPartitionStatsVersion_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -1888,7 +1888,7 @@ func (_c *DataCoordCatalog_SaveImportTask_Call) RunAndReturn(run func(*datapb.Im
 }
 
 // SavePartitionStatsCurrentPlanID provides a mock function with given fields: ctx, collID, partID, vChannel, currentVersion
-func (_m *DataCoordCatalog) SavePartitionStatsCurrentPlanID(ctx context.Context, collID int64, partID int64, vChannel string, currentVersion int64) error {
+func (_m *DataCoordCatalog) SaveCurrentPartitionStatsVersion(ctx context.Context, collID int64, partID int64, vChannel string, currentVersion int64) error {
 	ret := _m.Called(ctx, collID, partID, vChannel, currentVersion)
 
 	var r0 error
@@ -1901,7 +1901,7 @@ func (_m *DataCoordCatalog) SavePartitionStatsCurrentPlanID(ctx context.Context,
 	return r0
 }
 
-// DataCoordCatalog_SavePartitionStatsCurrentPlanID_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SavePartitionStatsCurrentPlanID'
+// DataCoordCatalog_SavePartitionStatsCurrentPlanID_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SaveCurrentPartitionStatsVersion'
 type DataCoordCatalog_SavePartitionStatsCurrentPlanID_Call struct {
 	*mock.Call
 }
@@ -1913,7 +1913,7 @@ type DataCoordCatalog_SavePartitionStatsCurrentPlanID_Call struct {
 //   - vChannel string
 //   - currentVersion int64
 func (_e *DataCoordCatalog_Expecter) SavePartitionStatsCurrentPlanID(ctx interface{}, collID interface{}, partID interface{}, vChannel interface{}, currentVersion interface{}) *DataCoordCatalog_SavePartitionStatsCurrentPlanID_Call {
-	return &DataCoordCatalog_SavePartitionStatsCurrentPlanID_Call{Call: _e.mock.On("SavePartitionStatsCurrentPlanID", ctx, collID, partID, vChannel, currentVersion)}
+	return &DataCoordCatalog_SavePartitionStatsCurrentPlanID_Call{Call: _e.mock.On("SaveCurrentPartitionStatsVersion", ctx, collID, partID, vChannel, currentVersion)}
 }
 
 func (_c *DataCoordCatalog_SavePartitionStatsCurrentPlanID_Call) Run(run func(ctx context.Context, collID int64, partID int64, vChannel string, currentVersion int64)) *DataCoordCatalog_SavePartitionStatsCurrentPlanID_Call {

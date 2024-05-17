@@ -125,7 +125,7 @@ func (h *ServerHandler) GetQueryVChanPositions(channel RWChannel, partitionIDs .
 		segments := h.s.meta.SelectSegments(SegmentFilterFunc(func(s *SegmentInfo) bool {
 			return s.InsertChannel == channel.GetName() && !s.GetIsFake() && s.PartitionID == partitionID
 		}))
-		currentPlanID := h.s.meta.partitionStatsMeta.GetCurrentPlanID(channel.GetCollectionID(), partitionID, channel.GetName())
+		currentPartitionStatsVersion := h.s.meta.partitionStatsMeta.GetCurrentPartitionStatsVersion(channel.GetCollectionID(), partitionID, channel.GetName())
 
 		segmentInfos := make(map[int64]*SegmentInfo)
 		indexedSegments := FilterInIndexedSegments(h, h.s.meta, segments...)
@@ -151,7 +151,7 @@ func (h *ServerHandler) GetQueryVChanPositions(channel RWChannel, partitionIDs .
 				// Skip bulk insert segments.
 				continue
 			}
-			if s.GetLevel() == datapb.SegmentLevel_L2 && s.PartitionStatsVersion > currentPlanID {
+			if s.GetLevel() == datapb.SegmentLevel_L2 && s.PartitionStatsVersion > currentPartitionStatsVersion {
 				// skip major compaction not fully completed.
 				continue
 			}
@@ -223,7 +223,7 @@ func (h *ServerHandler) GetQueryVChanPositions(channel RWChannel, partitionIDs .
 		// unindexed is flushed segments as well
 		indexedIDs.Insert(unIndexedIDs.Collect()...)
 
-		partStatsVersionsMap[partitionID] = currentPlanID
+		partStatsVersionsMap[partitionID] = currentPartitionStatsVersion
 	}
 	return &datapb.VchannelInfo{
 		CollectionID:           channel.GetCollectionID(),

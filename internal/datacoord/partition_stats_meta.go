@@ -23,8 +23,8 @@ type partitionStatsMeta struct {
 }
 
 type partitionStatsInfo struct {
-	currentPlanID int64
-	infos         map[int64]*datapb.PartitionStatsInfo
+	currentVersion int64
+	infos          map[int64]*datapb.PartitionStatsInfo
 }
 
 func newPartitionStatsMeta(ctx context.Context, catalog metastore.DataCoordCatalog) (*partitionStatsMeta, error) {
@@ -52,13 +52,13 @@ func (psm *partitionStatsMeta) reloadFromKV() error {
 			psm.partitionStatsInfos[info.GetVChannel()] = make(map[int64]*partitionStatsInfo)
 		}
 		if _, ok := psm.partitionStatsInfos[info.GetVChannel()][info.GetPartitionID()]; !ok {
-			currentPlanID, err := psm.catalog.GetPartitionStatsCurrentPlanID(psm.ctx, info.GetCollectionID(), info.GetPartitionID(), info.GetVChannel())
+			currentPartitionStatsVersion, err := psm.catalog.GetCurrentPartitionStatsVersion(psm.ctx, info.GetCollectionID(), info.GetPartitionID(), info.GetVChannel())
 			if err != nil {
 				return err
 			}
 			psm.partitionStatsInfos[info.GetVChannel()][info.GetPartitionID()] = &partitionStatsInfo{
-				currentPlanID: currentPlanID,
-				infos:         make(map[int64]*datapb.PartitionStatsInfo),
+				currentVersion: currentPartitionStatsVersion,
+				infos:          make(map[int64]*datapb.PartitionStatsInfo),
 			}
 		}
 		psm.partitionStatsInfos[info.GetVChannel()][info.GetPartitionID()].infos[info.GetVersion()] = info
@@ -151,32 +151,32 @@ func (psm *partitionStatsMeta) DropPartitionStatsInfo(info *datapb.PartitionStat
 	return nil
 }
 
-func (psm *partitionStatsMeta) SaveCurrentPlanID(collectionID, partitionID int64, vChannel string, currentPlanID int64) error {
+func (psm *partitionStatsMeta) SaveCurrentPartitionStatsVersion(collectionID, partitionID int64, vChannel string, currentPartitionStatsVersion int64) error {
 	psm.Lock()
 	defer psm.Unlock()
 
-	log.Info("update current planID", zap.Int64("collectionID", collectionID),
+	log.Info("update current partition stats version", zap.Int64("collectionID", collectionID),
 		zap.Int64("partitionID", partitionID),
-		zap.String("vChannel", vChannel), zap.Int64("currentPlanID", currentPlanID))
+		zap.String("vChannel", vChannel), zap.Int64("currentPartitionStatsVersion", currentPartitionStatsVersion))
 
 	if _, ok := psm.partitionStatsInfos[vChannel]; !ok {
-		return merr.WrapErrClusteringCompactionMetaError("SaveCurrentPlanID",
-			fmt.Errorf("update current planID failed, there is no partition info exists with collID: %d, partID: %d, vChannel: %s", collectionID, partitionID, vChannel))
+		return merr.WrapErrClusteringCompactionMetaError("SaveCurrentPartitionStatsVersion",
+			fmt.Errorf("update current partition stats version failed, there is no partition info exists with collID: %d, partID: %d, vChannel: %s", collectionID, partitionID, vChannel))
 	}
 	if _, ok := psm.partitionStatsInfos[vChannel][partitionID]; !ok {
-		return merr.WrapErrClusteringCompactionMetaError("SaveCurrentPlanID",
-			fmt.Errorf("update current planID failed, there is no partition info exists with collID: %d, partID: %d, vChannel: %s", collectionID, partitionID, vChannel))
+		return merr.WrapErrClusteringCompactionMetaError("SaveCurrentPartitionStatsVersion",
+			fmt.Errorf("update current partition stats version failed, there is no partition info exists with collID: %d, partID: %d, vChannel: %s", collectionID, partitionID, vChannel))
 	}
 
-	if err := psm.catalog.SavePartitionStatsCurrentPlanID(psm.ctx, collectionID, partitionID, vChannel, currentPlanID); err != nil {
+	if err := psm.catalog.SaveCurrentPartitionStatsVersion(psm.ctx, collectionID, partitionID, vChannel, currentPartitionStatsVersion); err != nil {
 		return err
 	}
 
-	psm.partitionStatsInfos[vChannel][partitionID].currentPlanID = currentPlanID
+	psm.partitionStatsInfos[vChannel][partitionID].currentVersion = currentPartitionStatsVersion
 	return nil
 }
 
-func (psm *partitionStatsMeta) GetCurrentPlanID(collectionID, partitionID int64, vChannel string) int64 {
+func (psm *partitionStatsMeta) GetCurrentPartitionStatsVersion(collectionID, partitionID int64, vChannel string) int64 {
 	psm.RLock()
 	defer psm.RUnlock()
 
@@ -186,5 +186,5 @@ func (psm *partitionStatsMeta) GetCurrentPlanID(collectionID, partitionID int64,
 	if _, ok := psm.partitionStatsInfos[vChannel][partitionID]; !ok {
 		return 0
 	}
-	return psm.partitionStatsInfos[vChannel][partitionID].currentPlanID
+	return psm.partitionStatsInfos[vChannel][partitionID].currentVersion
 }

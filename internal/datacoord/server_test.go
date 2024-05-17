@@ -1453,7 +1453,7 @@ func TestGetQueryVChanPositions_PartitionStats(t *testing.T) {
 	svr.meta.partitionStatsMeta.partitionStatsInfos = map[string]map[int64]*partitionStatsInfo{
 		vchannel: {
 			partitionID: {
-				currentPlanID: version,
+				currentVersion: version,
 				infos: map[int64]*datapb.PartitionStatsInfo{
 					version: {Version: version},
 				},

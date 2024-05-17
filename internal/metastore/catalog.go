@@ -162,9 +162,9 @@ type DataCoordCatalog interface {
 	SavePartitionStatsInfo(ctx context.Context, info *datapb.PartitionStatsInfo) error
 	DropPartitionStatsInfo(ctx context.Context, info *datapb.PartitionStatsInfo) error
 
-	SavePartitionStatsCurrentPlanID(ctx context.Context, collID, partID int64, vChannel string, currentVersion int64) error
-	GetPartitionStatsCurrentPlanID(ctx context.Context, collID, partID int64, vChannel string) (int64, error)
-	DropPartitionStatsCurrentPlanID(ctx context.Context, collID, partID int64, vChannel string) error
+	SaveCurrentPartitionStatsVersion(ctx context.Context, collID, partID int64, vChannel string, currentVersion int64) error
+	GetCurrentPartitionStatsVersion(ctx context.Context, collID, partID int64, vChannel string) (int64, error)
+	DropCurrentPartitionStatsVersion(ctx context.Context, collID, partID int64, vChannel string) error
 }
 
 type QueryCoordCatalog interface {

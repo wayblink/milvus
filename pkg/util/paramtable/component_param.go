@@ -3580,6 +3580,7 @@ type dataNodeConfig struct {
 
 	// clustering compaction
 	ClusteringCompactionMemoryBufferRatio ParamItem `refreshable:"true"`
+	ClusteringCompactionWorkerPoolSize    ParamItem `refreshable:"true"`
 }
 
 func (p *dataNodeConfig) init(base *BaseTable) {
@@ -3897,13 +3898,23 @@ if this parameter <= 0, will set it as 10`,
 
 	p.ClusteringCompactionMemoryBufferRatio = ParamItem{
 		Key:          "datanode.clusteringCompaction.memoryBufferRatio",
-		Version:      "2.4.0",
+		Version:      "2.4.2",
 		Doc:          "The ratio of memory buffer of clustering compaction. Data larger than threshold will be spilled to storage.",
 		DefaultValue: "0.1",
 		PanicIfEmpty: false,
 		Export:       true,
 	}
 	p.ClusteringCompactionMemoryBufferRatio.Init(base.mgr)
+
+	p.ClusteringCompactionWorkerPoolSize = ParamItem{
+		Key:          "datanode.clusteringCompaction.cpu",
+		Version:      "2.4.2",
+		Doc:          "worker pool size for one clustering compaction job.",
+		DefaultValue: "1",
+		PanicIfEmpty: false,
+		Export:       true,
+	}
+	p.ClusteringCompactionWorkerPoolSize.Init(base.mgr)
 }
 
 // /////////////////////////////////////////////////////////////////////////////

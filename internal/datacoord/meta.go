@@ -1618,13 +1618,16 @@ func (m *meta) GcConfirm(ctx context.Context, collectionID, partitionID UniqueID
 }
 
 func (m *meta) GetCompactableSegmentGroupByCollection() map[int64][]*SegmentInfo {
-	allSegs := m.SelectSegments(SegmentFilterFunc(func(segment *SegmentInfo) bool {
+	return m.GetSegmentGroupByCollection(SegmentFilterFunc(func(segment *SegmentInfo) bool {
 		return isSegmentHealthy(segment) &&
 			isFlush(segment) && // sealed segment
 			!segment.isCompacting && // not compacting now
 			!segment.GetIsImporting() // not importing now
 	}))
+}
 
+func (m *meta) GetSegmentGroupByCollection(selectFunc SegmentFilterFunc) map[int64][]*SegmentInfo {
+	allSegs := m.SelectSegments(selectFunc)
 	ret := make(map[int64][]*SegmentInfo)
 	for _, seg := range allSegs {
 		if _, ok := ret[seg.CollectionID]; !ok {

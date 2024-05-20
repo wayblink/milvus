@@ -1199,18 +1199,13 @@ func getCompactionMergeInfo(task CompactionTask) *milvuspb.CompactionMergeInfo {
 }
 
 func getCompactionState(tasks []CompactionTask) (state commonpb.CompactionState, executingCnt, completedCnt, failedCnt, timeoutCnt int) {
-	switch tasks[0].GetType() {
-	case datapb.CompactionType_ClusteringCompaction:
-		summary := summaryClusteringCompactionState(tasks)
-		executingCnt = summary.executingCnt + summary.pipeliningCnt + summary.completedCnt + summary.initCnt + summary.analyzingCnt + summary.analyzedCnt + summary.indexingCnt
-		completedCnt = summary.indexedCnt
-		timeoutCnt = summary.timeoutCnt
-		failedCnt = summary.failedCnt
-		state = summary.state
-		return
-	default:
-		return summaryCompactionState(tasks)
-	}
+	summary := summaryCompactionState(tasks)
+	executingCnt = summary.executingCnt + summary.pipeliningCnt + summary.completedCnt + summary.initCnt + summary.analyzingCnt + summary.analyzedCnt + summary.indexingCnt
+	completedCnt = summary.indexedCnt
+	timeoutCnt = summary.timeoutCnt
+	failedCnt = summary.failedCnt
+	state = summary.state
+	return
 }
 
 // WatchChannels notifies DataCoord to watch vchannels of a collection.

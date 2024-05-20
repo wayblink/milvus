@@ -46,7 +46,8 @@ import (
 // TODO this num should be determined by resources of datanode, for now, we set to a fixed value for simple
 // TODO we should split compaction into different priorities, small compaction helps to merge segment, large compaction helps to handle delta and expiration of large segments
 const (
-	tsTimeout = uint64(1)
+	tsTimeout         = uint64(1)
+	taskMaxRetryTimes = int32(3)
 )
 
 type compactionPlanContext interface {
@@ -439,7 +440,7 @@ func (c *compactionPlanHandler) updateCompaction(ts Timestamp) error {
 			err := clusterTask.ProcessTask(c)
 			if err != nil {
 				log.Warn("fail in process task", zap.Error(err))
-				if merr.IsRetryableErr(err) && clusterTask.RetryTimes < TaskMaxRetryTimes {
+				if merr.IsRetryableErr(err) && clusterTask.RetryTimes < taskMaxRetryTimes {
 					// retry in next loop
 					clusterTask.RetryTimes = clusterTask.RetryTimes + 1
 				} else {
@@ -680,27 +681,90 @@ func (c *compactionPlanHandler) collectionIsClusteringCompacting(collectionID Un
 	return false, 0
 }
 
-func summaryCompactionState(tasks []CompactionTask) (state commonpb.CompactionState, executingCnt, completedCnt, failedCnt, timeoutCnt int) {
-	for _, t := range tasks {
-		switch t.GetState() {
-		case datapb.CompactionTaskState_pipelining:
-			executingCnt++
+type CompactionTriggerSummary struct {
+	state         commonpb.CompactionState
+	executingCnt  int
+	pipeliningCnt int
+	completedCnt  int
+	failedCnt     int
+	timeoutCnt    int
+	initCnt       int
+	analyzingCnt  int
+	analyzedCnt   int
+	indexingCnt   int
+	indexedCnt    int
+	cleanedCnt    int
+}
+
+func summaryCompactionState(compactionTasks []CompactionTask) CompactionTriggerSummary {
+	var state commonpb.CompactionState
+	var executingCnt, pipeliningCnt, completedCnt, failedCnt, timeoutCnt, initCnt, analyzingCnt, analyzedCnt, indexingCnt, indexedCnt, cleanedCnt int
+	for _, task := range compactionTasks {
+		if task == nil {
+			continue
+		}
+		switch task.GetState() {
 		case datapb.CompactionTaskState_executing:
 			executingCnt++
+		case datapb.CompactionTaskState_pipelining:
+			pipeliningCnt++
 		case datapb.CompactionTaskState_completed:
 			completedCnt++
 		case datapb.CompactionTaskState_failed:
 			failedCnt++
 		case datapb.CompactionTaskState_timeout:
 			timeoutCnt++
+		case datapb.CompactionTaskState_init:
+			initCnt++
+		case datapb.CompactionTaskState_analyzing:
+			analyzingCnt++
+		case datapb.CompactionTaskState_analyzed:
+			analyzedCnt++
+		case datapb.CompactionTaskState_indexing:
+			indexingCnt++
+		case datapb.CompactionTaskState_indexed:
+			indexedCnt++
+		case datapb.CompactionTaskState_cleaned:
+			cleanedCnt++
+		default:
 		}
 	}
-	if executingCnt != 0 {
+
+	// fail and timeout task must be cleaned first before mark the job complete
+	if executingCnt+pipeliningCnt+completedCnt+initCnt+analyzingCnt+analyzedCnt+indexingCnt+failedCnt+timeoutCnt != 0 {
 		state = commonpb.CompactionState_Executing
 	} else {
 		state = commonpb.CompactionState_Completed
 	}
-	return
+
+	log.Debug("compaction states",
+		zap.Int64("triggerID", compactionTasks[0].GetTriggerID()),
+		zap.String("state", state.String()),
+		zap.Int("executingCnt", executingCnt),
+		zap.Int("pipeliningCnt", pipeliningCnt),
+		zap.Int("completedCnt", completedCnt),
+		zap.Int("failedCnt", failedCnt),
+		zap.Int("timeoutCnt", timeoutCnt),
+		zap.Int("initCnt", initCnt),
+		zap.Int("analyzingCnt", analyzingCnt),
+		zap.Int("analyzedCnt", analyzedCnt),
+		zap.Int("indexingCnt", indexingCnt),
+		zap.Int("indexedCnt", indexedCnt),
+		zap.Int("cleanedCnt", cleanedCnt))
+	return CompactionTriggerSummary{
+		state:         state,
+		executingCnt:  executingCnt,
+		pipeliningCnt: pipeliningCnt,
+		completedCnt:  completedCnt,
+		failedCnt:     failedCnt,
+		timeoutCnt:    timeoutCnt,
+		initCnt:       initCnt,
+		analyzingCnt:  analyzingCnt,
+		analyzedCnt:   analyzedCnt,
+		indexingCnt:   indexingCnt,
+		indexedCnt:    indexedCnt,
+		cleanedCnt:    cleanedCnt,
+	}
 }
 
 // 0.5*min(8, NumCPU/2)

@@ -24,100 +24,10 @@ import (
 	"github.com/samber/lo"
 	"go.uber.org/zap"
 
-	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
-	"github.com/milvus-io/milvus/internal/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/util/tsoutil"
 )
-
-const TaskMaxRetryTimes int32 = 3
-
-type ClusteringCompactionSummary struct {
-	state         commonpb.CompactionState
-	executingCnt  int
-	pipeliningCnt int
-	completedCnt  int
-	failedCnt     int
-	timeoutCnt    int
-	initCnt       int
-	analyzingCnt  int
-	analyzedCnt   int
-	indexingCnt   int
-	indexedCnt    int
-	cleanedCnt    int
-}
-
-func summaryClusteringCompactionState(compactionTasks []CompactionTask) ClusteringCompactionSummary {
-	var state commonpb.CompactionState
-	var executingCnt, pipeliningCnt, completedCnt, failedCnt, timeoutCnt, initCnt, analyzingCnt, analyzedCnt, indexingCnt, indexedCnt, cleanedCnt int
-	for _, task := range compactionTasks {
-		if task == nil {
-			continue
-		}
-		switch task.GetState() {
-		case datapb.CompactionTaskState_executing:
-			executingCnt++
-		case datapb.CompactionTaskState_pipelining:
-			pipeliningCnt++
-		case datapb.CompactionTaskState_completed:
-			completedCnt++
-		case datapb.CompactionTaskState_failed:
-			failedCnt++
-		case datapb.CompactionTaskState_timeout:
-			timeoutCnt++
-		case datapb.CompactionTaskState_init:
-			initCnt++
-		case datapb.CompactionTaskState_analyzing:
-			analyzingCnt++
-		case datapb.CompactionTaskState_analyzed:
-			analyzedCnt++
-		case datapb.CompactionTaskState_indexing:
-			indexingCnt++
-		case datapb.CompactionTaskState_indexed:
-			indexedCnt++
-		case datapb.CompactionTaskState_cleaned:
-			cleanedCnt++
-		default:
-		}
-	}
-
-	// fail and timeout task must be cleaned first before mark the job complete
-	if executingCnt+pipeliningCnt+completedCnt+initCnt+analyzingCnt+analyzedCnt+indexingCnt+failedCnt+timeoutCnt != 0 {
-		state = commonpb.CompactionState_Executing
-	} else {
-		state = commonpb.CompactionState_Completed
-	}
-
-	log.Debug("compaction states",
-		zap.Int64("triggerID", compactionTasks[0].GetTriggerID()),
-		zap.String("state", state.String()),
-		zap.Int("executingCnt", executingCnt),
-		zap.Int("pipeliningCnt", pipeliningCnt),
-		zap.Int("completedCnt", completedCnt),
-		zap.Int("failedCnt", failedCnt),
-		zap.Int("timeoutCnt", timeoutCnt),
-		zap.Int("initCnt", initCnt),
-		zap.Int("analyzingCnt", analyzingCnt),
-		zap.Int("analyzedCnt", analyzedCnt),
-		zap.Int("indexingCnt", indexingCnt),
-		zap.Int("indexedCnt", indexedCnt),
-		zap.Int("cleanedCnt", cleanedCnt))
-	return ClusteringCompactionSummary{
-		state:         state,
-		executingCnt:  executingCnt,
-		pipeliningCnt: pipeliningCnt,
-		completedCnt:  completedCnt,
-		failedCnt:     failedCnt,
-		timeoutCnt:    timeoutCnt,
-		initCnt:       initCnt,
-		analyzingCnt:  analyzingCnt,
-		analyzedCnt:   analyzedCnt,
-		indexingCnt:   indexingCnt,
-		indexedCnt:    indexedCnt,
-		cleanedCnt:    cleanedCnt,
-	}
-}
 
 func fillClusteringCompactionTask(segments []*SegmentInfo) (segmentIDs []int64, totalRows, maxSegmentRows, preferSegmentRows int64) {
 	for _, s := range segments {

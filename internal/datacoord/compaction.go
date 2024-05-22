@@ -675,7 +675,7 @@ func (c *compactionPlanHandler) collectionIsClusteringCompacting(collectionID Un
 				CompactionTask: task,
 			})
 		}
-		summary := summaryClusteringCompactionState(cTasks)
+		summary := summaryCompactionState(cTasks)
 		return summary.state == commonpb.CompactionState_Executing, tasks[0].TriggerID
 	}
 	return false, 0

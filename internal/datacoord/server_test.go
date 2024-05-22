@@ -2277,7 +2277,7 @@ func TestGetCompactionState(t *testing.T) {
 
 		mockHandler := NewMockCompactionPlanContext(t)
 		mockHandler.EXPECT().getCompactionTasksBySignalID(mock.Anything).Return(
-			[]*defaultCompactionTask{{state: completed}})
+			[]*mixCompactionTask{{state: completed}})
 		svr.compactionHandler = mockHandler
 
 		resp, err := svr.GetCompactionState(context.Background(), &milvuspb.GetCompactionStateRequest{})
@@ -2291,7 +2291,7 @@ func TestGetCompactionState(t *testing.T) {
 
 		mockHandler := NewMockCompactionPlanContext(t)
 		mockHandler.EXPECT().getCompactionTasksBySignalID(mock.Anything).Return(
-			[]*defaultCompactionTask{
+			[]*mixCompactionTask{
 				{state: executing},
 				{state: executing},
 				{state: executing},
@@ -2341,7 +2341,7 @@ func TestManualCompaction(t *testing.T) {
 
 		mockHandler := NewMockCompactionPlanContext(t)
 		mockHandler.EXPECT().getCompactionTasksBySignalID(mock.Anything).Return(
-			[]*defaultCompactionTask{
+			[]*mixCompactionTask{
 				{
 					triggerInfo: &compactionSignal{id: 1},
 					state:       executing,
@@ -2402,7 +2402,7 @@ func TestGetCompactionStateWithPlans(t *testing.T) {
 
 		mockHandler := NewMockCompactionPlanContext(t)
 		mockHandler.EXPECT().getCompactionTasksBySignalID(mock.Anything).Return(
-			[]*defaultCompactionTask{
+			[]*mixCompactionTask{
 				{
 					triggerInfo: &compactionSignal{id: 1},
 					state:       executing,

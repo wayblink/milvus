@@ -24,7 +24,7 @@ type Scheduler interface {
 	// Start()
 	// Stop()
 	// IsFull() bool
-	// GetCompactionTasksBySignalID(signalID int64) []defaultCompactionTask
+	// GetCompactionTasksBySignalID(signalID int64) []mixCompactionTask
 }
 
 type CompactionScheduler struct {

@@ -199,7 +199,7 @@ func (m *CompactionTriggerManager) SubmitL0ViewToScheduler(ctx context.Context, 
 		TimeoutInSeconds: Params.DataCoordCfg.CompactionTimeoutInSeconds.GetAsInt32(),
 	}
 
-	m.compactionHandler.enqueueCompaction(&defaultCompactionTask{
+	m.compactionHandler.enqueueCompaction(&l0CompactionTask{
 		CompactionTask: task,
 	})
 	log.Info("Finish to submit a LevelZeroCompaction plan",

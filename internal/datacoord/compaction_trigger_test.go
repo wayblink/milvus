@@ -63,7 +63,7 @@ func (h *spyCompactionHandler) completeCompaction(result *datapb.CompactionPlanR
 }
 
 // getCompaction return compaction task. If planId does not exist, return nil.
-func (h *spyCompactionHandler) getCompaction(planID int64) *defaultCompactionTask {
+func (h *spyCompactionHandler) getCompaction(planID int64) *mixCompactionTask {
 	panic("not implemented") // TODO: Implement
 }
 
@@ -78,7 +78,7 @@ func (h *spyCompactionHandler) isFull() bool {
 }
 
 // get compaction tasks by signal id
-func (h *spyCompactionHandler) getCompactionTasksBySignalID(signalID int64) []*defaultCompactionTask {
+func (h *spyCompactionHandler) getCompactionTasksBySignalID(signalID int64) []*mixCompactionTask {
 	panic("not implemented") // TODO: Implement
 }
 

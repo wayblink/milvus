@@ -75,7 +75,7 @@ func (task *clusteringCompactionTask) processInitTask(handler *compactionPlanHan
 }
 
 func (task *clusteringCompactionTask) processExecutingTask(handler *compactionPlanHandler) error {
-	//defaultCompactionTask, exist := handler.plans[task.GetPlanID()]
+	//mixCompactionTask, exist := handler.plans[task.GetPlanID()]
 	//if !exist {
 	//	// if one compaction task is lost, mark it as failed, and the clustering compaction will be marked failed as well
 	//	log.Warn("compaction task lost", zap.Int64("planID", task.GetPlanID()))

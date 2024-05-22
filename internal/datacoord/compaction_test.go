@@ -62,7 +62,7 @@ func (s *CompactionPlanHandlerSuite) TestRemoveTasksByChannel() {
 
 	var ch string = "ch1"
 	handler.mu.Lock()
-	handler.plans[1] = &defaultCompactionTask{
+	handler.plans[1] = &mixCompactionTask{
 		plan:        &datapb.CompactionPlan{PlanID: 19530},
 		dataNodeID:  1,
 		triggerInfo: &compactionSignal{channel: ch},
@@ -103,7 +103,7 @@ func (s *CompactionPlanHandlerSuite) TestClean() {
 	cleanTime := tsoutil.ComposeTSByTime(time.Now().Add(-2*time.Hour), 0)
 	c := &compactionPlanHandler{
 		allocator: s.mockAlloc,
-		plans: map[int64]*defaultCompactionTask{
+		plans: map[int64]*mixCompactionTask{
 			1: {
 				state: executing,
 			},
@@ -251,7 +251,7 @@ func (s *CompactionPlanHandlerSuite) TestRefreshL0Plan() {
 			Type: datapb.CompactionType_Level0DeleteCompaction,
 		}
 
-		task := &defaultCompactionTask{
+		task := &mixCompactionTask{
 			triggerInfo: &compactionSignal{id: 19530, collectionID: 1, partitionID: 10},
 			state:       executing,
 			plan:        plan,
@@ -286,7 +286,7 @@ func (s *CompactionPlanHandlerSuite) TestRefreshL0Plan() {
 			Type: datapb.CompactionType_Level0DeleteCompaction,
 		}
 
-		task := &defaultCompactionTask{
+		task := &mixCompactionTask{
 			triggerInfo: &compactionSignal{id: 19531, collectionID: 1, partitionID: 10},
 			state:       executing,
 			plan:        plan,
@@ -330,7 +330,7 @@ func (s *CompactionPlanHandlerSuite) TestRefreshL0Plan() {
 			Type: datapb.CompactionType_Level0DeleteCompaction,
 		}
 
-		task := &defaultCompactionTask{
+		task := &mixCompactionTask{
 			triggerInfo: &compactionSignal{id: 19530, collectionID: 1, partitionID: 10},
 			state:       executing,
 			plan:        plan,
@@ -375,7 +375,7 @@ func (s *CompactionPlanHandlerSuite) TestRefreshPlanMixCompaction() {
 			Type: datapb.CompactionType_MixCompaction,
 		}
 
-		task := &defaultCompactionTask{
+		task := &mixCompactionTask{
 			triggerInfo: &compactionSignal{id: 19530, collectionID: 1, partitionID: 10},
 			state:       executing,
 			plan:        plan,
@@ -416,7 +416,7 @@ func (s *CompactionPlanHandlerSuite) TestRefreshPlanMixCompaction() {
 			Type: datapb.CompactionType_MixCompaction,
 		}
 
-		task := &defaultCompactionTask{
+		task := &mixCompactionTask{
 			triggerInfo: &compactionSignal{id: 19530, collectionID: 1, partitionID: 10},
 			state:       executing,
 			plan:        plan,
@@ -459,7 +459,7 @@ func (s *CompactionPlanHandlerSuite) TestExecCompactionPlan() {
 		s.Run(test.description, func() {
 			plan.Channel = test.channel
 
-			err := handler.enqueueCompaction(&defaultCompactionTask{
+			err := handler.enqueueCompaction(&mixCompactionTask{
 				plan: plan,
 			})
 			if test.hasError {
@@ -500,7 +500,7 @@ func (s *CompactionPlanHandlerSuite) TestHandleMergeCompactionResult() {
 		s.mockSessMgr.EXPECT().SyncSegments(mock.Anything, mock.Anything).Return(nil).Maybe()
 
 		handler := newCompactionPlanHandler(nil, s.mockSessMgr, s.mockCm, s.mockMeta, s.mockAlloc, nil)
-		handler.plans[plan.PlanID] = &defaultCompactionTask{dataNodeID: 111, plan: plan}
+		handler.plans[plan.PlanID] = &mixCompactionTask{dataNodeID: 111, plan: plan}
 
 		compactionResult := &datapb.CompactionPlanResult{
 			PlanID: plan.PlanID,
@@ -520,7 +520,7 @@ func (s *CompactionPlanHandlerSuite) TestHandleMergeCompactionResult() {
 			nil, nil, errors.New("mock error")).Once()
 
 		handler := newCompactionPlanHandler(nil, s.mockSessMgr, s.mockCm, s.mockMeta, s.mockAlloc, nil)
-		handler.plans[plan.PlanID] = &defaultCompactionTask{dataNodeID: 111, plan: plan}
+		handler.plans[plan.PlanID] = &mixCompactionTask{dataNodeID: 111, plan: plan}
 		compactionResult := &datapb.CompactionPlanResult{
 			PlanID: plan.PlanID,
 			Segments: []*datapb.CompactionSegment{
@@ -542,7 +542,7 @@ func (s *CompactionPlanHandlerSuite) TestHandleMergeCompactionResult() {
 		s.mockSessMgr.EXPECT().SyncSegments(mock.Anything, mock.Anything).Return(errors.New("mock error")).Once()
 
 		handler := newCompactionPlanHandler(nil, s.mockSessMgr, s.mockCm, s.mockMeta, s.mockAlloc, nil)
-		handler.plans[plan.PlanID] = &defaultCompactionTask{dataNodeID: 111, plan: plan}
+		handler.plans[plan.PlanID] = &mixCompactionTask{dataNodeID: 111, plan: plan}
 		compactionResult := &datapb.CompactionPlanResult{
 			PlanID: plan.PlanID,
 			Segments: []*datapb.CompactionSegment{
@@ -564,7 +564,7 @@ func (s *CompactionPlanHandlerSuite) TestCompleteCompaction() {
 
 	s.Run("test completed compaction task", func() {
 		c := &compactionPlanHandler{
-			plans: map[int64]*defaultCompactionTask{1: {state: completed}},
+			plans: map[int64]*mixCompactionTask{1: {state: completed}},
 		}
 		err := c.completeCompaction(&datapb.CompactionPlanResult{PlanID: 1})
 		s.Error(err)
@@ -615,14 +615,14 @@ func (s *CompactionPlanHandlerSuite) TestCompleteCompaction() {
 			Type: datapb.CompactionType_MixCompaction,
 		}
 
-		task := &defaultCompactionTask{
+		task := &mixCompactionTask{
 			triggerInfo: &compactionSignal{id: 1},
 			state:       executing,
 			plan:        plan,
 			dataNodeID:  dataNodeID,
 		}
 
-		plans := map[int64]*defaultCompactionTask{1: task}
+		plans := map[int64]*mixCompactionTask{1: task}
 
 		compactionResult := datapb.CompactionPlanResult{
 			PlanID: 1,
@@ -650,7 +650,7 @@ func (s *CompactionPlanHandlerSuite) TestCompleteCompaction() {
 }
 
 func (s *CompactionPlanHandlerSuite) TestGetCompactionTask() {
-	inPlans := map[int64]*defaultCompactionTask{
+	inPlans := map[int64]*mixCompactionTask{
 		1: {
 			triggerInfo: &compactionSignal{id: 1},
 			plan:        &datapb.CompactionPlan{PlanID: 1},
@@ -691,7 +691,7 @@ func (s *CompactionPlanHandlerSuite) TestUpdateCompaction() {
 		6: {A: 111, B: &datapb.CompactionPlanResult{Channel: "ch-2", PlanID: 5, State: commonpb.CompactionState_Completed, Segments: []*datapb.CompactionSegment{{PlanID: 6}}}},
 	}, nil)
 
-	inPlans := map[int64]*defaultCompactionTask{
+	inPlans := map[int64]*mixCompactionTask{
 		1: {
 			triggerInfo: &compactionSignal{},
 			plan:        &datapb.CompactionPlan{PlanID: 1, Channel: "ch-1"},

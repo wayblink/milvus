@@ -446,7 +446,7 @@ func (t *compactionTrigger) handleGlobalSignal(signal *compactionSignal) error {
 			start := time.Now()
 			planID := currentID
 			currentID++
-			task := &defaultCompactionTask{
+			task := &mixCompactionTask{
 				CompactionTask: &datapb.CompactionTask{
 					PlanID:           planID,
 					TriggerID:        signal.id,
@@ -564,7 +564,7 @@ func (t *compactionTrigger) handleSignal(signal *compactionSignal) {
 		start := time.Now()
 		planID := currentID
 		currentID++
-		if err := t.compactionHandler.enqueueCompaction(&defaultCompactionTask{
+		if err := t.compactionHandler.enqueueCompaction(&mixCompactionTask{
 			CompactionTask: &datapb.CompactionTask{
 				PlanID:           planID,
 				TriggerID:        signal.id,

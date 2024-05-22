@@ -3,6 +3,7 @@ package datacoord
 import (
 	"context"
 	"fmt"
+	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/proto/datapb"
 	"github.com/milvus-io/milvus/internal/util/clustering"
@@ -93,7 +94,7 @@ func (policy *clusteringCompactionPolicy) triggerOneCollection(ctx context.Conte
 		ts = tsNew
 	}
 
-	compacting, triggerID := policy.compactionHandler.collectionIsClusteringCompacting(collection.ID)
+	compacting, triggerID := policy.collectionIsClusteringCompacting(collection.ID)
 	if compacting {
 		log.Info("collection is clustering compacting", zap.Int64("collectionID", collection.ID), zap.Int64("triggerID", triggerID))
 		return nil, triggerID, nil
@@ -155,6 +156,31 @@ func (policy *clusteringCompactionPolicy) triggerOneCollection(ctx context.Conte
 	}
 
 	return views, newTriggerID, nil
+}
+
+func (policy *clusteringCompactionPolicy) collectionIsClusteringCompacting(collectionID UniqueID) (bool, int64) {
+	triggers := policy.meta.GetClusteringCompactionTasksByCollection(collectionID)
+	if len(triggers) == 0 {
+		return false, 0
+	}
+	var latestTriggerID int64 = 0
+	for triggerID := range triggers {
+		if latestTriggerID > triggerID {
+			latestTriggerID = triggerID
+		}
+	}
+	tasks := triggers[latestTriggerID]
+	if len(tasks) > 0 {
+		cTasks := make([]CompactionTask, 0)
+		for _, task := range tasks {
+			cTasks = append(cTasks, &clusteringCompactionTask{
+				CompactionTask: task,
+			})
+		}
+		summary := summaryCompactionState(cTasks)
+		return summary.state == commonpb.CompactionState_Executing, tasks[0].TriggerID
+	}
+	return false, 0
 }
 
 func fillClusteringCompactionTask(segments []*SegmentInfo) (segmentIDs []int64, totalRows, maxSegmentRows, preferSegmentRows int64) {

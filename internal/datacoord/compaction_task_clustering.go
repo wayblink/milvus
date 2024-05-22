@@ -19,12 +19,13 @@ package datacoord
 import (
 	"context"
 	"fmt"
+	"path"
+
 	"github.com/cockroachdb/errors"
 	"github.com/milvus-io/milvus/pkg/util/metautil"
 	"github.com/samber/lo"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
-	"path"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/internal/proto/datapb"
@@ -184,6 +185,11 @@ func (task *clusteringCompactionTask) processIndexedTask(handler *compactionPlan
 	err = handler.meta.UpdateSegmentsInfo(operators...)
 	if err != nil {
 		return merr.WrapErrClusteringCompactionMetaError("UpdateSegmentPartitionStatsVersion", err)
+	}
+
+	err = handler.meta.(*meta).partitionStatsMeta.SaveCurrentPartitionStatsVersion(task.GetCollectionID(), task.GetPartitionID(), task.GetChannel(), task.GetPlanID())
+	if err != nil {
+		return err
 	}
 
 	task.State = datapb.CompactionTaskState_indexed

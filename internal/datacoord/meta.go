@@ -60,9 +60,6 @@ type CompactionMeta interface {
 	GetClusteringCompactionTasksByCollection(collectionID int64) map[int64][]*datapb.CompactionTask
 	GetClusteringCompactionTasksByTriggerID(triggerID int64) []*datapb.CompactionTask
 
-	//SavePartitionStatsInfo(info *datapb.PartitionStatsInfo) error
-	//DropPartitionStatsInfo(info *datapb.PartitionStatsInfo) error
-
 	CompleteCompactionMutation(plan *datapb.CompactionPlan, result *datapb.CompactionPlanResult) ([]*SegmentInfo, *segMetricMutation, error)
 }
 

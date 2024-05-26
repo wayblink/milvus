@@ -17,6 +17,7 @@ add_library(milvus_proto STATIC
     plan.pb.cc
     schema.pb.cc
     segcore.pb.cc
+    clustering.pb.cc
     )
 message(STATUS "milvus proto sources: " ${milvus_proto_srcs})
 

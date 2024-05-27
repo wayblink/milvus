@@ -333,6 +333,17 @@ func (it *indexBuildTask) Prepare(ctx context.Context) error {
 
 	it.statistic.IndexParams = it.req.GetIndexParams()
 	it.statistic.Dim = it.req.GetDim()
+	if it.statistic.Dim == 0 {
+		// ugly codes to get dimension
+		if dimStr, ok := typeParams[common.DimKey]; ok {
+			var err error
+			it.statistic.Dim, err = strconv.ParseInt(dimStr, 10, 64)
+			if err != nil {
+				log.Ctx(ctx).Error("parse dimesion failed", zap.Error(err))
+				// ignore error
+			}
+		}
+	}
 
 	log.Ctx(ctx).Info("Successfully prepare indexBuildTask", zap.Int64("buildID", it.BuildID),
 		zap.Int64("Collection", it.collectionID), zap.Int64("SegmentID", it.segmentID))

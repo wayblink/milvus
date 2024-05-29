@@ -139,9 +139,7 @@ func (h *ServerHandler) GetQueryVChanPositions(channel RWChannel, partitionIDs .
 			zap.Int("numOfSegments", len(segments)),
 			zap.Int("indexed segment", len(indexedSegments)),
 		)
-		var (
-			unIndexedIDs = make(typeutil.UniqueSet)
-		)
+		unIndexedIDs := make(typeutil.UniqueSet)
 
 		for _, s := range segments {
 			if s.GetStartPosition() == nil && s.GetDmlPosition() == nil {

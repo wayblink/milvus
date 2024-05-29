@@ -6,7 +6,6 @@ import (
 	"github.com/milvus-io/milvus/internal/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/util/merr"
-	"github.com/milvus-io/milvus/pkg/util/tsoutil"
 	"github.com/samber/lo"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
@@ -88,7 +87,10 @@ func (task *l0CompactionTask) processExecutingTask(handler *compactionPlanHandle
 		handler.plans[task.GetPlanID()] = task.ShadowClone(setState(datapb.CompactionTaskState_completed), setResult(planResult), cleanLogPath(), endSpan())
 		handler.scheduler.Finish(task.GetNodeID(), task)
 	case commonpb.CompactionState_Executing:
-		ts := tsoutil.GetCurrentTime()
+		ts, err := handler.GetCurrentTS()
+		if err != nil {
+			return err
+		}
 		if isTimeout(ts, task.GetStartTime(), task.GetTimeoutInSeconds()) {
 			log.Warn("compaction timeout",
 				zap.Int32("timeout in seconds", task.GetTimeoutInSeconds()),

@@ -265,9 +265,6 @@ func (c *compactionPlanHandler) updateTask(planID int64, opts ...compactionTaskO
 }
 
 func (c *compactionPlanHandler) enqueueCompaction(task CompactionTask) error {
-	// lock to protect setSegmentsCompacting
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	log := log.With(zap.Int64("planID", task.GetPlanID()), zap.Int64("collectionID", task.GetCollectionID()), zap.String("type", task.GetType().String()))
 	// c.setSegmentsCompacting(task, true)
 	// todo optimize @wayblink
@@ -283,7 +280,9 @@ func (c *compactionPlanHandler) enqueueCompaction(task CompactionTask) error {
 
 	_, span := otel.Tracer(typeutil.DataCoordRole).Start(context.Background(), fmt.Sprintf("Compaction-%s", task.GetType()))
 	task.SetSpan(span)
+	c.mu.Lock()
 	c.plans[task.GetPlanID()] = task
+	c.mu.Unlock()
 	log.Info("Compaction plan enqueue")
 	return nil
 }

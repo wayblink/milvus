@@ -18,9 +18,11 @@ package datacoord
 
 import (
 	"go.opentelemetry.io/otel/trace"
+	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
 	"github.com/milvus-io/milvus/internal/proto/datapb"
+	"github.com/milvus-io/milvus/pkg/log"
 )
 
 type CompactionTask interface {
@@ -32,6 +34,7 @@ type CompactionTask interface {
 	GetState() datapb.CompactionTaskState
 	GetChannel() string
 	GetLabel() string
+
 	GetType() datapb.CompactionType
 	GetCollectionID() int64
 	GetPartitionID() int64
@@ -42,15 +45,13 @@ type CompactionTask interface {
 
 	GetPlan() *datapb.CompactionPlan
 	GetResult() *datapb.CompactionPlanResult
+
 	GetNodeID() UniqueID
 	GetSpan() trace.Span
 	ShadowClone(opts ...compactionTaskOpt) *datapb.CompactionTask
 	SetNodeID(UniqueID) error
-	// SetState(datapb.CompactionTaskState)
 	SetTask(*datapb.CompactionTask)
 	SetSpan(trace.Span)
-	// SetPlan(*datapb.CompactionPlan)
-	// SetStartTime(startTime int64)
 	SetResult(*datapb.CompactionPlanResult)
 	EndSpan()
 	CleanLogPath()
@@ -92,6 +93,7 @@ func setResultSegments(segments []int64) compactionTaskOpt {
 
 func setState(state datapb.CompactionTaskState) compactionTaskOpt {
 	return func(task *datapb.CompactionTask) {
+		log.Info("update task state", zap.String("before", task.State.String()), zap.String("after", state.String()))
 		task.State = state
 	}
 }

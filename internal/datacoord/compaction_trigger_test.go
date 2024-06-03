@@ -2509,16 +2509,14 @@ func (s *CompactionTriggerSuite) TestHandleGlobalSignal() {
 	s.Run("collectionAutoCompactionDisabled_force", func() {
 		defer s.SetupTest()
 		tr := s.tr
-		s.compactionHandler.EXPECT().isFull().Return(false)
 		s.allocator.EXPECT().allocTimestamp(mock.Anything).Return(10000, nil)
-		s.allocator.EXPECT().allocID(mock.Anything).Return(20000, nil)
+		s.allocator.EXPECT().allocN(mock.Anything).Return(20000, 20010, nil)
 		s.handler.EXPECT().GetCollection(mock.Anything, int64(100)).Return(&collectionInfo{
 			Schema: schema,
 			Properties: map[string]string{
 				common.CollectionAutoCompactionKey: "false",
 			},
 		}, nil)
-		s.compactionHandler.EXPECT().enqueueCompaction(mock.Anything).Return(nil)
 		tr.handleGlobalSignal(&compactionSignal{
 			segmentID:    1,
 			collectionID: s.collectionID,

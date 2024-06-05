@@ -198,7 +198,7 @@ func (t *clusteringCompactionTask) processExecuting() error {
 	}
 	log.Info("compaction result", zap.Any("result", result.String()))
 	switch result.GetState() {
-	case commonpb.CompactionState_Completed:
+	case datapb.CompactionTaskState_completed:
 		t.result = result
 		result := t.result
 		if len(result.GetSegments()) == 0 {
@@ -221,7 +221,7 @@ func (t *clusteringCompactionTask) processExecuting() error {
 			return err
 		}
 		return t.processMetaSaved()
-	case commonpb.CompactionState_Executing:
+	case datapb.CompactionTaskState_executing:
 		if t.checkTimeout() {
 			err := t.updateAndSaveTaskMeta(setState(datapb.CompactionTaskState_timeout))
 			if err == nil {
@@ -229,6 +229,8 @@ func (t *clusteringCompactionTask) processExecuting() error {
 			}
 		}
 		return nil
+	case datapb.CompactionTaskState_failed:
+		return t.updateAndSaveTaskMeta(setState(datapb.CompactionTaskState_failed))
 	}
 	return nil
 }

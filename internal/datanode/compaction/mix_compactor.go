@@ -27,7 +27,6 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.uber.org/zap"
 
-	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/internal/datanode/allocator"
 	"github.com/milvus-io/milvus/internal/datanode/io"
 	"github.com/milvus-io/milvus/internal/proto/datapb"
@@ -359,7 +358,7 @@ func (t *mixCompactionTask) Compact() (*datapb.CompactionPlanResult, error) {
 	metrics.DataNodeCompactionLatencyInQueue.WithLabelValues(fmt.Sprint(paramtable.GetNodeID())).Observe(float64(durInQueue.Milliseconds()))
 
 	planResult := &datapb.CompactionPlanResult{
-		State:    commonpb.CompactionState_Completed,
+		State:    datapb.CompactionTaskState_completed,
 		PlanID:   t.GetPlanID(),
 		Channel:  t.GetChannelName(),
 		Segments: []*datapb.CompactionSegment{compactToSeg},

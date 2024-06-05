@@ -33,7 +33,6 @@ import (
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 
-	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/datanode/allocator"
 	"github.com/milvus-io/milvus/internal/datanode/io"
@@ -236,7 +235,7 @@ func (t *clusteringCompactionTask) Compact() (*datapb.CompactionPlanResult, erro
 
 	// 5, assemble CompactionPlanResult
 	planResult := &datapb.CompactionPlanResult{
-		State:    commonpb.CompactionState_Completed,
+		State:    datapb.CompactionTaskState_completed,
 		PlanID:   t.GetPlanID(),
 		Segments: uploadSegments,
 		Type:     t.plan.GetType(),

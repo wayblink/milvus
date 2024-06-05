@@ -90,7 +90,7 @@ func (t *l0CompactionTask) processExecuting() bool {
 		return false
 	}
 	switch result.GetState() {
-	case commonpb.CompactionState_Executing:
+	case datapb.CompactionTaskState_executing:
 		if t.checkTimeout() {
 			err := t.updateAndSaveTaskMeta(setState(datapb.CompactionTaskState_timeout))
 			if err == nil {
@@ -98,7 +98,7 @@ func (t *l0CompactionTask) processExecuting() bool {
 			}
 		}
 		return false
-	case commonpb.CompactionState_Completed:
+	case datapb.CompactionTaskState_completed:
 		t.result = result
 		saveSuccess := t.saveSegmentMeta()
 		if !saveSuccess {
@@ -107,6 +107,12 @@ func (t *l0CompactionTask) processExecuting() bool {
 		err := t.updateAndSaveTaskMeta(setState(datapb.CompactionTaskState_meta_saved))
 		if err == nil {
 			return t.processMetaSaved()
+		}
+		return false
+	case datapb.CompactionTaskState_failed:
+		err := t.updateAndSaveTaskMeta(setState(datapb.CompactionTaskState_failed))
+		if err != nil {
+			log.Warn("fail to updateAndSaveTaskMeta")
 		}
 		return false
 	}

@@ -572,7 +572,7 @@ message CompactionSegment {
 
 message CompactionPlanResult {
   int64 planID = 1;
-  common.CompactionState state = 2;
+  CompactionTaskState state = 2;
   repeated CompactionSegment segments = 3;
   string channel = 4;
   CompactionType type = 5;

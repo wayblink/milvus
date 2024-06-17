@@ -61,11 +61,12 @@ type clusteringCompactionTask struct {
 	binlogIO  io.BinlogIO
 	allocator allocator.Allocator
 
-	ctx    context.Context
-	cancel context.CancelFunc
-	done   chan struct{}
-	tr     *timerecord.TimeRecorder
-	pool   *conc.Pool[any]
+	ctx         context.Context
+	cancel      context.CancelFunc
+	done        chan struct{}
+	tr          *timerecord.TimeRecorder
+	mappingPool *conc.Pool[any]
+	flushPool   *conc.Pool[any]
 
 	plan *datapb.CompactionPlan
 
@@ -182,7 +183,8 @@ func (t *clusteringCompactionTask) init() error {
 	t.currentTs = tsoutil.GetCurrentTime()
 	t.memoryBufferSize = t.getMemoryBufferSize()
 	workerPoolSize := t.getWorkerPoolSize()
-	t.pool = conc.NewPool[any](workerPoolSize)
+	t.mappingPool = conc.NewPool[any](workerPoolSize)
+	t.flushPool = conc.NewPool[any](workerPoolSize)
 	log.Info("clustering compaction task initialed", zap.Int64("memory_buffer_size", t.memoryBufferSize), zap.Int("worker_pool_size", workerPoolSize))
 	return nil
 }
@@ -358,7 +360,7 @@ func (t *clusteringCompactionTask) mapping(ctx context.Context,
 			// only FieldBinlogs needed
 			FieldBinlogs: segment.FieldBinlogs,
 		}
-		future := t.pool.Submit(func() (any, error) {
+		future := t.mappingPool.Submit(func() (any, error) {
 			err := t.mappingSegment(ctx, segmentClone, deltaPk2Ts)
 			return struct{}{}, err
 		})
@@ -748,20 +750,32 @@ func (t *clusteringCompactionTask) packBufferToSegment(ctx context.Context, buff
 	t.refreshBufferWriter(buffer)
 	buffer.flushedRowNum.Store(0)
 	buffer.flushedBinlogs = make(map[typeutil.UniqueID]*datapb.FieldBinlog, 0)
-	log.Info("finish pack segment", zap.Int64("partitionID", t.partitionID), zap.Int64("segID", buffer.writer.GetSegmentID()), zap.String("seg", seg.String()), zap.Any("segStats", segmentStats))
+	for _, binlog := range seg.InsertLogs {
+		log.Info("pack binlog in segment", zap.Int64("partitionID", t.partitionID), zap.Int64("segID", buffer.writer.GetSegmentID()), zap.String("binlog", binlog.String()))
+	}
+	log.Info("finish pack segment", zap.Int64("partitionID", t.partitionID), zap.Int64("segID", buffer.writer.GetSegmentID()), zap.Any("segStats", segmentStats))
 	return nil
 }
 
 func (t *clusteringCompactionTask) flushBinlog(ctx context.Context, buffer *ClusterBuffer) error {
-	log := log.With(zap.Int("bufferID", buffer.id), zap.Int64("bufferSize", buffer.inMemoryRowNum.Load()))
+	log := log.With(zap.Int("bufferID", buffer.id), zap.Int64("bufferSize", buffer.inMemoryRowNum.Load()), zap.Int64("segmentID", buffer.writer.GetSegmentID()))
 	if buffer.writer.IsEmpty() {
 		return nil
 	}
-	kvs, partialBinlogs, err := serializeWrite(ctx, t.allocator, buffer.writer)
-	if err != nil {
-		log.Warn("compact wrong, failed to serialize writer", zap.Error(err))
+
+	future := t.flushPool.Submit(func() (any, error) {
+		kvs, partialBinlogs, err := serializeWrite(ctx, t.allocator, buffer.writer)
+		if err != nil {
+			log.Warn("compact wrong, failed to serialize writer", zap.Error(err))
+			return typeutil.NewPair(kvs, partialBinlogs), err
+		}
+		return typeutil.NewPair(kvs, partialBinlogs), nil
+	})
+	if err := conc.AwaitAll(future); err != nil {
 		return err
 	}
+	kvs := future.Value().(typeutil.Pair[map[string][]byte, map[int64]*datapb.FieldBinlog]).A
+	partialBinlogs := future.Value().(typeutil.Pair[map[string][]byte, map[int64]*datapb.FieldBinlog]).B
 
 	if err := t.binlogIO.Upload(ctx, kvs); err != nil {
 		log.Warn("compact wrong, failed to upload kvs", zap.Error(err))
@@ -782,7 +796,7 @@ func (t *clusteringCompactionTask) flushBinlog(ctx context.Context, buffer *Clus
 	buffer.inMemoryRowNum.Store(0)
 
 	t.flushCount.Inc()
-	log.Debug("finish flushBinlog binlogs", zap.Int64("flushCount", t.flushCount.Load()))
+	log.Info("finish flush binlogs", zap.Int64("flushCount", t.flushCount.Load()))
 	if buffer.flushedRowNum.Load() > t.plan.GetMaxSegmentRows() {
 		if err := t.packBufferToSegment(ctx, buffer); err != nil {
 			return err
@@ -833,7 +847,7 @@ func (t *clusteringCompactionTask) scalarAnalyze(ctx context.Context) (map[inter
 			CollectionID:        segment.CollectionID,
 			PartitionID:         segment.PartitionID,
 		}
-		future := t.pool.Submit(func() (any, error) {
+		future := t.mappingPool.Submit(func() (any, error) {
 			analyzeResult, err := t.scalarAnalyzeSegment(ctx, segmentClone)
 			mutex.Lock()
 			defer mutex.Unlock()

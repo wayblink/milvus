@@ -413,7 +413,7 @@ func (t *clusteringCompactionTask) mapping(ctx context.Context,
 func (t *clusteringCompactionTask) getUsedMemoryBufferSize() int64 {
 	var totalBufferSize int64 = 0
 	for _, buffer := range t.clusterBuffers {
-		totalBufferSize = totalBufferSize + buffer.inMemoryRowNum.Load()*t.rowMemoryEstimation
+		totalBufferSize = totalBufferSize + int64(buffer.writer.WrittenMemorySize())
 	}
 	return totalBufferSize
 }
@@ -545,11 +545,6 @@ func (t *clusteringCompactionTask) mappingSegment(
 			remained++
 
 			if (remained+1)%100 == 0 {
-				t.rowMemoryEstimationOnce.Do(func() {
-					clusterBuffer.writer.IsFull()
-					t.rowMemoryEstimation = int64(clusterBuffer.writer.WrittenMemorySize()) / clusterBuffer.writer.GetRowNum()
-					log.Info("initial rowMemoryEstimation", zap.Int64("value", t.rowMemoryEstimation))
-				})
 				currentBufferSize := t.getUsedMemoryBufferSize()
 				// trigger flushBinlog
 				if clusterBuffer.flushedRowNum.Load() > t.plan.GetMaxSegmentRows() || clusterBuffer.writer.IsFull() {

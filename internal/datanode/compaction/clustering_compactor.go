@@ -706,6 +706,25 @@ func (t *clusteringCompactionTask) packBufferToSegment(ctx context.Context, buff
 	}
 	insertLogs := make([]*datapb.FieldBinlog, 0)
 	for _, fieldBinlog := range buffer.flushedBinlogs {
+		var entriesNum int64 = -1
+		for _, binlog := range fieldBinlog.GetBinlogs() {
+			if entriesNum == -1 {
+				entriesNum = binlog.EntriesNum
+			}
+			log.Info("wayblink binlog",
+				zap.String("binlog", binlog.String()),
+				zap.Int64("fid", fieldBinlog.GetFieldID()),
+				zap.Int64("binlog.EntriesNum", binlog.EntriesNum),
+				zap.Int64("entriesNum", entriesNum))
+			if binlog.EntriesNum != entriesNum {
+				log.Error("Wrong length for arrow arrays when serializing",
+					zap.String("binlog", binlog.String()),
+					zap.Int64("fid", fieldBinlog.GetFieldID()),
+					zap.Int64("binlog.EntriesNum", binlog.EntriesNum),
+					zap.Int64("entriesNum", entriesNum))
+			}
+		}
+		log.Info("wayblink", zap.Int64("fieldID", fieldBinlog.GetFieldID()), zap.String("field", fieldBinlog.String()))
 		insertLogs = append(insertLogs, fieldBinlog)
 	}
 	statPaths, err := statSerializeWrite(ctx, t.binlogIO, t.allocator, buffer.writer, buffer.flushedRowNum)

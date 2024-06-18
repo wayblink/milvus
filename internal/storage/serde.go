@@ -32,9 +32,11 @@ import (
 	"github.com/apache/arrow/go/v12/parquet/pqarrow"
 	"github.com/cockroachdb/errors"
 	"github.com/golang/protobuf/proto"
+	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/pkg/common"
+	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/util/metautil"
 	"github.com/milvus-io/milvus/pkg/util/typeutil"
 )
@@ -907,6 +909,20 @@ func (sw *SerializeWriter[T]) Flush() error {
 		return err
 	}
 	defer r.Release()
+	// check array size
+	arrLen := -1
+	for fid := range r.Schema() {
+		array := r.Column(fid)
+		if arrLen == -1 {
+			arrLen = array.Len()
+		}
+		if array.Len() != arrLen {
+			log.Error("Wrong length for arrow arrays when serializing",
+				zap.Int64("fid", fid), zap.Int("arrLen", arrLen),
+				zap.Int("field_len", array.Len()))
+			return errors.New("serialize field length mismatch")
+		}
+	}
 	if err := sw.rw.Write(r); err != nil {
 		return err
 	}

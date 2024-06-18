@@ -42,7 +42,7 @@ import (
 var _ CompactionTask = (*clusteringCompactionTask)(nil)
 
 const (
-	taskMaxRetryTimes = int32(3)
+	taskMaxRetryTimes = int32(1)
 )
 
 type clusteringCompactionTask struct {

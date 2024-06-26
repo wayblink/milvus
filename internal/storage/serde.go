@@ -18,6 +18,7 @@ package storage
 
 import (
 	"fmt"
+	"github.com/apache/arrow/go/v12/parquet/compress"
 	"io"
 	"math"
 	"sync"
@@ -25,7 +26,6 @@ import (
 	"github.com/apache/arrow/go/v12/arrow"
 	"github.com/apache/arrow/go/v12/arrow/array"
 	"github.com/apache/arrow/go/v12/parquet"
-	"github.com/apache/arrow/go/v12/parquet/compress"
 	"github.com/apache/arrow/go/v12/parquet/pqarrow"
 	"github.com/golang/protobuf/proto"
 

@@ -22,8 +22,6 @@ import (
 	sio "io"
 	"math"
 	"path"
-	"runtime"
-	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -617,6 +615,10 @@ func (t *clusteringCompactionTask) mappingSegment(
 				}
 			}
 		}
+		// set large object to nil, hopefully can make gc faster
+		pkIter = nil
+		blobs = nil
+		allValues = nil
 	}
 
 	log.Info("mapping segment end",
@@ -828,10 +830,10 @@ func (t *clusteringCompactionTask) flushBinlog(ctx context.Context, buffer *Clus
 		log.Warn("buffer writer is nil, please check", zap.Int("buffer id", buffer.id))
 		panic("buffer writer is nil, please check")
 	}
-	defer func() {
-		runtime.GC()
-		debug.FreeOSMemory()
-	}()
+	//defer func() {
+	//	runtime.GC()
+	//	debug.FreeOSMemory()
+	//}()
 	writtenMemorySize := int64(writer.WrittenMemorySize())
 	writtenRowNum := writer.GetRowNum()
 	log := log.With(zap.Int("bufferID", buffer.id),

@@ -848,7 +848,7 @@ func (t *clusteringCompactionTask) flushBinlog(ctx context.Context, buffer *Clus
 		}
 		return nil
 	}
-	max(1, 100)
+
 	start := time.Now()
 	kvs, partialBinlogs, err := serializeWrite(ctx, t.allocator, writer)
 	if err != nil {

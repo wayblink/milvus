@@ -21,11 +21,13 @@ import (
 	"sync"
 
 	"github.com/samber/lo"
+	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"golang.org/x/sync/semaphore"
 
 	"github.com/milvus-io/milvus/internal/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/log"
+	"github.com/milvus-io/milvus/pkg/util/merr"
 	"github.com/milvus-io/milvus/pkg/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/util/typeutil"
 )
@@ -37,7 +39,7 @@ const (
 
 type Executor interface {
 	Start(ctx context.Context)
-	Execute(task Compactor)
+	Execute(task Compactor) (bool, error)
 	Slots() int64
 	RemoveTask(planID int64)
 	GetResults(planID int64) []*datapb.CompactionPlanResult
@@ -50,8 +52,10 @@ type executor struct {
 	completedCompactor *typeutil.ConcurrentMap[int64, Compactor]                    // planID to compactor
 	completed          *typeutil.ConcurrentMap[int64, *datapb.CompactionPlanResult] // planID to CompactionPlanResult
 	taskCh             chan Compactor
-	taskSem            *semaphore.Weighted
+	taskSem            *semaphore.Weighted             // todo remove this, unify with slot logic
 	dropped            *typeutil.ConcurrentSet[string] // vchannel dropped
+	usingSlots         *atomic.Int64
+	slotMu             sync.Mutex
 
 	// To prevent concurrency of release channel and compaction get results
 	// all released channel's compaction tasks will be discarded
@@ -66,27 +70,46 @@ func NewExecutor() *executor {
 		taskCh:             make(chan Compactor, maxTaskQueueNum),
 		taskSem:            semaphore.NewWeighted(maxParallelTaskNum),
 		dropped:            typeutil.NewConcurrentSet[string](),
+		usingSlots:         atomic.NewInt64(0),
 	}
 }
 
-func (e *executor) Execute(task Compactor) {
+func (e *executor) Execute(task Compactor) (bool, error) {
+	e.slotMu.Lock()
+	defer e.slotMu.Unlock()
+	if e.Slots() >= task.GetSlotUsage() {
+		e.usingSlots.Add(task.GetSlotUsage())
+	} else {
+		return false, merr.WrapErrDataNodeSlotExhausted()
+	}
 	_, ok := e.executing.GetOrInsert(task.GetPlanID(), task)
 	if ok {
 		log.Warn("duplicated compaction task",
 			zap.Int64("planID", task.GetPlanID()),
 			zap.String("channel", task.GetChannelName()))
-		return
+		return false, merr.WrapErrDuplicatedCompactionTask()
 	}
 	e.taskCh <- task
+	return true, nil
 }
 
 func (e *executor) Slots() int64 {
-	return paramtable.Get().DataNodeCfg.SlotCap.GetAsInt64() - int64(e.executing.Len())
+	return paramtable.Get().DataNodeCfg.SlotCap.GetAsInt64() - e.usingSlots.Load()
 }
 
 func (e *executor) toCompleteState(task Compactor) {
 	task.Complete()
-	e.executing.GetAndRemove(task.GetPlanID())
+	e.getAndRemoveExecuting(task.GetPlanID())
+}
+
+func (e *executor) getAndRemoveExecuting(planID typeutil.UniqueID) (Compactor, bool) {
+	task, ok := e.executing.GetAndRemove(planID)
+	if ok {
+		e.slotMu.Lock()
+		e.usingSlots.Sub(task.GetSlotUsage())
+		e.slotMu.Unlock()
+	}
+	return task, ok
 }
 
 func (e *executor) RemoveTask(planID int64) {
@@ -140,7 +163,7 @@ func (e *executor) executeTask(task Compactor) {
 }
 
 func (e *executor) stopTask(planID int64) {
-	task, loaded := e.executing.GetAndRemove(planID)
+	task, loaded := e.getAndRemoveExecuting(planID)
 	if loaded {
 		log.Warn("compaction executor stop task", zap.Int64("planID", planID), zap.String("vChannelName", task.GetChannelName()))
 		task.Stop()

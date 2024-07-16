@@ -169,6 +169,7 @@ func (s *DataNodeServicesSuite) TestGetCompactionState() {
 		mockC.EXPECT().GetPlanID().Return(int64(1))
 		mockC.EXPECT().GetCollection().Return(collection)
 		mockC.EXPECT().GetChannelName().Return(channel)
+		mockC.EXPECT().GetCompactionType().Return(datapb.CompactionType_MixCompaction)
 		mockC.EXPECT().Complete().Return()
 		mockC.EXPECT().Compact().Return(&datapb.CompactionPlanResult{
 			PlanID: 1,

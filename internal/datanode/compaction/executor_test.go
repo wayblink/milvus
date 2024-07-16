@@ -33,6 +33,7 @@ func TestCompactionExecutor(t *testing.T) {
 		mockC := NewMockCompactor(t)
 		mockC.EXPECT().GetPlanID().Return(planID)
 		mockC.EXPECT().GetChannelName().Return("ch1")
+		mockC.EXPECT().GetCompactionType().Return(datapb.CompactionType_MixCompaction)
 		executor := NewExecutor()
 		executor.Execute(mockC)
 		executor.Execute(mockC)

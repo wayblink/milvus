@@ -374,3 +374,7 @@ func (t *mixCompactionTask) BuildCompactionRequest() (*datapb.CompactionPlan, er
 	log.Info("Compaction handler refreshed mix compaction plan", zap.Any("segID2DeltaLogs", segIDMap))
 	return plan, nil
 }
+
+func (t *mixCompactionTask) Clean() bool {
+	return true
+}

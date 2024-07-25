@@ -136,7 +136,7 @@ func (s *ClusteringCompactionTaskSuite) TestClusteringCompactionSegmentMetaChang
 		},
 	})
 
-	task.processFailedOrTimeout()
+	task.doClean()
 
 	seg12 := s.meta.GetSegment(101)
 	s.Equal(datapb.SegmentLevel_L1, seg12.Level)
@@ -204,7 +204,7 @@ func (s *ClusteringCompactionTaskSuite) TestProcessRetryLogic() {
 	s.Equal(false, task.Process())
 	s.Equal(int32(3), task.RetryTimes)
 	s.Equal(datapb.CompactionTaskState_pipelining, task.GetState())
-	s.Equal(false, task.Process())
+	s.Equal(true, task.Process())
 	s.Equal(int32(0), task.RetryTimes)
 	s.Equal(datapb.CompactionTaskState_failed, task.GetState())
 }
@@ -213,7 +213,7 @@ func (s *ClusteringCompactionTaskSuite) TestProcessPipelining() {
 	s.Run("process pipelining fail, segment not found", func() {
 		task := s.generateBasicTask(false)
 		task.State = datapb.CompactionTaskState_pipelining
-		s.Equal(false, task.Process())
+		s.Equal(true, task.Process())
 		s.Equal(datapb.CompactionTaskState_failed, task.GetState())
 	})
 
@@ -439,7 +439,7 @@ func (s *ClusteringCompactionTaskSuite) TestProcessExecuting() {
 		}, nil).Once()
 		time.Sleep(time.Second * 1)
 		s.Equal(true, task.Process())
-		s.Equal(datapb.CompactionTaskState_cleaned, task.GetState())
+		s.Equal(datapb.CompactionTaskState_timeout, task.GetState())
 	})
 }
 
@@ -538,7 +538,7 @@ func (s *ClusteringCompactionTaskSuite) TestProcessAnalyzingState() {
 	s.Run("analyze task not found", func() {
 		task := s.generateBasicTask(false)
 		task.State = datapb.CompactionTaskState_analyzing
-		s.False(task.Process())
+		s.True(task.Process())
 		s.Equal(datapb.CompactionTaskState_failed, task.GetState())
 	})
 
@@ -555,7 +555,7 @@ func (s *ClusteringCompactionTaskSuite) TestProcessAnalyzingState() {
 			State:        indexpb.JobState_JobStateFailed,
 		}
 		s.meta.analyzeMeta.AddAnalyzeTask(t)
-		s.False(task.Process())
+		s.True(task.Process())
 		s.Equal(datapb.CompactionTaskState_failed, task.GetState())
 	})
 
@@ -573,7 +573,7 @@ func (s *ClusteringCompactionTaskSuite) TestProcessAnalyzingState() {
 			CentroidsFile: "",
 		}
 		s.meta.analyzeMeta.AddAnalyzeTask(t)
-		s.False(task.Process())
+		s.True(task.Process())
 		s.Equal(datapb.CompactionTaskState_failed, task.GetState())
 	})
 

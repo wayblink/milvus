@@ -69,14 +69,6 @@ func newClusteringCompactionTask(t *datapb.CompactionTask, allocator allocator.A
 	}
 }
 
-// Process performs the task's state machine
-//
-// Returns:
-//   - <bool>:  return whether the task state machine ends.
-//
-// Notes:
-//
-//	`end` doesn't means the task completed, its state may be completed or failed or timeout.
 func (t *clusteringCompactionTask) Process() bool {
 	log := log.With(zap.Int64("triggerID", t.GetTriggerID()), zap.Int64("PlanID", t.GetPlanID()), zap.Int64("collectionID", t.GetCollectionID()))
 	lastState := t.GetState().String()

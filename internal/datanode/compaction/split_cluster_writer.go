@@ -60,8 +60,6 @@ func (c *SplitClusterWriter) Write(value *storage.Value) error {
 	if err != nil {
 		return err
 	}
-	// c.clusterLocks.Lock(clusterKey)
-	// defer c.clusterLocks.Unlock(clusterKey)
 	_, exist := c.clusterWriters[clusterKey]
 	if !exist {
 		return errors.New(fmt.Sprintf("cluster key=%s not exist", clusterKey))
@@ -82,9 +80,6 @@ func (c *SplitClusterWriter) Finish() (map[string][]*datapb.CompactionSegment, e
 		if err != nil {
 			return nil, err
 		}
-		//for _, segment := range segments {
-		//	segment.VshardId = id
-		//}
 		resultSegments[id] = segments
 	}
 	return resultSegments, nil

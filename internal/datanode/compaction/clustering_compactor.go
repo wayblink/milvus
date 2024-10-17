@@ -18,6 +18,7 @@ package compaction
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	sio "io"
 	"math"
@@ -104,6 +105,8 @@ type clusteringCompactionTask struct {
 	offsetToBufferFunc     func(int64, []uint32) *ClusterBuffer
 	// bm25
 	bm25FieldIds []int64
+
+	writer *SplitClusterWriter
 }
 
 type ClusterBuffer struct {
@@ -211,12 +214,7 @@ func (t *clusteringCompactionTask) init() error {
 		}
 	}
 
-	for _, function := range t.plan.Schema.Functions {
-		if function.GetType() == schemapb.FunctionType_BM25 {
-			t.bm25FieldIds = append(t.bm25FieldIds, function.GetOutputFieldIds()[0])
-		}
-	}
-
+	t.bm25FieldIds = GetBM25FieldIDs(t.plan.Schema)
 	t.primaryKeyField = pkField
 	t.isVectorClusteringKey = typeutil.IsVectorType(t.clusteringKeyField.DataType)
 	t.currentTs = tsoutil.GetCurrentTime()
@@ -311,8 +309,10 @@ func (t *clusteringCompactionTask) getScalarAnalyzeResult(ctx context.Context) e
 		return err
 	}
 	buckets, containsNull := t.splitClusterByScalarValue(analyzeDict)
-	scalarToClusterBufferMap := make(map[interface{}]*ClusterBuffer, 0)
-	for id, bucket := range buckets {
+	// assemble split keys and mapping function
+	splitKeys := make([]string, 0)
+	splitFieldStats := make([]*storage.FieldStats, 0)
+	for _, bucket := range buckets {
 		fieldStats, err := storage.NewFieldStats(t.clusteringKeyField.FieldID, t.clusteringKeyField.DataType, 0)
 		if err != nil {
 			return err
@@ -320,49 +320,62 @@ func (t *clusteringCompactionTask) getScalarAnalyzeResult(ctx context.Context) e
 		for _, key := range bucket {
 			fieldStats.UpdateMinMax(storage.NewScalarFieldValue(t.clusteringKeyField.DataType, key))
 		}
-		buffer := &ClusterBuffer{
-			id:                      id,
-			flushedRowNum:           map[typeutil.UniqueID]atomic.Int64{},
-			flushedBinlogs:          make(map[typeutil.UniqueID]map[typeutil.UniqueID]*datapb.FieldBinlog, 0),
-			flushedBM25stats:        make(map[int64]map[int64]*storage.BM25Stats, 0),
-			uploadedSegments:        make([]*datapb.CompactionSegment, 0),
-			uploadedSegmentStats:    make(map[typeutil.UniqueID]storage.SegmentStats, 0),
-			clusteringKeyFieldStats: fieldStats,
-		}
-		if _, err = t.refreshBufferWriterWithPack(buffer); err != nil {
-			return err
-		}
-		t.clusterBuffers = append(t.clusterBuffers, buffer)
-		for _, key := range bucket {
-			scalarToClusterBufferMap[key] = buffer
-		}
-	}
-	var nullBuffer *ClusterBuffer
-	if containsNull {
-		fieldStats, err := storage.NewFieldStats(t.clusteringKeyField.FieldID, t.clusteringKeyField.DataType, 0)
+		splitFieldStats = append(splitFieldStats, fieldStats)
+		bytes, err := json.Marshal(fieldStats)
 		if err != nil {
 			return err
 		}
-		nullBuffer = &ClusterBuffer{
-			id:                      len(buckets),
-			flushedRowNum:           map[typeutil.UniqueID]atomic.Int64{},
-			flushedBinlogs:          make(map[typeutil.UniqueID]map[typeutil.UniqueID]*datapb.FieldBinlog, 0),
-			uploadedSegments:        make([]*datapb.CompactionSegment, 0),
-			uploadedSegmentStats:    make(map[typeutil.UniqueID]storage.SegmentStats, 0),
-			clusteringKeyFieldStats: fieldStats, // null stats
-		}
-		if _, err = t.refreshBufferWriterWithPack(nullBuffer); err != nil {
-			return err
-		}
-		t.clusterBuffers = append(t.clusterBuffers, nullBuffer)
+		splitKeys = append(splitKeys, string(bytes))
 	}
-	t.keyToBufferFunc = func(key interface{}) *ClusterBuffer {
-		if key == nil {
-			return nullBuffer
-		}
-		// todo: if keys are too many, the map will be quite large, we should mark the range of each buffer and select buffer by range
-		return scalarToClusterBufferMap[key]
+
+	if containsNull {
+		splitKeys = append(splitKeys, "null")
 	}
+
+	mappingFunc := func(value *storage.Value) (string, error) {
+		data, _ := value.Value.(map[storage.FieldID]interface{})[t.clusteringKeyField.FieldID]
+		if data == nil {
+			return "null", nil
+		}
+		fieldValue := storage.NewScalarFieldValue(t.clusteringKeyField.DataType, data)
+		for _, fieldStats := range splitFieldStats {
+			if fieldValue.GE(fieldStats.Min) && fieldValue.LE(fieldStats.Max) {
+				bytes, err := json.Marshal(fieldStats)
+				if err != nil {
+					return "", err
+				}
+				return string(bytes), nil
+			}
+		}
+		return "", errors.New("no matching cluster")
+	}
+
+	splitWriter, err := NewSplitClusterWriterBuilder().
+		SetCollectionID(t.GetCollection()).
+		SetPartitionID(t.partitionID).
+		SetSchema(t.plan.GetSchema()).
+		SetSegmentMaxSize(t.plan.GetMaxSize()).
+		SetSegmentMaxRowCount(t.plan.GetTotalRows()).
+		SetSplitKeys(splitKeys).
+		SetAllocator(&compactionAlloactor{
+			segmentAlloc: t.segIDAlloc,
+			logIDAlloc:   t.logIDAlloc,
+		}).
+		SetBinlogIO(t.binlogIO).
+		SetMemoryBufferSize(math.MaxInt64).
+		SetMappingFunc(mappingFunc).
+		SetWorkerPoolSize(1).
+		Build()
+	log.Info("create split cluster writer",
+		zap.Int("splitKeys", len(splitKeys)),
+		zap.Int64("segmentMaxSize", t.plan.GetMaxSize()),
+		zap.Int64("segmentMaxRowCount", t.plan.GetTotalRows()))
+	if err != nil {
+		log.Warn("fail to build splits buffer", zap.Error(err))
+		return err
+	}
+	t.writer = splitWriter
+
 	return nil
 }
 
@@ -453,12 +466,8 @@ func (t *clusteringCompactionTask) mapping(ctx context.Context,
 	<-t.doneChan
 
 	// force flush all buffers
-	err := t.flushAll(ctx)
+	compactionResults, err := t.writer.Finish()
 	if err != nil {
-		return nil, nil, err
-	}
-
-	if err := t.checkBuffersAfterCompaction(); err != nil {
 		return nil, nil, err
 	}
 
@@ -466,24 +475,22 @@ func (t *clusteringCompactionTask) mapping(ctx context.Context,
 	resultPartitionStats := &storage.PartitionStatsSnapshot{
 		SegmentStats: make(map[typeutil.UniqueID]storage.SegmentStats),
 	}
-	for _, buffer := range t.clusterBuffers {
-		for _, seg := range buffer.uploadedSegments {
-			se := &datapb.CompactionSegment{
-				PlanID:              seg.GetPlanID(),
-				SegmentID:           seg.GetSegmentID(),
-				NumOfRows:           seg.GetNumOfRows(),
-				InsertLogs:          seg.GetInsertLogs(),
-				Field2StatslogPaths: seg.GetField2StatslogPaths(),
-				Deltalogs:           seg.GetDeltalogs(),
-				Channel:             seg.GetChannel(),
-				Bm25Logs:            seg.GetBm25Logs(),
-			}
-			log.Debug("put segment into final compaction result", zap.String("segment", se.String()))
-			resultSegments = append(resultSegments, se)
+	for clusterKey, segments := range compactionResults {
+		fieldStat := &storage.FieldStats{}
+		err := json.Unmarshal([]byte(clusterKey), fieldStat)
+		if err != nil {
+			return nil, nil, err
 		}
-		for segID, segmentStat := range buffer.uploadedSegmentStats {
-			log.Debug("put segment into final partition stats", zap.Int64("segmentID", segID), zap.Any("stats", segmentStat))
-			resultPartitionStats.SegmentStats[segID] = segmentStat
+		for _, seg := range segments {
+			log.Info("wayblink", zap.String("seg", seg.String()), zap.Int("insertLogNum", len(seg.InsertLogs)))
+			resultSegments = append(resultSegments, seg)
+			segmentStats := storage.SegmentStats{
+				FieldStats: []storage.FieldStats{
+					fieldStat.Clone(),
+				},
+				NumRows: int(seg.GetNumOfRows()),
+			}
+			resultPartitionStats.SegmentStats[seg.GetSegmentID()] = segmentStats
 		}
 	}
 
@@ -605,56 +612,16 @@ func (t *clusteringCompactionTask) mappingSegment(
 				continue
 			}
 
-			row, ok := v.Value.(map[typeutil.UniqueID]interface{})
-			if !ok {
-				log.Warn("transfer interface to map wrong", zap.Strings("paths", paths))
-				return errors.New("unexpected error")
-			}
-
-			clusteringKey := row[t.clusteringKeyField.FieldID]
-			var clusterBuffer *ClusterBuffer
-			if t.isVectorClusteringKey {
-				clusterBuffer = t.offsetToBufferFunc(offset, mappingStats.GetCentroidIdMapping())
-			} else {
-				clusterBuffer = t.keyToBufferFunc(clusteringKey)
-			}
-			err = t.writeToBuffer(ctx, clusterBuffer, v)
+			err = t.writer.Write(v)
 			if err != nil {
+				log.Error("write fail", zap.Error(err))
 				return err
 			}
 			remained++
 
 			if (remained+1)%100 == 0 {
-				currentBufferTotalMemorySize := t.getBufferTotalUsedMemorySize()
-				if clusterBuffer.currentSegmentRowNum.Load() > t.plan.GetMaxSegmentRows() || clusterBuffer.writer.Load().(*SegmentWriter).IsFull() {
-					// reach segment/binlog max size
-					flushWriterFunc := func() {
-						t.clusterBufferLocks.Lock(clusterBuffer.id)
-						currentSegmentNumRows := clusterBuffer.currentSegmentRowNum.Load()
-						// double-check the condition is still met
-						writer := clusterBuffer.writer.Load().(*SegmentWriter)
-						if currentSegmentNumRows > t.plan.GetMaxSegmentRows() || writer.IsFull() {
-							pack, _ := t.refreshBufferWriterWithPack(clusterBuffer)
-							log.Debug("buffer need to flush", zap.Int("bufferID", clusterBuffer.id),
-								zap.Bool("pack", pack),
-								zap.Int64("current segment", writer.GetSegmentID()),
-								zap.Int64("current segment num rows", currentSegmentNumRows),
-								zap.Int64("writer num", writer.GetRowNum()))
-
-							t.clusterBufferLocks.Unlock(clusterBuffer.id)
-							// release the lock before sending the signal, avoid long wait caused by a full channel.
-							t.flushChan <- FlushSignal{
-								writer: writer,
-								pack:   pack,
-								id:     clusterBuffer.id,
-							}
-							return
-						}
-						// release the lock even if the conditions are no longer met.
-						t.clusterBufferLocks.Unlock(clusterBuffer.id)
-					}
-					flushWriterFunc()
-				} else if currentBufferTotalMemorySize > t.getMemoryBufferHighWatermark() && !t.hasSignal.Load() {
+				currentBufferTotalMemorySize := t.writer.getTotalUsedMemorySize()
+				if currentBufferTotalMemorySize > t.getMemoryBufferHighWatermark() && !t.hasSignal.Load() {
 					// reach flushBinlog trigger threshold
 					log.Debug("largest buffer need to flush",
 						zap.Int64("currentBufferTotalMemorySize", currentBufferTotalMemorySize))
@@ -663,7 +630,7 @@ func (t *clusteringCompactionTask) mappingSegment(
 				}
 
 				// if the total buffer size is too large, block here, wait for memory release by flushBinlog
-				if t.getBufferTotalUsedMemorySize() > t.getMemoryBufferBlockFlushThreshold() {
+				if t.writer.getTotalUsedMemorySize() > t.getMemoryBufferBlockFlushThreshold() {
 					log.Debug("memory is already above the block watermark, pause writing",
 						zap.Int64("currentBufferTotalMemorySize", currentBufferTotalMemorySize))
 				loop:
@@ -676,8 +643,7 @@ func (t *clusteringCompactionTask) mappingSegment(
 							log.Warn("stop waiting for memory buffer release as task chan done")
 							return nil
 						default:
-							// currentSize := t.getCurrentBufferWrittenMemorySize()
-							currentSize := t.getBufferTotalUsedMemorySize()
+							currentSize := t.writer.getTotalUsedMemorySize()
 							if currentSize < t.getMemoryBufferHighWatermark() {
 								log.Debug("memory is already below the high watermark, continue writing",
 									zap.Int64("currentSize", currentSize))
@@ -697,24 +663,6 @@ func (t *clusteringCompactionTask) mappingSegment(
 		zap.Int64("expired_entities", expired),
 		zap.Int64("written_row_num", t.writtenRowNum.Load()),
 		zap.Duration("elapse", time.Since(processStart)))
-	return nil
-}
-
-func (t *clusteringCompactionTask) writeToBuffer(ctx context.Context, clusterBuffer *ClusterBuffer, value *storage.Value) error {
-	t.clusterBufferLocks.Lock(clusterBuffer.id)
-	defer t.clusterBufferLocks.Unlock(clusterBuffer.id)
-	// prepare
-	writer := clusterBuffer.writer.Load()
-	if writer == nil || writer.(*SegmentWriter) == nil {
-		log.Warn("unexpected behavior, please check", zap.Int("buffer id", clusterBuffer.id))
-		return fmt.Errorf("unexpected behavior, please check buffer id: %d", clusterBuffer.id)
-	}
-	err := writer.(*SegmentWriter).Write(value)
-	if err != nil {
-		return err
-	}
-	t.writtenRowNum.Inc()
-	clusterBuffer.currentSegmentRowNum.Inc()
 	return nil
 }
 

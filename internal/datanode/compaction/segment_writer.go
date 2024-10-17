@@ -152,7 +152,9 @@ func (w *MultiSegmentWriter) finishCurrent() error {
 		zap.Int64("segmentID", writer.GetSegmentID()),
 		zap.String("channel", w.channel),
 		zap.Int64("totalRows", writer.GetRowNum()),
-		zap.Int64("totalSize", writer.GetTotalSize()))
+		zap.Int64("totalSize", writer.GetTotalSize()),
+		zap.Int("segNum", len(result.InsertLogs)),
+		zap.String("seg", result.String()))
 
 	w.cachedMeta[writer.segmentID] = nil
 	return nil

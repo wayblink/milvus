@@ -345,6 +345,7 @@ func (m *CompactionTriggerManager) SubmitClusteringViewToScheduler(ctx context.C
 			Begin: start,
 			End:   end,
 		},
+		MaxSize: getExpandedSize(expectedSize),
 	}
 	err = m.compactionHandler.enqueueCompaction(task)
 	if err != nil {

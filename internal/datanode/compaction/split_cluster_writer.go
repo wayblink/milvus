@@ -55,7 +55,7 @@ type SplitClusterWriter struct {
 	flushMutex     sync.Mutex
 }
 
-func (c *SplitClusterWriter) Write(value *storage.Value) error {
+func (c *SplitClusterWriter) Write(value *storage.Value, segmentID ...int64) error {
 	clusterKey, err := c.mappingFunc(value)
 	if err != nil {
 		return err
@@ -65,6 +65,19 @@ func (c *SplitClusterWriter) Write(value *storage.Value) error {
 		return errors.New(fmt.Sprintf("cluster key=%s not exist", clusterKey))
 	}
 	err = c.clusterWriters[clusterKey].Write(value)
+	if err != nil {
+		return err
+	}
+	c.writtenRowNum.Inc()
+	return nil
+}
+
+func (c *SplitClusterWriter) WriteToKey(value *storage.Value, clusterKey string) error {
+	_, exist := c.clusterWriters[clusterKey]
+	if !exist {
+		return errors.New(fmt.Sprintf("cluster key=%s not exist", clusterKey))
+	}
+	err := c.clusterWriters[clusterKey].Write(value)
 	if err != nil {
 		return err
 	}
@@ -89,37 +102,31 @@ func (c *SplitClusterWriter) GetRowNum() int64 {
 	return c.writtenRowNum.Load()
 }
 
-func (c *SplitClusterWriter) FlushLargest() error {
-	// only one flushLargest or flushAll should do at the same time
-	getLock := c.flushMutex.TryLock()
-	if !getLock {
-		return nil
-	}
+func (c *SplitClusterWriter) FlushToLowWaterMark() error {
+	c.flushMutex.Lock()
 	defer c.flushMutex.Unlock()
 	currentMemorySize := c.getTotalUsedMemorySize()
 	if currentMemorySize <= c.getMemoryBufferLowWatermark() {
-		log.Info("memory low water mark", zap.Int64("memoryBufferSize", c.getTotalUsedMemorySize()))
+		log.Info("memory is under low water mark", zap.Int64("memoryBufferSize", c.getTotalUsedMemorySize()))
 		return nil
 	}
-	bufferIDs := make([]string, 0)
+	clusterKeys := make([]string, 0)
 	bufferRowNums := make([]int64, 0)
 	for id, writer := range c.clusterWriters {
-		bufferIDs = append(bufferIDs, id)
-		// c.clusterLocks.RLock(id)
+		clusterKeys = append(clusterKeys, id)
 		bufferRowNums = append(bufferRowNums, writer.GetRowNum())
-		// c.clusterLocks.RUnlock(id)
 	}
-	sort.Slice(bufferIDs, func(i, j int) bool {
+	sort.Slice(clusterKeys, func(i, j int) bool {
 		return bufferRowNums[i] > bufferRowNums[j]
 	})
-	log.Info("start flushLargestBuffers", zap.Strings("bufferIDs", bufferIDs), zap.Int64("currentMemorySize", currentMemorySize))
 
+	log.Info("start flush largest buffers", zap.Strings("clusterKeys", clusterKeys), zap.Int64("currentMemorySize", currentMemorySize))
 	futures := make([]*conc.Future[any], 0)
-	for _, bufferId := range bufferIDs {
-		writer := c.clusterWriters[bufferId]
+	for _, clusterKey := range clusterKeys {
+		writer := c.clusterWriters[clusterKey]
 		log.Info("currentMemorySize after flush writer binlog",
 			zap.Int64("currentMemorySize", currentMemorySize),
-			zap.String("bufferID", bufferId),
+			zap.String("clusterKey", clusterKey),
 			zap.Uint64("writtenMemorySize", writer.WrittenMemorySize()),
 			zap.Int64("RowNum", writer.GetRowNum()))
 		future := c.flushPool.Submit(func() (any, error) {

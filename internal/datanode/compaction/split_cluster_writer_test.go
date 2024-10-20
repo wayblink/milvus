@@ -215,7 +215,7 @@ func (s *SplitClusterWriterSuite) TestConcurrentSplitByHash() {
 			for i := j + int64(0); i < j+1000; i++ {
 				err := splitWriter.Write(generateInt64PKEntitiy(i))
 				if i == j+100 {
-					splitWriter.FlushLargest()
+					splitWriter.FlushToLowWaterMark()
 				}
 				s.NoError(err)
 			}

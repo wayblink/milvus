@@ -98,11 +98,7 @@ type clusteringCompactionTask struct {
 	memoryBufferSize   int64
 	clusterBuffers     []*ClusterBuffer
 	clusterBufferLocks *lock.KeyLock[int]
-	// scalar
-	keyToBufferFunc func(interface{}) *ClusterBuffer
-	// vector
-	segmentIDOffsetMapping map[int64]string
-	offsetToBufferFunc     func(int64, []uint32) *ClusterBuffer
+
 	// bm25
 	bm25FieldIds []int64
 
@@ -384,13 +380,6 @@ func (t *clusteringCompactionTask) getVectorAnalyzeResult(ctx context.Context) e
 	defer span.End()
 	analyzeResultPath := t.plan.AnalyzeResultPath
 	centroidFilePath := path.Join(analyzeResultPath, metautil.JoinIDPath(t.collectionID, t.partitionID, t.clusteringKeyField.FieldID), common.Centroids)
-	offsetMappingFiles := make(map[int64]string, 0)
-	for _, segmentID := range t.plan.AnalyzeSegmentIds {
-		path := path.Join(analyzeResultPath, metautil.JoinIDPath(t.collectionID, t.partitionID, t.clusteringKeyField.FieldID, segmentID), common.OffsetMapping)
-		offsetMappingFiles[segmentID] = path
-		log.Debug("read segment offset mapping file", zap.Int64("segmentID", segmentID), zap.String("path", path))
-	}
-	t.segmentIDOffsetMapping = offsetMappingFiles
 	centroidBytes, err := t.binlogIO.Download(ctx, []string{centroidFilePath})
 	if err != nil {
 		return err
@@ -401,31 +390,41 @@ func (t *clusteringCompactionTask) getVectorAnalyzeResult(ctx context.Context) e
 		return err
 	}
 	log.Debug("read clustering centroids stats", zap.String("path", centroidFilePath),
-		zap.Int("centroidNum", len(centroids.GetCentroids())),
-		zap.Any("offsetMappingFiles", t.segmentIDOffsetMapping))
+		zap.Int("centroidNum", len(centroids.GetCentroids())))
 
+	splitKeys := make([]string, 0)
+	splitFieldStats := make([]*storage.FieldStats, 0)
 	for id, centroid := range centroids.GetCentroids() {
 		fieldStats, err := storage.NewFieldStats(t.clusteringKeyField.FieldID, t.clusteringKeyField.DataType, 0)
 		if err != nil {
 			return err
 		}
 		fieldStats.SetVectorCentroids(storage.NewVectorFieldValue(t.clusteringKeyField.DataType, centroid))
-		clusterBuffer := &ClusterBuffer{
-			id:                      id,
-			flushedRowNum:           map[typeutil.UniqueID]atomic.Int64{},
-			flushedBinlogs:          make(map[typeutil.UniqueID]map[typeutil.UniqueID]*datapb.FieldBinlog, 0),
-			uploadedSegments:        make([]*datapb.CompactionSegment, 0),
-			uploadedSegmentStats:    make(map[typeutil.UniqueID]storage.SegmentStats, 0),
-			clusteringKeyFieldStats: fieldStats,
-		}
-		if _, err = t.refreshBufferWriterWithPack(clusterBuffer); err != nil {
-			return err
-		}
-		t.clusterBuffers = append(t.clusterBuffers, clusterBuffer)
+		splitFieldStats = append(splitFieldStats, fieldStats)
+		splitKeys = append(splitKeys, string(id))
 	}
-	t.offsetToBufferFunc = func(offset int64, idMapping []uint32) *ClusterBuffer {
-		return t.clusterBuffers[idMapping[offset]]
-	}
+
+	splitWriter, err := NewSplitClusterWriterBuilder().
+		SetCollectionID(t.GetCollection()).
+		SetPartitionID(t.partitionID).
+		SetSchema(t.plan.GetSchema()).
+		SetSegmentMaxSize(t.plan.GetMaxSize()).
+		SetSegmentMaxRowCount(t.plan.GetTotalRows()).
+		SetSplitKeys(splitKeys).
+		SetAllocator(&compactionAlloactor{
+			segmentAlloc: t.segIDAlloc,
+			logIDAlloc:   t.logIDAlloc,
+		}).
+		SetBinlogIO(t.binlogIO).
+		SetMemoryBufferSize(math.MaxInt64).
+		SetWorkerPoolSize(1).
+		Build()
+	t.writer = splitWriter
+	log.Info("create split cluster writer",
+		zap.Int("splitKeys", len(splitKeys)),
+		zap.Int64("segmentMaxSize", t.plan.GetMaxSize()),
+		zap.Int64("segmentMaxRowCount", t.plan.GetTotalRows()))
+
 	return nil
 }
 
@@ -482,7 +481,6 @@ func (t *clusteringCompactionTask) mapping(ctx context.Context,
 			return nil, nil, err
 		}
 		for _, seg := range segments {
-			log.Info("wayblink", zap.String("seg", seg.String()), zap.Int("insertLogNum", len(seg.InsertLogs)))
 			resultSegments = append(resultSegments, seg)
 			segmentStats := storage.SegmentStats{
 				FieldStats: []storage.FieldStats{
@@ -537,7 +535,7 @@ func (t *clusteringCompactionTask) mappingSegment(
 
 	mappingStats := &clusteringpb.ClusteringCentroidIdMappingStats{}
 	if t.isVectorClusteringKey {
-		offSetPath := t.segmentIDOffsetMapping[segment.SegmentID]
+		offSetPath := path.Join(t.plan.AnalyzeResultPath, metautil.JoinIDPath(t.collectionID, t.partitionID, t.clusteringKeyField.FieldID, segment.SegmentID), common.OffsetMapping)
 		offsetBytes, err := t.binlogIO.Download(ctx, []string{offSetPath})
 		if err != nil {
 			return err
@@ -612,7 +610,11 @@ func (t *clusteringCompactionTask) mappingSegment(
 				continue
 			}
 
-			err = t.writer.Write(v)
+			if t.isVectorClusteringKey {
+				err = t.writer.WriteToKey(v, string(mappingStats.GetCentroidIdMapping()[offset]))
+			} else {
+				err = t.writer.Write(v)
+			}
 			if err != nil {
 				log.Error("write fail", zap.Error(err))
 				return err

@@ -33,6 +33,8 @@ import (
 	"github.com/milvus-io/milvus/pkg/util/conc"
 )
 
+// SplitClusterWriter is a thread-safe writer that supports writing to multiple clusters of segments.
+// It requires clusterKeys and a mapping function, with data being written to the appropriate cluster based on the mapping function
 type SplitClusterWriter struct {
 	// construct field
 	binlogIO           io.BinlogIO
@@ -43,7 +45,7 @@ type SplitClusterWriter struct {
 	schema             *schemapb.CollectionSchema
 	segmentMaxRowCount int64
 	segmentMaxSize     int64
-	clusterNum         int32
+	clusterKeys        []string
 	mappingFunc        func(*storage.Value) (string, error)
 	memoryBufferSize   int64
 	workerPoolSize     int
@@ -53,26 +55,20 @@ type SplitClusterWriter struct {
 	writtenRowNum  *atomic.Int64
 	flushPool      *conc.Pool[any]
 	flushMutex     sync.Mutex
+	flushCount     *atomic.Int64
 }
 
-func (c *SplitClusterWriter) Write(value *storage.Value, segmentID ...int64) error {
+// Write value to the cluster based on mappingFunc
+func (c *SplitClusterWriter) Write(value *storage.Value) error {
 	clusterKey, err := c.mappingFunc(value)
 	if err != nil {
 		return err
 	}
-	_, exist := c.clusterWriters[clusterKey]
-	if !exist {
-		return errors.New(fmt.Sprintf("cluster key=%s not exist", clusterKey))
-	}
-	err = c.clusterWriters[clusterKey].Write(value)
-	if err != nil {
-		return err
-	}
-	c.writtenRowNum.Inc()
-	return nil
+	return c.WriteToCluster(value, clusterKey)
 }
 
-func (c *SplitClusterWriter) WriteToKey(value *storage.Value, clusterKey string) error {
+// WriteToCluster write value to specific cluster
+func (c *SplitClusterWriter) WriteToCluster(value *storage.Value, clusterKey string) error {
 	_, exist := c.clusterWriters[clusterKey]
 	if !exist {
 		return errors.New(fmt.Sprintf("cluster key=%s not exist", clusterKey))
@@ -85,15 +81,16 @@ func (c *SplitClusterWriter) WriteToKey(value *storage.Value, clusterKey string)
 	return nil
 }
 
+// Finish all writers and return compactionSegments map(clusterKey->segments)
 func (c *SplitClusterWriter) Finish() (map[string][]*datapb.CompactionSegment, error) {
 	resultSegments := make(map[string][]*datapb.CompactionSegment, 0)
-	for id, writer := range c.clusterWriters {
-		log.Info("Finish", zap.String("id", id), zap.Int("current", writer.current), zap.Int64("current", writer.GetRowNum()))
+	for clusterKey, writer := range c.clusterWriters {
+		log.Debug("Finish writer", zap.String("clusterKey", clusterKey), zap.Int("current", writer.current), zap.Uint64("size", writer.WrittenMemorySize()))
 		segments, err := writer.Finish()
 		if err != nil {
 			return nil, err
 		}
-		resultSegments[id] = segments
+		resultSegments[clusterKey] = segments
 	}
 	return resultSegments, nil
 }
@@ -102,57 +99,68 @@ func (c *SplitClusterWriter) GetRowNum() int64 {
 	return c.writtenRowNum.Load()
 }
 
+// FlushToLowWaterMark flush the largest writers to the low memory watermark
 func (c *SplitClusterWriter) FlushToLowWaterMark() error {
 	c.flushMutex.Lock()
 	defer c.flushMutex.Unlock()
 	currentMemorySize := c.getTotalUsedMemorySize()
 	if currentMemorySize <= c.getMemoryBufferLowWatermark() {
-		log.Info("memory is under low water mark", zap.Int64("memoryBufferSize", c.getTotalUsedMemorySize()))
+		log.Info("memory is under low water mark", zap.Int64("memoryBufferSize", c.getTotalUsedMemorySize()), zap.Int64("memoryLowWaterMark", c.getMemoryBufferLowWatermark()))
 		return nil
 	}
+
+	// collect the cluster memory size and sort the clusters by size
+	// flush the top largest clusters until the data in memory less than watermark
 	clusterKeys := make([]string, 0)
-	bufferRowNums := make([]int64, 0)
-	for id, writer := range c.clusterWriters {
-		clusterKeys = append(clusterKeys, id)
-		bufferRowNums = append(bufferRowNums, writer.GetRowNum())
+	clusterMemorySizeDict := make(map[string]int64, 0)
+	clusterMemorySizes := make([]int64, 0)
+	for clusterKey, writer := range c.clusterWriters {
+		clusterKeys = append(clusterKeys, clusterKey)
+		memorySize := int64(writer.WrittenMemorySize())
+		clusterMemorySizeDict[clusterKey] = memorySize
+		clusterMemorySizes = append(clusterMemorySizes, memorySize)
 	}
 	sort.Slice(clusterKeys, func(i, j int) bool {
-		return bufferRowNums[i] > bufferRowNums[j]
+		return clusterMemorySizes[i] > clusterMemorySizes[j]
 	})
 
-	log.Info("start flush largest buffers", zap.Strings("clusterKeys", clusterKeys), zap.Int64("currentMemorySize", currentMemorySize))
-	futures := make([]*conc.Future[any], 0)
+	afterFlushSize := currentMemorySize
+	toFlushClusterKeys := make([]string, 0)
 	for _, clusterKey := range clusterKeys {
-		writer := c.clusterWriters[clusterKey]
-		log.Info("currentMemorySize after flush writer binlog",
-			zap.Int64("currentMemorySize", currentMemorySize),
-			zap.String("clusterKey", clusterKey),
-			zap.Uint64("writtenMemorySize", writer.WrittenMemorySize()),
-			zap.Int64("RowNum", writer.GetRowNum()))
-		future := c.flushPool.Submit(func() (any, error) {
-			err := writer.Flush()
-			if err != nil {
-				return nil, err
-			}
-			return struct{}{}, nil
-		})
-		futures = append(futures, future)
-
-		if currentMemorySize <= c.getMemoryBufferLowWatermark() {
-			log.Info("reach memory low water mark", zap.Int64("memoryBufferSize", c.getTotalUsedMemorySize()))
+		memorySize := clusterMemorySizeDict[clusterKey]
+		toFlushClusterKeys = append(toFlushClusterKeys, clusterKey)
+		afterFlushSize -= memorySize
+		if afterFlushSize < c.getMemoryBufferLowWatermark() {
 			break
 		}
+	}
+
+	log.Info("start flush largest buffers", zap.Int("flushClusterNum", len(toFlushClusterKeys)), zap.Int64("currentMemorySize", currentMemorySize))
+	futures := make([]*conc.Future[any], 0)
+	for _, clusterKey := range toFlushClusterKeys {
+		writer := c.clusterWriters[clusterKey]
+		log.Info("currentMemorySize after flush writer binlog",
+			zap.String("clusterKey", clusterKey),
+			zap.Int64("currentMemorySize", c.getTotalUsedMemorySize()),
+			zap.Uint64("writtenMemorySize", writer.WrittenMemorySize()))
+		future, err := writer.Flush(c.flushPool)
+		if err != nil {
+			return err
+		}
+		futures = append(futures, future)
 	}
 	if err := conc.AwaitAll(futures...); err != nil {
 		return err
 	}
+	// inc the flush count, for UT
+	c.flushCount.Inc()
 	return nil
 }
 
 func (c *SplitClusterWriter) getTotalUsedMemorySize() int64 {
 	var totalBufferSize int64 = 0
 	for _, writer := range c.clusterWriters {
-		totalBufferSize = totalBufferSize + int64(writer.WrittenMemorySize())
+		totalBufferSize += int64(writer.WrittenMemorySize())
 	}
 	return totalBufferSize
 }
@@ -175,7 +183,7 @@ type SplitClusterWriterBuilder struct {
 	schema             *schemapb.CollectionSchema
 	segmentMaxRowCount int64
 	segmentMaxSize     int64
-	splitKeys          []string
+	clusterKeys        []string
 	mappingFunc        func(*storage.Value) (string, error)
 	memoryBufferSize   int64
 	workerPoolSize     int
@@ -230,9 +238,9 @@ func (b *SplitClusterWriterBuilder) SetSegmentMaxRowCount(segmentMaxRowCount int
 	return b
 }
 
-// SetSplitKeys sets the splitKeys field
-func (b *SplitClusterWriterBuilder) SetSplitKeys(keys []string) *SplitClusterWriterBuilder {
-	b.splitKeys = keys
+// SetClusterKeys sets the clusterKeys field
+func (b *SplitClusterWriterBuilder) SetClusterKeys(keys []string) *SplitClusterWriterBuilder {
+	b.clusterKeys = keys
 	return b
 }
 
@@ -263,15 +271,17 @@ func (b *SplitClusterWriterBuilder) Build() (*SplitClusterWriter, error) {
 		channel:            b.channel,
 		segmentMaxSize:     b.segmentMaxSize,
 		segmentMaxRowCount: b.segmentMaxRowCount,
-		clusterWriters:     make(map[string]*MultiSegmentWriter, len(b.splitKeys)),
+		clusterKeys:        b.clusterKeys,
+		clusterWriters:     make(map[string]*MultiSegmentWriter, len(b.clusterKeys)),
 		mappingFunc:        b.mappingFunc,
 		workerPoolSize:     b.workerPoolSize,
 		flushPool:          conc.NewPool[any](b.workerPoolSize),
 		memoryBufferSize:   b.memoryBufferSize,
 		writtenRowNum:      atomic.NewInt64(0),
+		flushCount:         atomic.NewInt64(0),
 	}
 	bm25FieldIds := GetBM25FieldIDs(b.schema)
-	for _, key := range b.splitKeys {
+	for _, key := range b.clusterKeys {
 		writer.clusterWriters[key] = NewMultiSegmentWriter(writer.binlogIO, writer.allocator, writer.schema, writer.channel, writer.segmentMaxSize, writer.segmentMaxRowCount, writer.partitionID, writer.collectionID, bm25FieldIds, true)
 	}
 

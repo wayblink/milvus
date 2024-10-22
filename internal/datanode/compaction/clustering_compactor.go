@@ -80,12 +80,12 @@ type clusteringCompactionTask struct {
 	// flush
 	flushMutex sync.Mutex
 	flushCount *atomic.Int64
-	flushChan  chan FlushSignal
-	doneChan   chan struct{}
+	//flushChan  chan FlushSignal
+	//doneChan chan struct{}
 
 	// metrics, don't use
-	writtenRowNum *atomic.Int64
-	hasSignal     *atomic.Bool
+	//writtenRowNum *atomic.Int64
+	//hasSignal     *atomic.Bool
 
 	// inner field
 	collectionID          int64
@@ -140,19 +140,19 @@ func NewClusteringCompactionTask(
 ) *clusteringCompactionTask {
 	ctx, cancel := context.WithCancel(ctx)
 	return &clusteringCompactionTask{
-		ctx:                ctx,
-		cancel:             cancel,
-		binlogIO:           binlogIO,
-		plan:               plan,
-		tr:                 timerecord.NewTimeRecorder("clustering_compaction"),
-		done:               make(chan struct{}, 1),
-		flushChan:          make(chan FlushSignal, 100),
-		doneChan:           make(chan struct{}),
+		ctx:      ctx,
+		cancel:   cancel,
+		binlogIO: binlogIO,
+		plan:     plan,
+		tr:       timerecord.NewTimeRecorder("clustering_compaction"),
+		done:     make(chan struct{}, 1),
+		//flushChan:          make(chan FlushSignal, 100),
+		//doneChan:           make(chan struct{}),
 		clusterBuffers:     make([]*ClusterBuffer, 0),
 		clusterBufferLocks: lock.NewKeyLock[int](),
 		flushCount:         atomic.NewInt64(0),
-		writtenRowNum:      atomic.NewInt64(0),
-		hasSignal:          atomic.NewBool(false),
+		//writtenRowNum:      atomic.NewInt64(0),
+		//hasSignal:          atomic.NewBool(false),
 	}
 }
 
@@ -291,8 +291,6 @@ func (t *clusteringCompactionTask) Compact() (*datapb.CompactionPlanResult, erro
 		WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), t.plan.GetType().String()).
 		Observe(float64(t.tr.ElapseSpan().Milliseconds()))
 	log.Info("Clustering compaction finished", zap.Duration("elapse", t.tr.ElapseSpan()), zap.Int64("flushTimes", t.flushCount.Load()))
-	// clear the buffer cache
-	t.keyToBufferFunc = nil
 
 	return planResult, nil
 }
@@ -352,18 +350,18 @@ func (t *clusteringCompactionTask) getScalarAnalyzeResult(ctx context.Context) e
 		SetSchema(t.plan.GetSchema()).
 		SetSegmentMaxSize(t.plan.GetMaxSize()).
 		SetSegmentMaxRowCount(t.plan.GetTotalRows()).
-		SetSplitKeys(splitKeys).
+		SetClusterKeys(splitKeys).
 		SetAllocator(&compactionAlloactor{
 			segmentAlloc: t.segIDAlloc,
 			logIDAlloc:   t.logIDAlloc,
 		}).
 		SetBinlogIO(t.binlogIO).
-		SetMemoryBufferSize(math.MaxInt64).
+		SetMemoryBufferSize(t.memoryBufferSize).
 		SetMappingFunc(mappingFunc).
-		SetWorkerPoolSize(1).
+		SetWorkerPoolSize(t.getWorkerPoolSize()).
 		Build()
 	log.Info("create split cluster writer",
-		zap.Int("splitKeys", len(splitKeys)),
+		zap.Int("clusterKeys", len(splitKeys)),
 		zap.Int64("segmentMaxSize", t.plan.GetMaxSize()),
 		zap.Int64("segmentMaxRowCount", t.plan.GetTotalRows()))
 	if err != nil {
@@ -401,7 +399,7 @@ func (t *clusteringCompactionTask) getVectorAnalyzeResult(ctx context.Context) e
 		}
 		fieldStats.SetVectorCentroids(storage.NewVectorFieldValue(t.clusteringKeyField.DataType, centroid))
 		splitFieldStats = append(splitFieldStats, fieldStats)
-		splitKeys = append(splitKeys, string(id))
+		splitKeys = append(splitKeys, fmt.Sprint(id))
 	}
 
 	splitWriter, err := NewSplitClusterWriterBuilder().
@@ -410,18 +408,18 @@ func (t *clusteringCompactionTask) getVectorAnalyzeResult(ctx context.Context) e
 		SetSchema(t.plan.GetSchema()).
 		SetSegmentMaxSize(t.plan.GetMaxSize()).
 		SetSegmentMaxRowCount(t.plan.GetTotalRows()).
-		SetSplitKeys(splitKeys).
+		SetClusterKeys(splitKeys).
 		SetAllocator(&compactionAlloactor{
 			segmentAlloc: t.segIDAlloc,
 			logIDAlloc:   t.logIDAlloc,
 		}).
 		SetBinlogIO(t.binlogIO).
-		SetMemoryBufferSize(math.MaxInt64).
-		SetWorkerPoolSize(1).
+		SetMemoryBufferSize(t.memoryBufferSize).
+		SetWorkerPoolSize(t.getWorkerPoolSize()).
 		Build()
 	t.writer = splitWriter
 	log.Info("create split cluster writer",
-		zap.Int("splitKeys", len(splitKeys)),
+		zap.Int("clusterKeys", len(splitKeys)),
 		zap.Int64("segmentMaxSize", t.plan.GetMaxSize()),
 		zap.Int64("segmentMaxRowCount", t.plan.GetTotalRows()))
 
@@ -438,7 +436,7 @@ func (t *clusteringCompactionTask) mapping(ctx context.Context,
 	mapStart := time.Now()
 
 	// start flush goroutine
-	go t.backgroundFlush(ctx)
+	//go t.backgroundFlush(ctx)
 
 	futures := make([]*conc.Future[any], 0, len(inputSegments))
 	for _, segment := range inputSegments {
@@ -456,13 +454,13 @@ func (t *clusteringCompactionTask) mapping(ctx context.Context,
 	if err := conc.AwaitAll(futures...); err != nil {
 		return nil, nil, err
 	}
-
-	t.flushChan <- FlushSignal{
-		done: true,
-	}
+	//
+	//t.flushChan <- FlushSignal{
+	//	done: true,
+	//}
 
 	// block util all writer flushed.
-	<-t.doneChan
+	//<-t.doneChan
 
 	// force flush all buffers
 	compactionResults, err := t.writer.Finish()
@@ -611,7 +609,7 @@ func (t *clusteringCompactionTask) mappingSegment(
 			}
 
 			if t.isVectorClusteringKey {
-				err = t.writer.WriteToKey(v, string(mappingStats.GetCentroidIdMapping()[offset]))
+				err = t.writer.WriteToCluster(v, fmt.Sprint(mappingStats.GetCentroidIdMapping()[offset]))
 			} else {
 				err = t.writer.Write(v)
 			}
@@ -623,12 +621,13 @@ func (t *clusteringCompactionTask) mappingSegment(
 
 			if (remained+1)%100 == 0 {
 				currentBufferTotalMemorySize := t.writer.getTotalUsedMemorySize()
-				if currentBufferTotalMemorySize > t.getMemoryBufferHighWatermark() && !t.hasSignal.Load() {
-					// reach flushBinlog trigger threshold
-					log.Debug("largest buffer need to flush",
-						zap.Int64("currentBufferTotalMemorySize", currentBufferTotalMemorySize))
-					t.flushChan <- FlushSignal{}
-					t.hasSignal.Store(true)
+				if currentBufferTotalMemorySize > t.getMemoryBufferHighWatermark() {
+					//// reach flushBinlog trigger threshold
+					//log.Debug("largest buffer need to flush",
+					//	zap.Int64("currentBufferTotalMemorySize", currentBufferTotalMemorySize))
+					//t.flushChan <- FlushSignal{}
+					//t.hasSignal.Store(true)
+					go t.writer.FlushToLowWaterMark()
 				}
 
 				// if the total buffer size is too large, block here, wait for memory release by flushBinlog
@@ -663,7 +662,7 @@ func (t *clusteringCompactionTask) mappingSegment(
 		zap.Int64("remained_entities", remained),
 		zap.Int64("deleted_entities", deleted),
 		zap.Int64("expired_entities", expired),
-		zap.Int64("written_row_num", t.writtenRowNum.Load()),
+		zap.Int64("written_row_num", t.writer.GetRowNum()),
 		zap.Duration("elapse", time.Since(processStart)))
 	return nil
 }
@@ -689,39 +688,40 @@ func (t *clusteringCompactionTask) getMemoryBufferBlockFlushThreshold() int64 {
 	return t.memoryBufferSize
 }
 
-func (t *clusteringCompactionTask) backgroundFlush(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			log.Info("clustering compaction task context exit")
-			return
-		case <-t.done:
-			log.Info("clustering compaction task done")
-			return
-		case signal := <-t.flushChan:
-			var err error
-			if signal.done {
-				t.doneChan <- struct{}{}
-			} else if signal.writer == nil {
-				t.hasSignal.Store(false)
-				err = t.flushLargestBuffers(ctx)
-			} else {
-				future := t.flushPool.Submit(func() (any, error) {
-					err := t.flushBinlog(ctx, t.clusterBuffers[signal.id], signal.writer, signal.pack)
-					if err != nil {
-						return nil, err
-					}
-					return struct{}{}, nil
-				})
-				err = conc.AwaitAll(future)
-			}
-			if err != nil {
-				log.Warn("fail to flushBinlog data", zap.Error(err))
-				// todo handle error
-			}
-		}
-	}
-}
+//
+//func (t *clusteringCompactionTask) backgroundFlush(ctx context.Context) {
+//	for {
+//		select {
+//		case <-ctx.Done():
+//			log.Info("clustering compaction task context exit")
+//			return
+//		case <-t.done:
+//			log.Info("clustering compaction task done")
+//			return
+//		case signal := <-t.flushChan:
+//			var err error
+//			if signal.done {
+//				t.doneChan <- struct{}{}
+//			} else if signal.writer == nil {
+//				t.hasSignal.Store(false)
+//				err = t.flushLargestBuffers(ctx)
+//			} else {
+//				future := t.flushPool.Submit(func() (any, error) {
+//					err := t.flushBinlog(ctx, t.clusterBuffers[signal.id], signal.writer, signal.pack)
+//					if err != nil {
+//						return nil, err
+//					}
+//					return struct{}{}, nil
+//				})
+//				err = conc.AwaitAll(future)
+//			}
+//			if err != nil {
+//				log.Warn("fail to flushBinlog data", zap.Error(err))
+//				// todo handle error
+//			}
+//		}
+//	}
+//}
 
 func (t *clusteringCompactionTask) flushLargestBuffers(ctx context.Context) error {
 	// only one flushLargestBuffers or flushAll should do at the same time

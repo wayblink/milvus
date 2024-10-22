@@ -76,7 +76,11 @@ func (s *SegmentWriterSuite) TestFlushBinlog() {
 		err := writer.Write(generateInt64PKEntitiy(i))
 		s.NoError(err)
 	}
-	writer.Flush()
+
+	_, err := writer.Flush(nil)
+	s.NoError(err)
+	size := writer.WrittenMemorySize()
+	s.True(size == 0)
 
 	for i := int64(500); i < 1000; i++ {
 		err := writer.Write(generateInt64PKEntitiy(i))
@@ -102,7 +106,7 @@ func (s *SegmentWriterSuite) TestGetRowNum() {
 	s.Equal(int64(500), writer.GetRowNum())
 	s.Equal(int64(65000), int64(writer.WrittenMemorySize()))
 
-	writer.Flush()
+	writer.Flush(nil)
 	s.Equal(int64(500), writer.GetRowNum())
 	s.Equal(int64(0), int64(writer.WrittenMemorySize()))
 
@@ -153,7 +157,7 @@ func (s *SegmentWriterSuite) TestConcurrentWriteMultiSegments() {
 			for i := j + int64(0); i < j+1000; i++ {
 				err := writer.Write(generateInt64PKEntitiy(i))
 				if i == j+100 {
-					writer.Flush()
+					writer.Flush(nil)
 				}
 				s.NoError(err)
 			}
@@ -173,7 +177,7 @@ func (s *SegmentWriterSuite) TestConcurrentWriteMultiSegments() {
 		return i + j
 	}, 0)
 	s.Equal(int64(10000), totalRows)
-	s.Equal(13, len(compactionSegments))
+	s.Equal(12, len(compactionSegments))
 
 	s.Equal(1, len(compactionSegments[0].GetField2StatslogPaths()))
 	s.Equal(1, len(compactionSegments[1].GetField2StatslogPaths()))

@@ -194,7 +194,7 @@ func (t *clusteringCompactionTask) BuildCompactionRequest() (*datapb.CompactionP
 		BeginLogID:             beginLogID,
 		PreAllocatedSegmentIDs: taskProto.GetPreAllocatedSegmentIDs(),
 		SlotUsage:              t.GetSlotUsage(),
-		MaxSize:                t.GetMaxSize(),
+		MaxSize:                t.GetTaskProto().GetMaxSize(),
 	}
 	log := log.With(zap.Int64("taskID", taskProto.GetTriggerID()), zap.Int64("planID", plan.GetPlanID()))
 

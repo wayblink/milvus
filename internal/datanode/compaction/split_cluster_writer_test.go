@@ -87,7 +87,7 @@ func (s *SplitClusterWriterSuite) TestSplitByHash() {
 		SetChannel("ch-1").
 		SetSegmentMaxSize(1000000).
 		SetSegmentMaxRowCount(1000).
-		SetSplitKeys([]string{"0", "1"}).
+		SetClusterKeys([]string{"0", "1"}).
 		SetMemoryBufferSize(math.MaxInt64).
 		SetMappingFunc(mappingFunc).
 		SetWorkerPoolSize(1).
@@ -140,7 +140,7 @@ func (s *SplitClusterWriterSuite) TestSplitByRange() {
 		SetChannel("ch-1").
 		SetSegmentMaxSize(1000000).
 		SetSegmentMaxRowCount(10000).
-		SetSplitKeys([]string{"[0,200)", "[200,400)", "[400,600)", "[600,800)", "[800,1000)"}).
+		SetClusterKeys([]string{"[0,200)", "[200,400)", "[400,600)", "[600,800)", "[800,1000)"}).
 		SetMemoryBufferSize(math.MaxInt64).
 		SetMappingFunc(mappingFunc).
 		SetWorkerPoolSize(1).
@@ -200,7 +200,7 @@ func (s *SplitClusterWriterSuite) TestConcurrentSplitByHash() {
 		SetSchema(s.meta.Schema).
 		SetChannel("ch-1").
 		SetSegmentMaxRowCount(1000).
-		SetSplitKeys([]string{"0", "1"}).
+		SetClusterKeys([]string{"0", "1"}).
 		SetMemoryBufferSize(math.MaxInt64).
 		SetMappingFunc(mappingFunc).
 		SetWorkerPoolSize(1).
@@ -243,4 +243,57 @@ func (s *SplitClusterWriterSuite) TestConcurrentSplitByHash() {
 
 	s.Equal(1, len(result["0"][0].GetField2StatslogPaths()))
 	s.Equal(1, len(result["1"][0].GetField2StatslogPaths()))
+}
+
+func (s *SplitClusterWriterSuite) TestFlushMemorySizeChange() {
+	s.mockBinlogIO.EXPECT().Upload(mock.Anything, mock.Anything).Return(nil)
+
+	mappingFunc := func(value *storage.Value) (string, error) {
+		pkHash, err := value.PK.Hash()
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprint(pkHash % uint32(2)), nil
+	}
+
+	splitWriter, err := NewSplitClusterWriterBuilder().
+		SetBinlogIO(s.mockBinlogIO).
+		SetAllocator(&compactionAlloactor{
+			segmentAlloc: s.allocator,
+			logIDAlloc:   s.allocator,
+		}).
+		SetCollectionID(1).
+		SetPartitionID(2).
+		SetSchema(s.meta.Schema).
+		SetChannel("ch-1").
+		SetSegmentMaxSize(1000000).
+		SetSegmentMaxRowCount(1000).
+		SetClusterKeys([]string{"0", "1"}).
+		SetMemoryBufferSize(1000000).
+		SetMappingFunc(mappingFunc).
+		SetWorkerPoolSize(1).
+		Build()
+	s.NoError(err)
+
+	for i := int64(0); i < 10; i++ {
+		err := splitWriter.Write(generateInt64PKEntitiy(i))
+		s.NoError(err)
+	}
+
+	err = splitWriter.FlushToLowWaterMark()
+	s.NoError(err)
+	s.Equal(int64(0), splitWriter.flushCount.Load())
+
+	for i := int64(10); i < 10000; i++ {
+		err := splitWriter.Write(generateInt64PKEntitiy(i))
+		s.NoError(err)
+	}
+
+	err = splitWriter.FlushToLowWaterMark()
+	s.NoError(err)
+	s.Equal(int64(1), splitWriter.flushCount.Load())
+
+	splitWriter.Finish()
+	memory := splitWriter.getTotalUsedMemorySize()
+	s.Equal(int64(0), memory)
 }
